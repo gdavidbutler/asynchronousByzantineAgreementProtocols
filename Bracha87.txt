@@ -1,0 +1,129 @@
+Bracha 1987 "Asynchronous Byzantine Agreement Protocols"
+Information and Computation 75, 130-143
+
+Four figures, three layers of abstraction.
+
+Figure 1 — The broadcast primitive. Pure mechanics.
+
+  in                        condition                                     out
+  ---------------------------------------------------------------------------------
+  in(initial, v) from p     !echoed                                       out(echo, v) to all
+  in(echo, v) from j        !echoed && echo_count[v] >= (n+t)/2          out(echo, v) to all
+  in(ready, v) from j       !echoed && ready_count[v] >= t+1             out(echo, v) to all
+  in(echo, v) from j        echoed && !readySent && echo_count[v] >= (n+t)/2  out(ready, v) to all
+  in(ready, v) from j       echoed && !readySent && ready_count[v] >= t+1     out(ready, v) to all
+  in(ready, v) from j       readySent && ready_count[v] >= 2t+1          out(accept, v)
+
+Three paths into echo (step 1), two paths into ready (step 2), one path
+to accept (step 3). No VALID — that is a separate abstraction.
+
+NOTE: The paper's figure says ">= (n+t)/2" but the Lemma 1 proof
+requires strict "> (n+t)/2" for the pigeonhole argument to work.
+The code follows the proof: threshold = (n+t)/2 + 1 in integer arithmetic.
+
+Figure 2 — Not a protocol. The abstract form of ANY asynchronous
+protocol round:
+
+  round(k) by process p
+    Send (p, k, v) to all the processes
+    Wait until a set S of n - t messages from round k have been received
+    v := N(k, S)
+
+This is what Bracha is abstracting OVER.
+
+Figure 3 — Correctness enforcement. Replaces Send/Receive with
+Broadcast/Validate. Defines VALID sets recursively:
+
+  round(k) by process p
+    Broadcast(p, k, v)
+    Wait till a set S of n - t k-messages have been validated
+    v := N(k, S)
+
+  VALID^1_p = { (q, 1, v) | (q, 1, v) is accepted, and v in {0, 1} }
+
+  For k > 1:
+  (q, k, v) in VALID^k_p if (q, k, v) is accepted, and there exist n - t
+  messages m1 ... m_{n-t} in VALID^{k-1}_p such that v = N(k-1, {m1 ... m_{n-t}})
+
+Parameterized by N — the protocol function. The application supplies N.
+A message is validated only if it COULD have been sent by a correct
+process. This is a separate module from Figure 1 — it wraps Accept with
+a recursive conformance check.
+
+Figure 4 — The consensus protocol. A specific instantiation of Figure 3's
+pattern. Three rounds per phase, with specific N functions:
+
+  Phase(i) by process p:
+
+  1. Broadcast(p, 3i+1, value_p).
+     Wait until validate n - t (3i+1)-messages.
+     value_p := majority value of the n - t validated messages.
+
+  2. Broadcast(p, 3i+2, value_p).
+     Wait until validate n - t (3i+2)-messages.
+     (i)  If more than n/2 of the messages have the same value v,
+          then value_p := (d, v)
+     (ii) Otherwise, value_p := value_p
+
+  3. Broadcast(p, 3i+3, value_p).
+     Wait until validate n - t (3i+3)-messages.
+     (i)   If validated more than 2t messages with value (d, v)
+           then decision_p := value_p := v
+     (ii)  If validated more than t messages with value (d, v)
+           then value_p := v
+     (iii) Otherwise, value_p := coin-toss (0 or 1 with probability 1/2).
+     Go to round 1 of phase i+1
+
+Parameterized by coin — the application supplies randomness.
+
+Library decomposition follows the paper's structure:
+
+  Module      Figure   Parameterized by          Knows about
+  --------------------------------------------------------------------------
+  Broadcast   Fig 1    n, t                      thresholds, bitmaps
+  Validate    Fig 3    N (protocol function)     VALID sets, rounds
+  Consensus   Fig 4    coin                      phases, majority, decision
+
+Each builds on the previous. None knows about networking, threading,
+or transport. The caller supplies: N (the protocol function for its
+specific use), coin (local random), and all the I/O wiring.
+
+Validate is its own abstraction. It is not "the application checks VALID
+before calling the library." It is a recursive structure that the library
+maintains across rounds — tracking what messages COULD have been
+legitimately produced. That is real protocol logic, not application logic.
+
+Key properties from the paper:
+
+  Lemma 1: If two correct processes send (ready, v) and (ready, u),
+           then u = v.
+  Lemma 2: If two correct processes accept u and v, then u = v.
+  Lemma 3: If a correct process accepts v, every correct process
+           eventually accepts v.
+  Lemma 4: If a correct process p broadcasts v, all correct processes
+           accept v.
+  Lemma 5: If two correct processes validate (r, k, v) and (r, k, u),
+           then u = v.
+  Lemma 6: If a correct process validates a k-message m, every other
+           correct process validates m (VALID sets are eventually equal).
+  Lemma 7: If a correct process broadcasts a k-message m, every
+           correct process eventually validates m.
+  Lemma 9: If all correct processes start a phase with the same value v,
+           they all decide v at that phase.
+  Lemma 10: If at phase r, two correct processes validate messages with
+            values (d, v) and (d, u), then u = v.
+
+  Theorem 1: Figure 1 is a reliable broadcast protocol (for t < n/3).
+  Theorem 2: Figure 4 is a t-resilient consensus protocol (for t < n/3).
+
+  Termination: probability of not terminating is
+  lim_{r->inf} (1 - p)^r = 0, where p > 2^{-(n-1)}.
+
+Lemma/Theorem to test mapping:
+
+  Lemma 1   Composed simulation: inline check on every honest rdSent instance
+  Lemma 2   Composed simulation: inline check on every honest accepted instance
+            simFig1Equivoc: explicit cross-process accept agreement check
+  Lemma 9   simFig4: all-honest same-value tests (decide in one phase)
+  Theorem 2 simFig4, simFig4Byz, simComposed: all decision agreement checks
+  Step 1 no D_FLAG  Composed simulation: inline check on every step 1 broadcast
