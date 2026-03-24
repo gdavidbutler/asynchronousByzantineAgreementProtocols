@@ -8,6 +8,14 @@ This is the only known implementation of all four figures of Bracha 1987 as comp
 
 Each module boundary matches the paper exactly, so the paper's proofs apply per-module: Lemmas 1-4 to Fig 1, Lemmas 5-7 to Fig 2/3, Lemmas 9-10 and Theorems 1-2 to Fig 4.
 
+## The Paper
+
+Gabriel Bracha, "Asynchronous Byzantine Agreement Protocols," *Information and Computation* 75, 130-143 (1987).
+
+`Bracha87.txt` is a companion summary of the paper: figures, rules, VALID set definitions, all lemma/theorem statements, and a mapping from each lemma to the test that verifies it.
+
+**Paper typo:** Fig. 1 says "(n+t)/2 (echo,v) messages" but the Lemma 1 proof says "more than (n+t)/2." The proof requires strict `>` for the pigeonhole argument to work. The code follows the proof, not the figure.
+
 ## System Model — What the Caller Must Provide
 
 The paper's proofs depend on three assumptions about the communication system (Section 2):
@@ -23,14 +31,6 @@ These assumptions are not optional — they are load-bearing requirements of eve
 3. **Sender identification.** The receiver must know which process sent each message, and a Byzantine process must not be able to impersonate a correct one. In practice this means authentication bound to process identity.
 
 Without these guarantees, the protocol's safety and liveness proofs do not hold.
-
-## The Paper
-
-Gabriel Bracha, "Asynchronous Byzantine Agreement Protocols," *Information and Computation* 75, 130-143 (1987).
-
-`Bracha87.txt` is a companion summary of the paper: figures, rules, VALID set definitions, all lemma/theorem statements, and a mapping from each lemma to the test that verifies it.
-
-**Paper typo:** Fig. 1 says "(n+t)/2 (echo,v) messages" but the Lemma 1 proof says "more than (n+t)/2." The proof requires strict `>` for the pigeonhole argument to work. The code follows the proof, not the figure.
 
 ## Architecture
 
