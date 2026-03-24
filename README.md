@@ -8,6 +8,22 @@ This is the only known implementation of all four figures of Bracha 1987 as comp
 
 Each module boundary matches the paper exactly, so the paper's proofs apply per-module: Lemmas 1-4 to Fig 1, Lemmas 5-7 to Fig 2/3, Lemmas 9-10 and Theorems 1-2 to Fig 4.
 
+## System Model — What the Caller Must Provide
+
+The paper's proofs depend on three assumptions about the communication system (Section 2):
+
+> "We assume a reliable message system in which no messages are lost or generated. Each process can directly send messages to any other process, and can identify the sender of every message it receives."
+
+These assumptions are not optional — they are load-bearing requirements of every lemma and theorem in the paper. This library is a pure state machine with no I/O. **The caller is responsible for building a transport layer that satisfies all three properties:**
+
+1. **Reliable delivery.** Every message sent between correct processes must eventually arrive. The protocol is asynchronous (no timing assumptions), but it requires liveness: messages cannot be silently dropped. In practice this means retransmission, forward error correction, etc.
+
+2. **No message fabrication.** The transport must not generate messages that were never sent. A Byzantine process may send arbitrary content, but the transport itself must not invent messages. In practice this means authenticated channels.
+
+3. **Sender identification.** The receiver must know which process sent each message, and a Byzantine process must not be able to impersonate a correct one. In practice this means authentication bound to process identity.
+
+Without these guarantees, the protocol's safety and liveness proofs do not hold.
+
 ## The Paper
 
 Gabriel Bracha, "Asynchronous Byzantine Agreement Protocols," *Information and Computation* 75, 130-143 (1987).

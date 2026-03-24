@@ -515,7 +515,7 @@ main(
         if (byzSplit && i == 0)
           continue;
         fi = peers[i].fig1[r * n + orig];
-        if (fi->rdSent) {
+        if ((fi->flags & BRACHA87_F1_RDSENT)) {
           rv = bracha87Fig1Value(fi);
           if (rv) {
             if (!rdSeen) {
@@ -548,7 +548,7 @@ main(
         if (byzSplit && i == 0)
           continue;
         fi = peers[i].fig1[r * n + orig];
-        if (fi->accepted) {
+        if ((fi->flags & BRACHA87_F1_ACCEPTED)) {
           av = bracha87Fig1Value(fi);
           if (av) {
             if (!acSeen) {

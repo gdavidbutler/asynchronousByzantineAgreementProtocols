@@ -1,7 +1,4 @@
-CC = cc
 CFLAGS = -Os -g
-
-.PHONY: all check clean clobber
 
 all: test_bracha87 consensus
 

@@ -93,6 +93,11 @@
 #define BRACHA87_READY_ALL 2  /* send ready(v) to all peers */
 #define BRACHA87_ACCEPT    3  /* accept(v) */
 
+/* Figure 1 state flags (bitmap) */
+#define BRACHA87_F1_ECHOED   0x01
+#define BRACHA87_F1_RDSENT   0x02
+#define BRACHA87_F1_ACCEPTED 0x04
+
 /*
  * Figure 1 state.
  *
@@ -109,18 +114,18 @@ struct bracha87Fig1 {
   unsigned char n;        /* process count encoding: actual = n + 1 */
   unsigned char t;        /* max Byzantine (n + 1 > 3t) */
   unsigned char vLen;     /* value length encoding: actual = vLen + 1 */
-  unsigned char echoed;   /* flag: have we sent echo? */
-  unsigned char rdSent;   /* flag: have we sent ready? */
-  unsigned char accepted; /* flag: have we accepted? */
+  unsigned char flags;    /* BRACHA87_F1_ECHOED/RDSENT/ACCEPTED */
+  unsigned short ecCnt[2];/* incremental echo counts for binary (vLen==0) */
+  unsigned short rdCnt[2];/* incremental ready counts for binary (vLen==0) */
   unsigned char data[1];  /* variable: see bracha87Fig1Sz */
 };
 
 /*
- * Layout of data[] (L = vLen + 1, the actual value length):
+ * Layout of data[] (N = n + 1, L = vLen + 1, BS = (N + 7) / 8):
  *   value[L]             committed value (valid when echoed)
- *   ecFrom[N]            1 if peer j sent echo, else 0 (N = n + 1)
+ *   ecFrom[BS]           bitmap: 1 if peer j sent echo
  *   ecVal[N * L]         value peer j echoed
- *   rdFrom[N]            1 if peer j sent ready, else 0
+ *   rdFrom[BS]           bitmap: 1 if peer j sent ready
  *   rdVal[N * L]         value peer j readied
  */
 
@@ -183,15 +188,6 @@ bracha87Fig1Value(
 #define BRACHA87_ROUND_COMPLETE 2  /* n-t messages received for round k */
 
 /*
- * Per-round received message record.
- */
-struct bracha87Fig2Rcv {
-  unsigned char sender;
-  unsigned char value;
-  unsigned char received;   /* 1 if received from this sender */
-};
-
-/*
  * Figure 2 state.
  *
  * Tracks received messages per round for up to n peers, maxRounds rounds.
@@ -209,11 +205,12 @@ struct bracha87Fig2 {
 };
 
 /*
- * Layout of data[]:
- *   Per round (maxRounds rounds):
+ * Layout of data[] (N = n + 1, BS = (N + 7) / 8, MR = maxRounds):
+ *   complete[((MR + 7) / 8)]  bitmap: 1 if n-t reached for round
+ *   Per round (MR rounds):
  *     recvCount              (unsigned char) received messages this round
- *     complete               (unsigned char) 1 if n-t reached
- *     rcvs[N]                (struct bracha87Fig2Rcv) per-sender record (N = n + 1)
+ *     received[BS]           bitmap: 1 if received from peer
+ *     values[N]              value per peer
  */
 
 /* Size in bytes needed for a Fig2 instance */
@@ -318,17 +315,6 @@ typedef int (*bracha87Nfn)(
 #define BRACHA87_VALIDATED 1  /* message is in VALID^k */
 
 /*
- * Per-round validated message record.
- * Stored in the Fig3 state per round.
- */
-struct bracha87Msg {
-  unsigned char sender;
-  unsigned char value;
-  unsigned char arrived;   /* 1 if accepted by Fig 1 */
-  unsigned char valid;     /* 1 if in VALID^k */
-};
-
-/*
  * Figure 3 state.
  *
  * Manages VALID sets for up to maxRounds rounds, n peers.
@@ -345,11 +331,13 @@ struct bracha87Fig3 {
 };
 
 /*
- * Layout of data[]:
- *   Per round (maxRounds rounds):
+ * Layout of data[] (N = n + 1, BS = (N + 7) / 8, MR = maxRounds):
+ *   complete[((MR + 7) / 8)]  bitmap: 1 if n-t validated for round
+ *   Per round (MR rounds):
  *     validCount             (unsigned char) validated messages this round
- *     complete               (unsigned char) 1 if n-t validated (Fig 2)
- *     msgs[N]                (struct bracha87Msg) per-sender record (N = n + 1)
+ *     arrived[BS]            bitmap: 1 if accepted by Fig 1
+ *     valid[BS]              bitmap: 1 if in VALID^k
+ *     values[N]              value per peer
  */
 
 unsigned long

@@ -28,6 +28,11 @@
 #include <string.h>
 #include "bracha87.h"
 
+/* Bitmap helpers */
+#define BIT_SZ(n)  (((unsigned int)(n) + 7) >> 3)
+#define BIT_TST(a, i) ((a)[(unsigned int)(i) >> 3] & (1 << ((unsigned int)(i) & 7)))
+#define BIT_SET(a, i) ((a)[(unsigned int)(i) >> 3] |= (unsigned char)(1 << ((unsigned int)(i) & 7)))
+
 /*************************************************************************/
 /*  Figure 1 — Reliable broadcast primitive                              */
 /*************************************************************************/
@@ -38,11 +43,11 @@
  *
  * F1_VLEN: actual value length (vLen + 1, range 1..256).
  *
- * Layout (N = B_N, L = F1_VLEN):
+ * Layout (N = B_N, L = F1_VLEN, BS = BIT_SZ(N)):
  *   value[L]             committed value
- *   ecFrom[N]            echo-sent flag per peer
+ *   ecFrom[BS]           echo bitmap
  *   ecVal[N * L]         echo value per peer
- *   rdFrom[N]            ready-sent flag per peer
+ *   rdFrom[BS]           ready bitmap
  *   rdVal[N * L]         ready value per peer
  */
 
@@ -50,9 +55,9 @@
 #define F1_VLEN(b)   ((unsigned int)(b)->vLen + 1)
 #define F1_VALUE(b)  ((b)->data)
 #define F1_ECFROM(b) ((b)->data + F1_VLEN(b))
-#define F1_ECVAL(b)  ((b)->data + F1_VLEN(b) + B_N(b))
-#define F1_RDFROM(b) ((b)->data + F1_VLEN(b) + B_N(b) + (unsigned long)B_N(b) * F1_VLEN(b))
-#define F1_RDVAL(b)  ((b)->data + F1_VLEN(b) + B_N(b) + (unsigned long)B_N(b) * F1_VLEN(b) + B_N(b))
+#define F1_ECVAL(b)  ((b)->data + F1_VLEN(b) + BIT_SZ(B_N(b)))
+#define F1_RDFROM(b) ((b)->data + F1_VLEN(b) + BIT_SZ(B_N(b)) + (unsigned long)B_N(b) * F1_VLEN(b))
+#define F1_RDVAL(b)  ((b)->data + F1_VLEN(b) + BIT_SZ(B_N(b)) + (unsigned long)B_N(b) * F1_VLEN(b) + BIT_SZ(B_N(b)))
 
 unsigned long
 bracha87Fig1Sz(
@@ -68,9 +73,9 @@ bracha87Fig1Sz(
   /* struct up to data[1] minus the 1, plus layout */
   return (sizeof (struct bracha87Fig1) - 1
     + L                       /* value */
-    + N                       /* ecFrom */
+    + BIT_SZ(N)               /* ecFrom bitmap */
     + (unsigned long)N * L    /* ecVal */
-    + N                       /* rdFrom */
+    + BIT_SZ(N)               /* rdFrom bitmap */
     + (unsigned long)N * L);  /* rdVal */
 }
 
@@ -88,8 +93,9 @@ bracha87Fig1Init(
 }
 
 /*
- * Count echoes for value v by scanning per-peer records.
- * This faithfully implements echo_count[v] from the paper.
+ * Count echoes for value v (echo_count[v] from the paper).
+ * O(1) for binary values (vLen==0, v in {0,1}) via incremental counters.
+ * Falls back to O(N) scan for other values or multi-byte vLen.
  */
 static unsigned int
 fig1EcCnt(
@@ -98,21 +104,37 @@ fig1EcCnt(
 ){
   const unsigned char *ef;
   const unsigned char *ev;
+  unsigned int N;
+  unsigned int L;
   unsigned int cnt;
   unsigned int j;
 
+  /* O(1) fast path for binary consensus */
+  if (!b->vLen && v[0] <= 1)
+    return (b->ecCnt[v[0]]);
+
+  N = B_N(b);
+  L = F1_VLEN(b);
   ef = F1_ECFROM(b);
   ev = F1_ECVAL(b);
   cnt = 0;
-  for (j = 0; j < B_N(b); ++j)
-    if (ef[j] && !memcmp(ev + (unsigned long)j * F1_VLEN(b), v, F1_VLEN(b)))
-      ++cnt;
+  if (L == 1) {
+    /* Single-byte values: inline comparison, no memcmp overhead */
+    for (j = 0; j < N; ++j)
+      if (BIT_TST(ef, j) && ev[j] == v[0])
+        ++cnt;
+  } else {
+    for (j = 0; j < N; ++j)
+      if (BIT_TST(ef, j) && !memcmp(ev + (unsigned long)j * L, v, L))
+        ++cnt;
+  }
   return (cnt);
 }
 
 /*
- * Count readys for value v by scanning per-peer records.
- * This faithfully implements ready_count[v] from the paper.
+ * Count readys for value v (ready_count[v] from the paper).
+ * O(1) for binary values (vLen==0, v in {0,1}) via incremental counters.
+ * Falls back to O(N) scan for other values or multi-byte vLen.
  */
 static unsigned int
 fig1RdCnt(
@@ -121,15 +143,30 @@ fig1RdCnt(
 ){
   const unsigned char *rf;
   const unsigned char *rv;
+  unsigned int N;
+  unsigned int L;
   unsigned int cnt;
   unsigned int j;
 
+  /* O(1) fast path for binary consensus */
+  if (!b->vLen && v[0] <= 1)
+    return (b->rdCnt[v[0]]);
+
+  N = B_N(b);
+  L = F1_VLEN(b);
   rf = F1_RDFROM(b);
   rv = F1_RDVAL(b);
   cnt = 0;
-  for (j = 0; j < B_N(b); ++j)
-    if (rf[j] && !memcmp(rv + (unsigned long)j * F1_VLEN(b), v, F1_VLEN(b)))
-      ++cnt;
+  if (L == 1) {
+    /* Single-byte values: inline comparison, no memcmp overhead */
+    for (j = 0; j < N; ++j)
+      if (BIT_TST(rf, j) && rv[j] == v[0])
+        ++cnt;
+  } else {
+    for (j = 0; j < N; ++j)
+      if (BIT_TST(rf, j) && !memcmp(rv + (unsigned long)j * L, v, L))
+        ++cnt;
+  }
   return (cnt);
 }
 
@@ -142,8 +179,10 @@ fig1SetEc(
  ,unsigned char from
  ,const unsigned char *v
 ){
-  F1_ECFROM(b)[from] = 1;
+  BIT_SET(F1_ECFROM(b), from);
   memcpy(F1_ECVAL(b) + (unsigned long)from * F1_VLEN(b), v, F1_VLEN(b));
+  if (!b->vLen && v[0] <= 1)
+    ++b->ecCnt[v[0]];
 }
 
 /*
@@ -155,8 +194,10 @@ fig1SetRd(
  ,unsigned char from
  ,const unsigned char *v
 ){
-  F1_RDFROM(b)[from] = 1;
+  BIT_SET(F1_RDFROM(b), from);
   memcpy(F1_RDVAL(b) + (unsigned long)from * F1_VLEN(b), v, F1_VLEN(b));
+  if (!b->vLen && v[0] <= 1)
+    ++b->rdCnt[v[0]];
 }
 
 /*
@@ -168,7 +209,7 @@ fig1Commit(
  ,const unsigned char *v
 ){
   memcpy(F1_VALUE(b), v, F1_VLEN(b));
-  b->echoed = 1;
+  b->flags |= BRACHA87_F1_ECHOED;
 }
 
 
@@ -184,7 +225,7 @@ bracha87Fig1Input(
   unsigned int ec;
   unsigned int rd;
 
-  if (!b || !value || !out || from > b->n || b->accepted)
+  if (!b || !value || !out || from > b->n || (b->flags & BRACHA87_F1_ACCEPTED))
     return (0);
 
   nout = 0;
@@ -198,7 +239,7 @@ bracha87Fig1Input(
      * Initial comes from the broadcast origin. If we haven't
      * echoed yet, commit to this value and echo it.
      */
-    if (b->echoed)
+    if (b->flags & BRACHA87_F1_ECHOED)
       return (0);
     fig1Commit(b, value);
     out[nout++] = BRACHA87_ECHO_ALL;
@@ -214,15 +255,25 @@ bracha87Fig1Input(
     /*
      * Deduplicate: one echo per sender.
      */
-    if (F1_ECFROM(b)[from])
+    if (BIT_TST(F1_ECFROM(b), from))
       return (0);
     fig1SetEc(b, from, value);
+
+    /*
+     * Fast path: once rdSent, no echo rule can fire.
+     * rdSent implies echoed, so Rule 2 (!echoed) and Rule 4
+     * (!rdSent) are dead. Rule 6 needs rdCnt to change, but
+     * an echo does not affect rdCnt.
+     */
+    if (b->flags & BRACHA87_F1_RDSENT)
+      break;
+
     ec = fig1EcCnt(b, value);
 
     /*
      * Rule 2: !echoed && echo_count[v] > (n+t)/2 -> echo(v) to all
      */
-    if (!b->echoed
+    if (!(b->flags & BRACHA87_F1_ECHOED)
      && ec >= (B_N(b) + b->t) / 2 + 1) {
       fig1Commit(b, value);
       out[nout++] = BRACHA87_ECHO_ALL;
@@ -234,18 +285,22 @@ bracha87Fig1Input(
      * Fires for any value v meeting the threshold (paper's rule).
      * Updates committed value so caller broadcasts ready(v).
      */
-    if (b->echoed && !b->rdSent
+    if ((b->flags & BRACHA87_F1_ECHOED) && !(b->flags & BRACHA87_F1_RDSENT)
      && ec >= (B_N(b) + b->t) / 2 + 1) {
       memcpy(F1_VALUE(b), value, F1_VLEN(b));
-      b->rdSent = 1;
+      b->flags |= BRACHA87_F1_RDSENT;
       out[nout++] = BRACHA87_READY_ALL;
     }
 
-    /* Rule 6 cascade: rdSent may now be true */
-    if (b->rdSent && !b->accepted
+    /*
+     * Rule 6 cascade: rdSent was just set by Rule 4 above
+     * (the fast path guarantees we only reach here when rdSent
+     * was not set on entry). Check accumulated ready count.
+     */
+    if ((b->flags & BRACHA87_F1_RDSENT) && !(b->flags & BRACHA87_F1_ACCEPTED)
      && fig1RdCnt(b, value) >= 2u * b->t + 1) {
       memcpy(F1_VALUE(b), value, F1_VLEN(b));
-      b->accepted = 1;
+      b->flags |= BRACHA87_F1_ACCEPTED;
       out[nout++] = BRACHA87_ACCEPT;
     }
     break;
@@ -254,15 +309,31 @@ bracha87Fig1Input(
     /*
      * Deduplicate: one ready per sender.
      */
-    if (F1_RDFROM(b)[from])
+    if (BIT_TST(F1_RDFROM(b), from))
       return (0);
     fig1SetRd(b, from, value);
+
+    /*
+     * Fast path: once rdSent, only Rule 6 can fire.
+     * rdSent implies echoed, so Rule 3 (!echoed) and Rule 5
+     * (!rdSent) are dead.
+     */
+    if (b->flags & BRACHA87_F1_RDSENT) {
+      /* Rule 6: rdSent && ready_count[v] >= 2t+1 -> accept(v) */
+      if (fig1RdCnt(b, value) >= 2u * b->t + 1) {
+        memcpy(F1_VALUE(b), value, F1_VLEN(b));
+        b->flags |= BRACHA87_F1_ACCEPTED;
+        out[nout++] = BRACHA87_ACCEPT;
+      }
+      break;
+    }
+
     rd = fig1RdCnt(b, value);
 
     /*
      * Rule 3: !echoed && ready_count[v] >= t+1 -> echo(v) to all
      */
-    if (!b->echoed
+    if (!(b->flags & BRACHA87_F1_ECHOED)
      && rd >= (unsigned int)b->t + 1) {
       fig1Commit(b, value);
       out[nout++] = BRACHA87_ECHO_ALL;
@@ -274,10 +345,10 @@ bracha87Fig1Input(
      * Fires for any value v meeting the threshold (paper's rule).
      * Updates committed value so caller broadcasts ready(v).
      */
-    if (b->echoed && !b->rdSent
+    if ((b->flags & BRACHA87_F1_ECHOED) && !(b->flags & BRACHA87_F1_RDSENT)
      && rd >= (unsigned int)b->t + 1) {
       memcpy(F1_VALUE(b), value, F1_VLEN(b));
-      b->rdSent = 1;
+      b->flags |= BRACHA87_F1_RDSENT;
       out[nout++] = BRACHA87_READY_ALL;
     }
 
@@ -286,10 +357,10 @@ bracha87Fig1Input(
      *
      * Fires for any value v with sufficient ready count.
      */
-    if (b->rdSent && !b->accepted
+    if ((b->flags & BRACHA87_F1_RDSENT) && !(b->flags & BRACHA87_F1_ACCEPTED)
      && rd >= 2u * b->t + 1) {
       memcpy(F1_VALUE(b), value, F1_VLEN(b));
-      b->accepted = 1;
+      b->flags |= BRACHA87_F1_ACCEPTED;
       out[nout++] = BRACHA87_ACCEPT;
     }
     break;
@@ -305,7 +376,7 @@ const unsigned char *
 bracha87Fig1Value(
   const struct bracha87Fig1 *b
 ){
-  if (!b || !b->echoed)
+  if (!b || !(b->flags & BRACHA87_F1_ECHOED))
     return (0);
   return (F1_VALUE(b));
 }
@@ -315,22 +386,33 @@ bracha87Fig1Value(
 /*************************************************************************/
 
 /*
- * Per-round record: recvCount + complete + rcvs[n].
+ * Layout:
+ *   complete[(maxRounds+7)/8]  round-complete bitmap
+ *   Per round (maxRounds rounds):
+ *     recvCount                (unsigned char)
+ *     received[(N+7)/8]        bitmap per peer
+ *     values[N]                value per peer
  */
-#define F2_ROUND_SZ(n) (2 + (unsigned long)((n) + 1) * sizeof (struct bracha87Fig2Rcv))
 
-#define F2_ROUND(b, k) ((b)->data + (k) * F2_ROUND_SZ((b)->n))
-#define F2_RCNT(b, k)  (*(F2_ROUND((b), (k))))
-#define F2_COMP(b, k)  (*(F2_ROUND((b), (k)) + 1))
-#define F2_RCVS(b, k)  ((struct bracha87Fig2Rcv *)(F2_ROUND((b), (k)) + 2))
+#define F2_CBMP(b)    ((b)->data)
+#define F2_RDATA(b)   ((b)->data + BIT_SZ((unsigned int)(b)->maxRounds))
+#define F2_RSZ(n)     (1 + BIT_SZ((unsigned int)(n) + 1) + (unsigned int)(n) + 1)
+#define F2_REC(b, k)  (F2_RDATA(b) + (unsigned long)(k) * F2_RSZ((b)->n))
+#define F2_RCNT(b, k) (*(F2_REC((b), (k))))
+#define F2_RECV(b, k) (F2_REC((b), (k)) + 1)
+#define F2_VALS(b, k) (F2_REC((b), (k)) + 1 + BIT_SZ(B_N(b)))
 
 unsigned long
 bracha87Fig2Sz(
   unsigned int n
  ,unsigned int maxRounds
 ){
+  unsigned int N;
+
+  N = n + 1;
   return (sizeof (struct bracha87Fig2) - 1
-    + maxRounds * F2_ROUND_SZ(n));
+    + BIT_SZ(maxRounds)
+    + (unsigned long)maxRounds * (1 + BIT_SZ(N) + N));
 }
 
 void
@@ -353,26 +435,21 @@ bracha87Fig2Receive(
  ,unsigned char sender
  ,unsigned char value
 ){
-  struct bracha87Fig2Rcv *rcvs;
-
   if (!b || k >= b->maxRounds || sender > b->n)
     return (0);
 
-  rcvs = F2_RCVS(b, k);
-
   /* Deduplicate: one message per sender per round */
-  if (rcvs[sender].received)
+  if (BIT_TST(F2_RECV(b, k), sender))
     return (0);
 
-  rcvs[sender].sender = sender;
-  rcvs[sender].value = value;
-  rcvs[sender].received = 1;
+  BIT_SET(F2_RECV(b, k), sender);
+  F2_VALS(b, k)[sender] = value;
   ++F2_RCNT(b, k);
 
   /* Check n-t threshold */
-  if (!F2_COMP(b, k)
+  if (!BIT_TST(F2_CBMP(b), k)
    && F2_RCNT(b, k) >= B_N(b) - b->t) {
-    F2_COMP(b, k) = 1;
+    BIT_SET(F2_CBMP(b), k);
     return (BRACHA87_ROUND_COMPLETE);
   }
 
@@ -396,21 +473,23 @@ bracha87Fig2GetReceived(
  ,unsigned char *senders
  ,unsigned char *values
 ){
-  const struct bracha87Fig2Rcv *rcvs;
+  const unsigned char *recv;
+  const unsigned char *vals;
   unsigned int cnt;
   unsigned int i;
 
   if (!b || k >= b->maxRounds)
     return (0);
 
-  rcvs = F2_RCVS(b, k);
+  recv = F2_RECV(b, k);
+  vals = F2_VALS(b, k);
   cnt = 0;
   for (i = 0; i < B_N(b); ++i) {
-    if (rcvs[i].received) {
+    if (BIT_TST(recv, i)) {
       if (senders)
-        senders[cnt] = rcvs[i].sender;
+        senders[cnt] = (unsigned char)i;
       if (values)
-        values[cnt] = rcvs[i].value;
+        values[cnt] = vals[i];
       ++cnt;
     }
   }
@@ -422,22 +501,35 @@ bracha87Fig2GetReceived(
 /*************************************************************************/
 
 /*
- * Per-round record: validCount + complete + msgs[n].
+ * Layout:
+ *   complete[(maxRounds+7)/8]  round-complete bitmap
+ *   Per round (maxRounds rounds):
+ *     validCount               (unsigned char)
+ *     arrived[(N+7)/8]         bitmap per peer
+ *     valid[(N+7)/8]           bitmap per peer
+ *     values[N]                value per peer
  */
-#define F3_ROUND_SZ(n) (2 + (unsigned long)((n) + 1) * sizeof (struct bracha87Msg))
 
-#define F3_ROUND(b, k) ((b)->data + (k) * F3_ROUND_SZ((b)->n))
-#define F3_VCNT(b, k)  (*(F3_ROUND((b), (k))))
-#define F3_COMP(b, k)  (*(F3_ROUND((b), (k)) + 1))
-#define F3_MSGS(b, k)  ((struct bracha87Msg *)(F3_ROUND((b), (k)) + 2))
+#define F3_CBMP(b)    ((b)->data)
+#define F3_RDATA(b)   ((b)->data + BIT_SZ((unsigned int)(b)->maxRounds))
+#define F3_RSZ(n)     (1 + 2 * BIT_SZ((unsigned int)(n) + 1) + (unsigned int)(n) + 1)
+#define F3_REC(b, k)  (F3_RDATA(b) + (unsigned long)(k) * F3_RSZ((b)->n))
+#define F3_VCNT(b, k) (*(F3_REC((b), (k))))
+#define F3_ARVD(b, k) (F3_REC((b), (k)) + 1)
+#define F3_VALD(b, k) (F3_REC((b), (k)) + 1 + BIT_SZ(B_N(b)))
+#define F3_VALS(b, k) (F3_REC((b), (k)) + 1 + 2 * BIT_SZ(B_N(b)))
 
 unsigned long
 bracha87Fig3Sz(
   unsigned int n
  ,unsigned int maxRounds
 ){
+  unsigned int N;
+
+  N = n + 1;
   return (sizeof (struct bracha87Fig3) - 1
-    + maxRounds * F3_ROUND_SZ(n));
+    + BIT_SZ(maxRounds)
+    + (unsigned long)maxRounds * (1 + 2 * BIT_SZ(N) + N));
 }
 
 void
@@ -476,7 +568,8 @@ fig3IsValid(
   unsigned char values[256];
   unsigned int i;
   unsigned int j;
-  struct bracha87Msg *msgs;
+  unsigned char *vbm;
+  unsigned char *vls;
   unsigned char result;
 
   if (k >= b->maxRounds)
@@ -497,12 +590,13 @@ fig3IsValid(
    * N receives the full set so it can determine whether different
    * n-t subsets could produce different results (existential check).
    */
-  msgs = F3_MSGS(b, k - 1);
+  vbm = F3_VALD(b, k - 1);
+  vls = F3_VALS(b, k - 1);
   j = 0;
   for (i = 0; i < B_N(b); ++i) {
-    if (msgs[i].valid) {
-      senders[j] = msgs[i].sender;
-      values[j] = msgs[i].value;
+    if (BIT_TST(vbm, i)) {
+      senders[j] = (unsigned char)i;
+      values[j] = vls[i];
       ++j;
     }
   }
@@ -528,32 +622,40 @@ bracha87Fig3Accept(
  ,unsigned char value
  ,unsigned int *validCount
 ){
-  struct bracha87Msg *msgs;
+  unsigned char *rec;
+  unsigned int bs;
+  unsigned char *arvd;
+  unsigned char *vald;
+  unsigned char *vals;
 
   if (!b || k >= b->maxRounds || sender > b->n)
     return (0);
 
-  msgs = F3_MSGS(b, k);
+  /* Cache record pointer — avoids repeated F3_REC multiplication */
+  bs = BIT_SZ(B_N(b));
+  rec = F3_REC(b, k);
+  arvd = rec + 1;
+  vald = rec + 1 + bs;
+  vals = rec + 1 + 2 * bs;
 
   /* Deduplicate: one accepted message per sender per round */
-  if (msgs[sender].arrived)
+  if (BIT_TST(arvd, sender))
     return (0);
 
   /* Record the accepted message (stored for re-evaluation) */
-  msgs[sender].sender = sender;
-  msgs[sender].value = value;
-  msgs[sender].arrived = 1;
+  BIT_SET(arvd, sender);
+  vals[sender] = value;
 
   /* Check VALID^k */
   if (!fig3IsValid(b, k, value)) {
     if (validCount)
-      *validCount = F3_VCNT(b, k);
+      *validCount = *rec;
     return (0);
   }
 
   /* Mark valid */
-  msgs[sender].valid = 1;
-  ++F3_VCNT(b, k);
+  BIT_SET(vald, sender);
+  ++*rec;
 
   /*
    * Fig 2 round coordination: when n-t validated, re-evaluate
@@ -561,34 +663,74 @@ bracha87Fig3Accept(
    * on n-t in VALID^{r-1}, so completing round k may unblock
    * round k+1, which may unblock k+2, etc.
    */
-  if (!F3_COMP(b, k)
-   && F3_VCNT(b, k) >= B_N(b) - b->t) {
+  if (!BIT_TST(F3_CBMP(b), k)
+   && *rec >= B_N(b) - b->t) {
     unsigned int r;
 
-    F3_COMP(b, k) = 1;
+    BIT_SET(F3_CBMP(b), k);
     for (r = (unsigned int)k + 1; r < b->maxRounds; ++r) {
-      struct bracha87Msg *rm;
+      unsigned char csnd[256];
+      unsigned char cval[256];
+      unsigned int cj;
+      unsigned char cres;
+      int crc;
+      unsigned char *pvbm;
+      unsigned char *pvls;
+      unsigned char *ra;
+      unsigned char *rv;
+      unsigned char *rvl;
       unsigned int i;
 
-      if (F3_COMP(b, r))
+      if (BIT_TST(F3_CBMP(b), r))
         break;
-      rm = F3_MSGS(b, r);
+
+      /*
+       * VALID^r check (paper Fig 3), hoisted out of the per-peer
+       * loop: collect the validated set from round r-1 once and
+       * call N once, then test each peer's value against the result.
+       * Round r-1 has n-t validated (just completed or cascaded).
+       */
+      pvbm = F3_VALD(b, r - 1);
+      pvls = F3_VALS(b, r - 1);
+      cj = 0;
       for (i = 0; i < B_N(b); ++i) {
-        if (rm[i].arrived && !rm[i].valid
-         && fig3IsValid(b, r, rm[i].value)) {
-          rm[i].valid = 1;
-          ++F3_VCNT(b, r);
+        if (BIT_TST(pvbm, i)) {
+          csnd[cj] = (unsigned char)i;
+          cval[cj] = pvls[i];
+          ++cj;
+        }
+      }
+      crc = b->N(b->Nclosure, r - 1, cj, csnd, cval, &cres);
+
+      ra = F3_ARVD(b, r);
+      rv = F3_VALD(b, r);
+      rvl = F3_VALS(b, r);
+      for (i = 0; i < B_N(b); ++i) {
+        if (BIT_TST(ra, i) && !BIT_TST(rv, i)) {
+          int valid;
+
+          /* VALID^r: value = N(r-1, S) — same logic as fig3IsValid */
+          if (crc < 0)
+            valid = 0;
+          else if (crc > 0)
+            valid = ((rvl[i] & (unsigned char)~BRACHA87_D_FLAG) <= 1);
+          else
+            valid = (rvl[i] == cres);
+          if (valid) {
+            BIT_SET(rv, i);
+            ++F3_VCNT(b, r);
+          }
         }
       }
       if (F3_VCNT(b, r) >= B_N(b) - b->t)
-        F3_COMP(b, r) = 1;
+        BIT_SET(F3_CBMP(b), r);
       else
         break;
     }
   }
 
   if (validCount)
-    *validCount = F3_VCNT(b, k);
+    *validCount = *rec;
   return (BRACHA87_VALIDATED);
 }
 
@@ -609,21 +751,23 @@ bracha87Fig3GetValid(
  ,unsigned char *senders
  ,unsigned char *values
 ){
-  const struct bracha87Msg *msgs;
+  const unsigned char *vbm;
+  const unsigned char *vls;
   unsigned int cnt;
   unsigned int i;
 
   if (!b || k >= b->maxRounds)
     return (0);
 
-  msgs = F3_MSGS(b, k);
+  vbm = F3_VALD(b, k);
+  vls = F3_VALS(b, k);
   cnt = 0;
   for (i = 0; i < B_N(b); ++i) {
-    if (msgs[i].valid) {
+    if (BIT_TST(vbm, i)) {
       if (senders)
-        senders[cnt] = msgs[i].sender;
+        senders[cnt] = (unsigned char)i;
       if (values)
-        values[cnt] = msgs[i].value;
+        values[cnt] = vls[i];
       ++cnt;
     }
   }
@@ -637,7 +781,7 @@ bracha87Fig3RoundComplete(
 ){
   if (!b || k >= b->maxRounds)
     return (0);
-  return (F3_COMP(b, k) != 0);
+  return (BIT_TST(F3_CBMP(b), k) != 0);
 }
 
 /*************************************************************************/
