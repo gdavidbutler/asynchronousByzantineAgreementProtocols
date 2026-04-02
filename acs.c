@@ -156,14 +156,6 @@ conF4(
     + (unsigned long)maxRounds(a) * A_N(a) * conF1Sz(a)));
 }
 
-/* Consensus Fig3 (embedded in Fig4) for origin j */
-static struct bracha87Fig3 *
-conF3(
-  struct acs *a
- ,unsigned int j
-){
-  return ((struct bracha87Fig3 *)conF4(a, j)->data);
-}
 
 /*------------------------------------------------------------------------*/
 /*  Coin function — deterministic alternating (same as consensus.c)       */
@@ -241,15 +233,17 @@ acsInit(
     bracha87Fig1Init(propF1(a, i), n, t, vLen);
 
   /* Initialize consensus pipelines */
-  for (i = 0; i < N; ++i) {
+  {
     unsigned int mr2;
 
     mr2 = (unsigned int)maxPhases * 3;
-    for (r = 0; r < mr2; ++r)
-      for (j = 0; j < N; ++j)
-        bracha87Fig1Init(conF1(a, i, r, j), n, t, 0);
-    bracha87Fig4Init(conF4(a, i), n, t, maxPhases, 0,
-                     coin ? coin : acsCoin, coinClosure);
+    for (i = 0; i < N; ++i) {
+      for (r = 0; r < mr2; ++r)
+        for (j = 0; j < N; ++j)
+          bracha87Fig1Init(conF1(a, i, r, j), n, t, 0);
+      bracha87Fig4Init(conF4(a, i), n, t, maxPhases, 0,
+                       coin ? coin : acsCoin, coinClosure);
+    }
   }
 }
 
@@ -362,6 +356,11 @@ acsConsensusInput(
  ,unsigned char value
  ,struct acsAct *out
 ){
+  unsigned char *pipe;
+  unsigned long cf1sz;
+  unsigned long f4off;
+  unsigned int N;
+  unsigned int mr;
   struct bracha87Fig1 *f1;
   struct bracha87Fig3 *f3;
   struct bracha87Fig4 *f4;
@@ -381,10 +380,16 @@ acsConsensusInput(
   if (acsDecision(a)[origin] != 0xFF)
     return (0);
 
-  /* Route to Fig1 instance by (round, broadcaster), feed from as sender */
-  f1 = conF1(a, origin, round, broadcaster);
-  f3 = conF3(a, origin);
-  f4 = conF4(a, origin);
+  /* Compute pipeline base once — avoids redundant external calls */
+  N = A_N(a);
+  mr = maxRounds(a);
+  cf1sz = conF1Sz(a);
+  f4off = (unsigned long)mr * N * cf1sz;
+  pipe = conBase(a) + (unsigned int)origin * conPipelineSz(a);
+  f1 = (struct bracha87Fig1 *)(pipe
+    + ((unsigned long)round * N + broadcaster) * cf1sz);
+  f4 = (struct bracha87Fig4 *)(pipe + f4off);
+  f3 = (struct bracha87Fig3 *)f4->data;
   nextRound = &acsConNextRound(a)[origin];
   nact = 0;
 
@@ -406,7 +411,7 @@ acsConsensusInput(
        * Check for completed rounds (including cascades).
        * Same pattern as consensus.c.
        */
-      while (*nextRound < maxRounds(a)
+      while (*nextRound < mr
           && bracha87Fig3RoundComplete(f3, *nextRound)) {
         unsigned char rsnd[256];
         unsigned char rval[256];
@@ -441,7 +446,7 @@ acsConsensusInput(
         }
 
         if ((act & BRACHA87_BROADCAST)
-         && *nextRound < maxRounds(a)) {
+         && *nextRound < mr) {
           /* Broadcast INITIAL for the new consensus round (self is broadcaster) */
           out[nact].act = ACS_ACT_CON_SEND;
           out[nact].origin = origin;
@@ -498,7 +503,7 @@ acsSubset(
   if (!a || !origins)
     return (0);
 
-  dec = ((const struct acs *)a)->data + A_N(a);
+  dec = a->data + A_N(a);
   cnt = 0;
   for (i = 0; i < A_N(a); ++i) {
     if (dec[i] == 1)

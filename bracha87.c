@@ -821,6 +821,7 @@ fig4Nfn(
   struct bracha87Fig4 *f4 = (struct bracha87Fig4 *)closure;
   unsigned int nt;
   unsigned int cnt[2];
+  unsigned int dc[2];
   unsigned int i;
   unsigned int sub;
   unsigned char v;
@@ -833,11 +834,15 @@ fig4Nfn(
   nt = B_N(f4) - f4->t;
   sub = (unsigned int)(k % 3);
   cnt[0] = cnt[1] = 0;
+  dc[0] = dc[1] = 0;
 
   for (i = 0; i < n_msgs; ++i) {
     v = values[i] & (unsigned char)~BRACHA87_D_FLAG;
-    if (v <= 1)
+    if (v <= 1) {
       ++cnt[v];
+      if (values[i] & BRACHA87_D_FLAG)
+        ++dc[v];
+    }
   }
 
   switch (sub) {
@@ -898,21 +903,14 @@ fig4Nfn(
      * Exact only if all subsets agree; otherwise permissive.
      */
     {
-      unsigned int dc2[2];
       unsigned char dm;
       unsigned int excess;
 
-      dc2[0] = dc2[1] = 0;
-      for (i = 0; i < n_msgs; ++i) {
-        v = values[i] & (unsigned char)~BRACHA87_D_FLAG;
-        if (v <= 1 && (values[i] & BRACHA87_D_FLAG))
-          ++dc2[v];
-      }
-      dm = (dc2[1] > dc2[0]) ? 1 : 0;
+      dm = (dc[1] > dc[0]) ? 1 : 0;
       excess = (n_msgs > nt) ? n_msgs - nt : 0;
-      if (dc2[dm] > 2u * f4->t) {
+      if (dc[dm] > 2u * f4->t) {
         /* Exact if worst-case subset still has >2t */
-        if (dc2[dm] - excess > 2u * f4->t) {
+        if (dc[dm] - excess > 2u * f4->t) {
           *result = dm;
           return (0);
         }
