@@ -1510,6 +1510,127 @@ testFig3Reeval(
   free(f3);
 }
 
+/*
+ * Test re-cascade when VALID^{k-1} grows past n-t.
+ *
+ * Round k-1 first reaches n-t with one composition (giving N result A).
+ * A round-k message arrives carrying value B != A — stored, rejected.
+ * More round-(k-1) messages arrive after first crossing; the new
+ * full-set composition gives N result B.  The stored round-k B
+ * message must be re-evaluated and validated.
+ *
+ * Catches the pre-fix bug where the forward cascade fired only on the
+ * first crossing of n-t.
+ */
+static void
+testFig3RecascadeOnGrowth(
+  void
+){
+  struct bracha87Fig3 *f3;
+  unsigned long sz;
+  unsigned int vc;
+  unsigned int a;
+
+  printf("\n  Re-cascade on VALID growth past n-t:\n");
+
+  /*
+   * n=9 (enc 8), t=1, nt=8.
+   *   Round 0 first crossing: 4 zeros + 4 ones -> testNfn tie-break -> 0.
+   *   Submit round 1 sender 0 value=1 BEFORE the 9th round-0 arrives;
+   *     rejected (N=0 != 1).
+   *   Round 0 grows: 9th message (value=1) -> cnt[0]=4, cnt[1]=5 -> N=1.
+   *   Stored round 1 v=1 must now re-validate.
+   */
+  sz = bracha87Fig3Sz(8, 4);
+  f3 = (struct bracha87Fig3 *)calloc(1, sz);
+  bracha87Fig3Init(f3, 8, 1, 4, testNfn, 0);
+
+  /* Round 0: 4 zeros */
+  bracha87Fig3Accept(f3, 0, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 2, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 3, 0, &vc);
+  /* Round 0: 4 ones -> nt=8 reached, N=0 */
+  bracha87Fig3Accept(f3, 0, 4, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 5, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 6, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 7, 1, &vc);
+  check("Recascade: round 0 complete at n-t",
+        bracha87Fig3RoundComplete(f3, 0));
+
+  /* Round 1 v=1 stored, rejected (N(8 msgs, 4:4) -> 0) */
+  a = bracha87Fig3Accept(f3, 1, 0, 1, &vc);
+  printf("    round 1 v=1 first eval: a=%u vc=%u (expect rejected)\n", a, vc);
+  check("Recascade: round 1 v=1 initially rejected", a == 0);
+  check("Recascade: round 1 vc=0 before growth",
+        bracha87Fig3ValidCount(f3, 1) == 0);
+
+  /* 9th round-0 message (value=1) -> N(9 msgs, 4:5) -> 1 */
+  a = bracha87Fig3Accept(f3, 0, 8, 1, &vc);
+  check("Recascade: round 0 9th msg validated", a == BRACHA87_VALIDATED);
+  check("Recascade: round 0 vc=9", vc == 9);
+
+  /* Stored round 1 v=1 must now be re-evaluated against new N result */
+  printf("    round 1 vc after growth: %u (expect 1)\n",
+         bracha87Fig3ValidCount(f3, 1));
+  check("Recascade: stored round 1 v=1 re-validated on growth",
+        bracha87Fig3ValidCount(f3, 1) == 1);
+
+  free(f3);
+
+  /*
+   * Multi-step cascade on growth: round k grows -> unlocks stored at
+   * k+1 -> unlocks stored at k+2.  Pre-load v=1 messages for rounds 1
+   * and 2; they sit rejected until round 0 grows past 4:4 to favor 1.
+   */
+  printf("    Multi-round re-cascade on growth:\n");
+  sz = bracha87Fig3Sz(8, 4);
+  f3 = (struct bracha87Fig3 *)calloc(1, sz);
+  bracha87Fig3Init(f3, 8, 1, 4, testNfn, 0);
+
+  /* Pre-load round 1 with v=1 (will be rejected at first), and
+   * round 2 with v=1 (cannot be evaluated until round 1 has n-t). */
+  bracha87Fig3Accept(f3, 1, 0, 1, &vc);
+  bracha87Fig3Accept(f3, 2, 0, 1, &vc);
+
+  /* Round 0: 4 zeros + 4 ones -> N=0, round 0 complete; round 1 v=1
+   * rejected on first cascade; round 2 stays unreachable. */
+  bracha87Fig3Accept(f3, 0, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 2, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 3, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 4, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 5, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 6, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 7, 1, &vc);
+  check("Multi: round 1 vc=0 after first crossing",
+        bracha87Fig3ValidCount(f3, 1) == 0);
+  check("Multi: round 2 vc=0 (round 1 not at n-t)",
+        bracha87Fig3ValidCount(f3, 2) == 0);
+
+  /* Add 5 more ones to round 0 -> cnt[0]=4, cnt[1]=9 -> N=1 in full set;
+   * but the stored round-1 v=1 needs only one re-eval pass.  We then
+   * still need round 1 to reach n-t before round 2 can validate. */
+  bracha87Fig3Accept(f3, 0, 8, 1, &vc);
+  /* Now also add more round 1 v=1 messages so it reaches n-t. */
+  bracha87Fig3Accept(f3, 1, 1, 1, &vc);
+  bracha87Fig3Accept(f3, 1, 2, 1, &vc);
+  bracha87Fig3Accept(f3, 1, 3, 1, &vc);
+  bracha87Fig3Accept(f3, 1, 4, 1, &vc);
+  bracha87Fig3Accept(f3, 1, 5, 1, &vc);
+  bracha87Fig3Accept(f3, 1, 6, 1, &vc);
+  bracha87Fig3Accept(f3, 1, 7, 1, &vc);  /* round 1 vc reaches 8 */
+  printf("    round 1 vc=%u round 2 vc=%u\n",
+         bracha87Fig3ValidCount(f3, 1),
+         bracha87Fig3ValidCount(f3, 2));
+  check("Multi: round 1 reached n-t after re-cascade",
+        bracha87Fig3ValidCount(f3, 1) >= 8);
+  check("Multi: round 2 v=1 unlocked",
+        bracha87Fig3ValidCount(f3, 2) == 1);
+
+  free(f3);
+}
+
 /*************************************************************************/
 /*  Figure 4 — step-by-step tests                                        */
 /*************************************************************************/
@@ -1861,15 +1982,15 @@ testFig4EdgeCases(
 }
 
 /*
- * Test fig4Nfn subset majority threshold for even n-t.
+ * Test fig4Nfn subset majority threshold for even / odd n-t.
  *
- * n=5, t=1: n-t=4 (even). Round 1 with 5 validated messages
- * (2 zeros, 3 ones). Majority is unambiguously 1 — no n-t
- * subset of 4 can have majority 0 (at most 2 zeros out of 4).
- * A round-2 message with value=0 must be rejected (exact, not
- * permissive). Also verify value=1 is accepted.
- *
- * n=4, t=1: n-t=3 (odd). Same structure as regression baseline.
+ * Under N's tie-break-to-0 (matching Fig4Round case 0 state
+ * transition), an even-nt subset that ties produces 0.  VALID^k
+ * is existential over n-t subsets of VALID^{k-1}, so value 0 is
+ * legitimate whenever some subset ties — i.e. cnt[0] >= (nt+1)/2
+ * (uniform formula; equals nt/2 for even nt, nt/2+1 for odd).
+ * Value 1 is legitimate iff cnt[1] >= nt/2+1 (strict majority).
+ * Both reachable => permissive; only one => exact.
  */
 static void
 testFig4SubsetMajority(
@@ -1884,12 +2005,12 @@ testFig4SubsetMajority(
   printf("\n  Subset majority tests (even n-t):\n");
 
   /*
-   * n=5, t=1, n-t=4 (even).
-   * Round 1: 5 messages — senders 0,1 send 0; senders 2,3,4 send 1.
-   * After 4 validate, round 1 is complete. 5th validates too.
-   * Round 2: fig3IsValid calls fig4Nfn(k=1, n_msgs=5, cnt={2,3}).
-   * Majority is 1. No 4-message subset has majority 0.
-   * Value 0 must be rejected; value 1 accepted.
+   * n=5, t=1, n-t=4 (even), cnt[0]=2, cnt[1]=3, n_msgs=5.
+   *   Result 0 reachable: cnt[0]=2 >= (nt+1)/2 = 2.  Yes — subset
+   *     {0,0,1,1} ties, tie-break to 0.
+   *   Result 1 reachable: cnt[1]=3 >= nt/2+1 = 3.  Yes — subset
+   *     {0,1,1,1} has strict majority 1.
+   *   Both reachable => permissive; both 0 and 1 accepted.
    */
   sz = bracha87Fig4Sz(4, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
@@ -1906,12 +2027,12 @@ testFig4SubsetMajority(
   bracha87Fig3Accept(f3, 0, 4, 1, &vc);  /* vc=5, extra validated */
   check("Subset: round 0 vc=5", vc == 5);
 
-  /* Round 1: value=0 should be rejected (majority is 1) */
+  /* Round 1: value=0 accepted (tie subset produces 0) */
   a = bracha87Fig3Accept(f3, 1, 0, 0, &vc);
-  printf("    n=5 t=1 round 1 v=0   : a=%u vc=%u (expect rejected)\n", a, vc);
-  check("Subset n=5: value 0 rejected", a == 0);
+  printf("    n=5 t=1 round 1 v=0   : a=%u vc=%u (expect valid)\n", a, vc);
+  check("Subset n=5: value 0 accepted", a == BRACHA87_VALIDATED);
 
-  /* Round 1: value=1 should be accepted */
+  /* Round 1: value=1 accepted (strict majority subset produces 1) */
   a = bracha87Fig3Accept(f3, 1, 1, 1, &vc);
   printf("    n=5 t=1 round 1 v=1   : a=%u vc=%u (expect valid)\n", a, vc);
   check("Subset n=5: value 1 accepted", a == BRACHA87_VALIDATED);
@@ -1946,10 +2067,11 @@ testFig4SubsetMajority(
   free(b);
 
   /*
-   * n=8, t=2, n-t=6 (even). Another even case.
-   * Round 1: 8 messages — 3 zeros, 5 ones. Majority is 1.
-   * No 6-message subset has majority 0 (at most 3 of 6).
-   * 3 is not > 3, so 0 can't be majority. Value 0 rejected.
+   * n=8, t=2, n-t=6 (even), cnt[0]=3, cnt[1]=5, n_msgs=8.
+   *   Result 0 reachable: cnt[0]=3 >= (nt+1)/2 = 3.  Yes — subset
+   *     {0,0,0,1,1,1} ties, tie-break to 0.
+   *   Result 1 reachable: cnt[1]=5 >= nt/2+1 = 4.  Yes.
+   *   Both reachable => permissive; both 0 and 1 accepted.
    */
   sz = bracha87Fig4Sz(7, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
@@ -1968,8 +2090,8 @@ testFig4SubsetMajority(
   bracha87Fig3Accept(f3, 0, 7, 1, &vc);  /* vc=8 */
 
   a = bracha87Fig3Accept(f3, 1, 0, 0, &vc);
-  printf("    n=8 t=2 round 1 v=0   : a=%u vc=%u (expect rejected)\n", a, vc);
-  check("Subset n=8: value 0 rejected", a == 0);
+  printf("    n=8 t=2 round 1 v=0   : a=%u vc=%u (expect valid)\n", a, vc);
+  check("Subset n=8: value 0 accepted", a == BRACHA87_VALIDATED);
 
   a = bracha87Fig3Accept(f3, 1, 1, 1, &vc);
   printf("    n=8 t=2 round 1 v=1   : a=%u vc=%u (expect valid)\n", a, vc);
@@ -1978,15 +2100,11 @@ testFig4SubsetMajority(
   free(b);
 
   /*
-   * n=5, t=1: true ambiguity case. Round 1: 3 zeros, 2 ones.
-   * With n-t=4: subset {0,0,0,1} has majority 0. Subset {0,0,1,1}
-   * has majority 0 (tie->0). So majority is always 0.
-   * But also test: 2 zeros, 2 ones + 1 extra. Subset {0,0,1,1}
-   * tie->0. Subset {0,1,1,?} depends. With cnt[0]=2,cnt[1]=3,
-   * only value 1 can be majority (3>2 in any 4-subset with >=2 ones).
-   * Already tested above. Now test cnt[0]=3,cnt[1]=2: both values
-   * need cnt >= nt/2+1 = 3 for permissive. cnt[0]=3>=3, cnt[1]=2<3.
-   * So NOT permissive — exact with result=0.
+   * n=5, t=1, n-t=4 (even), cnt[0]=3, cnt[1]=2, n_msgs=5.
+   *   Result 0 reachable: cnt[0]=3 >= (nt+1)/2 = 2.  Yes.
+   *   Result 1 reachable: cnt[1]=2 >= nt/2+1 = 3.  No (strict majority
+   *     of 1 needs at least 3 ones; only 2 available).
+   *   Only 0 reachable => exact with result=0; value 1 rejected.
    */
   sz = bracha87Fig4Sz(4, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
@@ -2008,6 +2126,301 @@ testFig4SubsetMajority(
   a = bracha87Fig3Accept(f3, 1, 1, 1, &vc);
   printf("    n=5 t=1 3:2 v=1       : a=%u vc=%u (expect rejected)\n", a, vc);
   check("Subset n=5 3:2: value 1 rejected", a == 0);
+
+  free(b);
+}
+
+/*
+ * Just-below-threshold boundary tests for fig4Nfn case 0.
+ * Uses n=9 (enc 8), t=1, nt=8 (even).
+ *
+ *   cnt[0]=3, cnt[1]=6, n_msgs=9: cnt[0] < (nt+1)/2=4 so 0 unreachable
+ *     in any subset.  Exact, value 0 rejected, value 1 accepted.
+ *   cnt[0]=4, cnt[1]=4, n_msgs=8 (=nt): n_msgs not > nt so the
+ *     permissive branch is not even consulted.  Exact via tie-break
+ *     to 0; value 0 accepted, value 1 rejected.
+ *   cnt[0]=2, cnt[1]=7, n_msgs=9: only result 1 reachable.
+ */
+static void
+testFig4SubsetMajorityBoundary(
+  void
+){
+  struct bracha87Fig4 *b;
+  struct bracha87Fig3 *f3;
+  unsigned long sz;
+  unsigned int vc;
+  unsigned int a;
+
+  printf("\n  Subset majority boundary (just-below threshold):\n");
+
+  /* Case A: nt=8, cnt[0]=3, cnt[1]=6, n_msgs=9 > nt.
+   * Permissive check: cnt[0]=3 < (nt+1)/2=4 so 0 not reachable.
+   *                   cnt[1]=6 >= nt/2+1=5  so 1 reachable.
+   * Not permissive -> exact, result=1.  v=0 rejected, v=1 accepted. */
+  sz = bracha87Fig4Sz(8, 10);
+  b = (struct bracha87Fig4 *)calloc(1, sz);
+  CoinVal = 0;
+  bracha87Fig4Init(b, 8, 1, 10, 0, testCoin, 0);
+  f3 = (struct bracha87Fig3 *)b->data;
+
+  bracha87Fig3Accept(f3, 0, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 2, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 3, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 4, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 5, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 6, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 7, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 8, 1, &vc);  /* 9 msgs > nt=8 */
+
+  a = bracha87Fig3Accept(f3, 1, 0, 0, &vc);
+  check("Boundary 3:6@nt=8: v=0 rejected", a == 0);
+  a = bracha87Fig3Accept(f3, 1, 1, 1, &vc);
+  check("Boundary 3:6@nt=8: v=1 accepted", a == BRACHA87_VALIDATED);
+  free(b);
+
+  /* Case B: nt=8, cnt[0]=4, cnt[1]=4, n_msgs=8 (=nt).
+   * Permissive branch not consulted.  Exact via tie-break to 0.
+   * v=0 accepted, v=1 rejected. */
+  b = (struct bracha87Fig4 *)calloc(1, sz);
+  bracha87Fig4Init(b, 8, 1, 10, 0, testCoin, 0);
+  f3 = (struct bracha87Fig3 *)b->data;
+
+  bracha87Fig3Accept(f3, 0, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 2, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 3, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 4, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 5, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 6, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 7, 1, &vc);  /* exactly nt=8 */
+
+  a = bracha87Fig3Accept(f3, 1, 0, 0, &vc);
+  check("Boundary 4:4@nt=8: v=0 accepted (tie->0)", a == BRACHA87_VALIDATED);
+  a = bracha87Fig3Accept(f3, 1, 1, 1, &vc);
+  check("Boundary 4:4@nt=8: v=1 rejected", a == 0);
+  free(b);
+
+  /* Case C: nt=8, cnt[0]=2, cnt[1]=7, n_msgs=9 > nt.
+   * Permissive check: cnt[0]=2 < 4 so 0 unreachable.  Exact, result=1.
+   * v=0 rejected, v=1 accepted. */
+  b = (struct bracha87Fig4 *)calloc(1, sz);
+  bracha87Fig4Init(b, 8, 1, 10, 0, testCoin, 0);
+  f3 = (struct bracha87Fig3 *)b->data;
+
+  bracha87Fig3Accept(f3, 0, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 2, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 3, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 4, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 5, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 6, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 7, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 8, 1, &vc);
+
+  a = bracha87Fig3Accept(f3, 1, 0, 0, &vc);
+  check("Boundary 2:7@nt=8: v=0 rejected", a == 0);
+  a = bracha87Fig3Accept(f3, 1, 1, 1, &vc);
+  check("Boundary 2:7@nt=8: v=1 accepted", a == BRACHA87_VALIDATED);
+  free(b);
+}
+
+/*
+ * Test that D_FLAG injection is rejected when fig4Nfn denies it.
+ *
+ * Round 3i+1 broadcasts (validated via fig4Nfn case 0) carry the
+ * step-1 majority — never D_FLAG.  An attacker injecting (q, 1,
+ * v|D_FLAG) must be rejected.  Same for case 1 fall-through (no
+ * majority anywhere) and case 2 permissive (round 3(i+1) outputs
+ * are always plain binary).
+ */
+static void
+testFig4DflagInjection(
+  void
+){
+  struct bracha87Fig4 *b;
+  struct bracha87Fig3 *f3;
+  unsigned long sz;
+  unsigned int vc;
+  unsigned int a;
+
+  printf("\n  D_FLAG injection rejection:\n");
+
+  /* Case 0 EXACT: nt=3 (odd), all-0 round 0. Round 1 v=0|D_FLAG rejected. */
+  sz = bracha87Fig4Sz(3, 10);
+  b = (struct bracha87Fig4 *)calloc(1, sz);
+  CoinVal = 0;
+  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  f3 = (struct bracha87Fig3 *)b->data;
+
+  bracha87Fig3Accept(f3, 0, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 2, 0, &vc);
+  a = bracha87Fig3Accept(f3, 1, 0, 0 | BRACHA87_D_FLAG, &vc);
+  check("Case 0 exact: 0|D_FLAG rejected", a == 0);
+  a = bracha87Fig3Accept(f3, 1, 1, 0, &vc);
+  check("Case 0 exact: plain 0 accepted", a == BRACHA87_VALIDATED);
+  free(b);
+
+  /* Case 0 PERMISSIVE: nt=4 (even), cnt[0]=2 cnt[1]=3 n_msgs=5.
+   * fig4Nfn case 0 returns permissive with *result=0 (no D_FLAG).
+   * Round 1 v=0|D_FLAG and v=1|D_FLAG both rejected; plain 0 and 1 OK. */
+  sz = bracha87Fig4Sz(4, 10);
+  b = (struct bracha87Fig4 *)calloc(1, sz);
+  bracha87Fig4Init(b, 4, 1, 10, 0, testCoin, 0);
+  f3 = (struct bracha87Fig3 *)b->data;
+
+  bracha87Fig3Accept(f3, 0, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 2, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 3, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 4, 1, &vc);  /* 5 msgs > nt=4 */
+  a = bracha87Fig3Accept(f3, 1, 0, 0 | BRACHA87_D_FLAG, &vc);
+  check("Case 0 permissive: 0|D_FLAG rejected", a == 0);
+  a = bracha87Fig3Accept(f3, 1, 1, 1 | BRACHA87_D_FLAG, &vc);
+  check("Case 0 permissive: 1|D_FLAG rejected", a == 0);
+  a = bracha87Fig3Accept(f3, 1, 2, 0, &vc);
+  check("Case 0 permissive: plain 0 accepted", a == BRACHA87_VALIDATED);
+  a = bracha87Fig3Accept(f3, 1, 3, 1, &vc);
+  check("Case 0 permissive: plain 1 accepted", a == BRACHA87_VALIDATED);
+  free(b);
+
+  /*
+   * Case 1 PERMISSIVE — first branch (cnt[v]*2 > N, D_FLAG legitimate).
+   * To exercise this we need round 1 (= step-1 broadcasts) to validate
+   * with a strict majority of one value, and then submit round 2
+   * messages.  fig4Nfn case 1 should return permissive with
+   * *result = v|D_FLAG.  Round 2 v|D_FLAG accepted, v with no flag
+   * also accepted (process-keeps-own-value path).
+   *
+   * n=5, t=1, nt=4.  Round 0: all-0.  Round 1 setup needs 5 msgs
+   * with cnt[0]*2 > 5 (i.e. cnt[0] >= 3) AND n_msgs > nt for permissive.
+   */
+  sz = bracha87Fig4Sz(4, 10);
+  b = (struct bracha87Fig4 *)calloc(1, sz);
+  bracha87Fig4Init(b, 4, 1, 10, 0, testCoin, 0);
+  f3 = (struct bracha87Fig3 *)b->data;
+
+  /* Round 0: 5 zeros (full set).  Validates round 1 v=0 exact. */
+  bracha87Fig3Accept(f3, 0, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 2, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 3, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 4, 0, &vc);
+  /* Round 1: 4 v=0 (validates), then 1 more v=0 (extra). */
+  bracha87Fig3Accept(f3, 1, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 1, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 1, 2, 0, &vc);
+  bracha87Fig3Accept(f3, 1, 3, 0, &vc);  /* round 1 vc=4 (= nt) */
+  bracha87Fig3Accept(f3, 1, 4, 0, &vc);  /* round 1 vc=5 */
+  /* fig4Nfn case 1 with cnt[0]=5, N=5, n_msgs=5, nt=4:
+   * cnt[0]*2=10 > 5 -> *result = 0|D_FLAG.
+   * Permissive check: (5 - 1) * 2 = 8 > 5, so worst-case subset still
+   * has majority -> NOT permissive, exact 0|D_FLAG.
+   * Round 2 v=0|D_FLAG accepted, v=0 (no D) rejected, v=1 rejected. */
+  a = bracha87Fig3Accept(f3, 2, 0, 0 | BRACHA87_D_FLAG, &vc);
+  check("Case 1 exact: 0|D_FLAG accepted", a == BRACHA87_VALIDATED);
+  a = bracha87Fig3Accept(f3, 2, 1, 0, &vc);
+  check("Case 1 exact: plain 0 rejected", a == 0);
+  a = bracha87Fig3Accept(f3, 2, 2, 1, &vc);
+  check("Case 1 exact: plain 1 rejected", a == 0);
+  free(b);
+
+  /*
+   * Case 1 FALL-THROUGH (no full-set majority).
+   * n=5, t=1, nt=4.  Round 1: 2 zeros, 2 ones (no majority).
+   * cnt[v]*2 = 4 not > 5 for either.  Permissive fall-through with
+   * *result = 0 (no D_FLAG).  Round 2 v|D_FLAG must be rejected.
+   */
+  b = (struct bracha87Fig4 *)calloc(1, sz);
+  bracha87Fig4Init(b, 4, 1, 10, 0, testCoin, 0);
+  f3 = (struct bracha87Fig3 *)b->data;
+
+  /* Round 0: 5 zeros so round 1 v=0 validates exact. */
+  bracha87Fig3Accept(f3, 0, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 2, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 3, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 4, 0, &vc);
+  /* Round 1: only validate 0s (Ns of round 1 says "round 1 must = 0"
+   * because round 0 is all-0; so round 1 v=1 messages are rejected).
+   * To get cnt[0]=cnt[1] in VALID^1 we'd need to swap N — but for
+   * testing the rejection we just need the case 1 fall-through path
+   * to fire.  Construct it differently: use round 0 mixed so that
+   * round 1 N is permissive (case 0), accepting both 0 and 1. */
+  free(b);
+
+  /* Reset: round 0 mixed permissive so round 1 accepts both values. */
+  b = (struct bracha87Fig4 *)calloc(1, sz);
+  bracha87Fig4Init(b, 4, 1, 10, 0, testCoin, 0);
+  f3 = (struct bracha87Fig3 *)b->data;
+
+  /* Round 0: cnt[0]=2 cnt[1]=3 n_msgs=5 -> permissive (case 0 fix).
+   * Round 1 v=0 and v=1 both accepted. */
+  bracha87Fig3Accept(f3, 0, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 0, 2, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 3, 1, &vc);
+  bracha87Fig3Accept(f3, 0, 4, 1, &vc);
+  /* Build a 4:0 round 1 (no majority lost; just need round 1 nt=4). */
+  bracha87Fig3Accept(f3, 1, 0, 0, &vc);
+  bracha87Fig3Accept(f3, 1, 1, 0, &vc);
+  bracha87Fig3Accept(f3, 1, 2, 1, &vc);
+  bracha87Fig3Accept(f3, 1, 3, 1, &vc);  /* round 1 vc=4, cnt[0]=2 cnt[1]=2 */
+  /* fig4Nfn case 1 with N=5, cnt[0]=2 cnt[1]=2: neither *2 > 5.
+   * Falls through to permissive, *result = 0 (no D_FLAG legitimate).
+   * Round 2 v|D_FLAG must be rejected. */
+  a = bracha87Fig3Accept(f3, 2, 0, 0 | BRACHA87_D_FLAG, &vc);
+  check("Case 1 fall-through: 0|D_FLAG rejected", a == 0);
+  a = bracha87Fig3Accept(f3, 2, 1, 1 | BRACHA87_D_FLAG, &vc);
+  check("Case 1 fall-through: 1|D_FLAG rejected", a == 0);
+  a = bracha87Fig3Accept(f3, 2, 2, 0, &vc);
+  check("Case 1 fall-through: plain 0 accepted", a == BRACHA87_VALIDATED);
+  a = bracha87Fig3Accept(f3, 2, 3, 1, &vc);
+  check("Case 1 fall-through: plain 1 accepted", a == BRACHA87_VALIDATED);
+  free(b);
+}
+
+/*
+ * Smoke-test that bracha87Fig4Init clamps maxPhases > BRACHA87_MAX_PHASES
+ * to BRACHA87_MAX_PHASES (85).  Without the clamp, maxPhases * 3 wraps in
+ * unsigned char and silently corrupts the embedded Fig3 size to 2 rounds.
+ */
+static void
+testFig4MaxPhasesClamp(
+  void
+){
+  struct bracha87Fig4 *b;
+  unsigned long sz;
+  unsigned long sizeClamp;
+  unsigned char senders[1];
+  unsigned char values[1];
+  unsigned int act;
+
+  printf("\n  maxPhases clamp:\n");
+
+  /* Sz called with out-of-range value should equal Sz at the cap. */
+  sz = bracha87Fig4Sz(3, 100);
+  sizeClamp = bracha87Fig4Sz(3, BRACHA87_MAX_PHASES);
+  printf("    Sz(100)=%lu Sz(85)=%lu\n", sz, sizeClamp);
+  check("maxPhases: Sz clamps at cap", sz == sizeClamp);
+
+  /* Init with out-of-range value should not crash and should produce
+   * a Fig4 with the clamped capacity (round indices 0..254 valid). */
+  b = (struct bracha87Fig4 *)calloc(1, sz);
+  bracha87Fig4Init(b, 3, 1, 100, 0, testCoin, 0);
+
+  check("maxPhases: Init clamps maxPhases field",
+        b->maxPhases == BRACHA87_MAX_PHASES);
+
+  /* Smoke: round 0 with all-0 majority validates and advances. */
+  CoinVal = 0;
+  senders[0] = 0;
+  values[0] = 0;
+  /* Skip Fig3 wiring; just confirm Fig4Round operates on a non-corrupt
+   * embedded Fig3 (would dereference past end if size was 2 rounds). */
+  act = bracha87Fig4Round(b, 0, 0, senders, values);
+  check("maxPhases: Fig4Round(0 msgs) returns 0 cleanly", act == 0);
 
   free(b);
 }
@@ -3295,6 +3708,7 @@ main(
   testFig3();
   testFig3Deep();
   testFig3Reeval();
+  testFig3RecascadeOnGrowth();
 
   /*
    * Figure 4 — step-by-step, post-decide, edge cases, multi-phase
@@ -3304,6 +3718,9 @@ main(
   testFig4PostDecide();
   testFig4EdgeCases();
   testFig4SubsetMajority();
+  testFig4SubsetMajorityBoundary();
+  testFig4DflagInjection();
+  testFig4MaxPhasesClamp();
   testFig4MultiPhase();
   testFig4Byzantine();
 

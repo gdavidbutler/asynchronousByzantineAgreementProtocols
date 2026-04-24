@@ -25,6 +25,7 @@
  * Pure state machines for Figures 1, 2, 3, and 4.
  */
 
+#include <assert.h>
 #include <string.h>
 #include "bracha87.h"
 
@@ -70,7 +71,11 @@ bracha87Fig1Sz(
   /* actual counts: n/vLen encode 0..255 as 1..256 */
   N = n + 1;
   L = vLen + 1;
-  /* struct up to data[1] minus the 1, plus layout */
+  /*
+   * Struct up to data[1] minus the 1, plus layout.
+   * May over-allocate by the struct's trailing padding (at most
+   * sizeof (unsigned short) - 1 here); harmless.
+   */
   return (sizeof (struct bracha87Fig1) - 1
     + L                       /* value */
     + BIT_SZ(N)               /* ecFrom bitmap */
@@ -86,6 +91,9 @@ bracha87Fig1Init(
  ,unsigned char t
  ,unsigned char vLen
 ){
+  /* n is encoded: actual process count = n + 1. Bracha requires
+   * actual > 3t.  Use unsigned int to avoid wrap at n = 255. */
+  assert((unsigned int)n + 1 > 3u * (unsigned int)t);
   memset(b, 0, bracha87Fig1Sz(n, vLen));
   b->n = n;
   b->t = t;
@@ -422,6 +430,7 @@ bracha87Fig2Init(
  ,unsigned char t
  ,unsigned char maxRounds
 ){
+  assert((unsigned int)n + 1 > 3u * (unsigned int)t);
   memset(b, 0, bracha87Fig2Sz(n, maxRounds));
   b->n = n;
   b->t = t;
@@ -541,6 +550,7 @@ bracha87Fig3Init(
  ,bracha87Nfn N
  ,void *Nclosure
 ){
+  assert((unsigned int)n + 1 > 3u * (unsigned int)t);
   memset(b, 0, bracha87Fig3Sz(n, maxRounds));
   b->n = n;
   b->t = t;
@@ -558,7 +568,7 @@ bracha87Fig3Init(
  */
 static int
 fig3IsValid(
-  struct bracha87Fig3 *b
+  const struct bracha87Fig3 *b
  ,unsigned char k
  ,unsigned char value
 ){
@@ -568,8 +578,8 @@ fig3IsValid(
   unsigned char values[256];
   unsigned int i;
   unsigned int j;
-  unsigned char *vbm;
-  unsigned char *vls;
+  const unsigned char *vbm;
+  const unsigned char *vls;
   unsigned char result;
 
   if (k >= b->maxRounds)
@@ -608,8 +618,25 @@ fig3IsValid(
     rc = b->N(b->Nclosure, k - 1, j, senders, values, &result);
     if (rc < 0)
       return (0);
-    if (rc > 0)
-      return ((value & (unsigned char)~BRACHA87_D_FLAG) <= 1);
+    if (rc > 0) {
+      /*
+       * Permissive: base value must be 0 or 1.  *result carries the
+       * D_FLAG-permission bit and (when D_FLAG is set) the legitimate
+       * base value.  Reject incoming D_FLAG when N did not mark D_FLAG
+       * as legitimate, and reject D_FLAG with a base that differs from
+       * *result's base — at most one of (0|D_FLAG) or (1|D_FLAG) can
+       * be legitimate per evaluation (see fig4Nfn case 1).
+       */
+      if ((value & (unsigned char)~BRACHA87_D_FLAG) > 1)
+        return (0);
+      if (value & BRACHA87_D_FLAG) {
+        if (!(result & BRACHA87_D_FLAG))
+          return (0);
+        if ((value & 1) != (result & 1))
+          return (0);
+      }
+      return (1);
+    }
     return (result == value);
   }
 }
@@ -658,16 +685,20 @@ bracha87Fig3Accept(
   ++*rec;
 
   /*
-   * Fig 2 round coordination: when n-t validated, re-evaluate
-   * stored messages from subsequent rounds.  VALID^{r} depends
-   * on n-t in VALID^{r-1}, so completing round k may unblock
-   * round k+1, which may unblock k+2, etc.
+   * Fig 2 round coordination: when VALID^k has reached n-t, re-evaluate
+   * stored messages at r = k+1, k+2, ...  VALID^{r} is existential over
+   * n-t subsets of VALID^{r-1} and is monotone in VALID^{r-1} (paper
+   * VALID definition + Lemma 6), so growth at r-1 past n-t can unlock
+   * previously-stored but not-yet-valid round-r messages.  Therefore
+   * re-evaluation must fire on any growth at r-1 that reaches n-t, not
+   * only on the first crossing.  Termination: each pass either adds at
+   * least one valid (changed) or stops.
    */
-  if (!BIT_TST(F3_CBMP(b), k)
-   && *rec >= B_N(b) - b->t) {
+  if (*rec >= B_N(b) - b->t) {
     unsigned int r;
 
-    BIT_SET(F3_CBMP(b), k);
+    if (!BIT_TST(F3_CBMP(b), k))
+      BIT_SET(F3_CBMP(b), k);
     for (r = (unsigned int)k + 1; r < b->maxRounds; ++r) {
       unsigned char csnd[256];
       unsigned char cval[256];
@@ -680,15 +711,16 @@ bracha87Fig3Accept(
       unsigned char *rv;
       unsigned char *rvl;
       unsigned int i;
+      int changed;
 
-      if (BIT_TST(F3_CBMP(b), r))
+      /* VALID^r requires n-t in VALID^{r-1}. If not yet, cascade stalls. */
+      if (F3_VCNT(b, r - 1) < B_N(b) - b->t)
         break;
 
       /*
        * VALID^r check (paper Fig 3), hoisted out of the per-peer
        * loop: collect the validated set from round r-1 once and
        * call N once, then test each peer's value against the result.
-       * Round r-1 has n-t validated (just completed or cascaded).
        */
       pvbm = F3_VALD(b, r - 1);
       pvls = F3_VALS(b, r - 1);
@@ -705,27 +737,39 @@ bracha87Fig3Accept(
       ra = F3_ARVD(b, r);
       rv = F3_VALD(b, r);
       rvl = F3_VALS(b, r);
+      changed = 0;
       for (i = 0; i < B_N(b); ++i) {
         if (BIT_TST(ra, i) && !BIT_TST(rv, i)) {
           int valid;
 
-          /* VALID^r: value = N(r-1, S) — same logic as fig3IsValid */
+          /* VALID^r: value = N(r-1, S) — same logic as fig3IsValid.
+           * Permissive *result encodes the D_FLAG permission and, when
+           * set, the legitimate base.  D_FLAG with a mismatched base is
+           * rejected (fig4Nfn case 1 produces at most one of 0|D_FLAG
+           * or 1|D_FLAG per evaluation). */
           if (crc < 0)
             valid = 0;
-          else if (crc > 0)
+          else if (crc > 0) {
             valid = ((rvl[i] & (unsigned char)~BRACHA87_D_FLAG) <= 1);
-          else
+            if (valid && (rvl[i] & BRACHA87_D_FLAG)) {
+              if (!(cres & BRACHA87_D_FLAG))
+                valid = 0;
+              else if ((rvl[i] & 1) != (cres & 1))
+                valid = 0;
+            }
+          } else
             valid = (rvl[i] == cres);
           if (valid) {
             BIT_SET(rv, i);
             ++F3_VCNT(b, r);
+            changed = 1;
           }
         }
       }
-      if (F3_VCNT(b, r) >= B_N(b) - b->t)
+      if (F3_VCNT(b, r) >= B_N(b) - b->t && !BIT_TST(F3_CBMP(b), r))
         BIT_SET(F3_CBMP(b), r);
-      else
-        break;
+      if (!changed)
+        break; /* round r didn't grow — no downstream unlock possible */
     }
   }
 
@@ -805,9 +849,16 @@ bracha87Fig3RoundComplete(
  * produce different results. If so, returns permissive (>0) to
  * implement the paper's existential quantifier in VALID^k.
  *
- * Round 3i   (sub 0): v = majority of the n-t values
+ * Round 3i   (sub 0): v = majority of the n-t values (tie-breaks to 0,
+ *                     matching Fig4Round's state transition)
  * Round 3i+1 (sub 1): v = (d, v') if >n/2 agree, else v unchanged
- * Round 3i+2 (sub 2): always valid (decision logic in Fig4)
+ * Round 3i+2 (sub 2): decide/adopt/coin (deterministic only when
+ *                     >2t d-messages hold across every n-t subset)
+ *
+ * Permissive *result encoding: the D_FLAG bit conveys whether a
+ * D-flagged incoming value can be legitimately produced by some
+ * n-t subset.  When not set, fig3IsValid rejects D_FLAG on the
+ * incoming message (defense against Byzantine d-injection).
  */
 static int
 fig4Nfn(
@@ -849,58 +900,80 @@ fig4Nfn(
 
   case 0:
     /*
-     * Round 3i (step 1): majority value.
+     * Round 3i+1 broadcast: value = majority of step-1 (round 3i) set.
+     * N tie-breaks to 0 (matches Fig4Round case 0 state transition).
      *
-     * With exactly n-t messages (odd for binary), majority is unique.
-     * With >n-t, different n-t subsets could have different majorities.
-     * Value v has majority in some n-t subset iff cnt[v] >= nt/2+1.
-     * If both values meet this threshold, return permissive.
+     * Reachability of result 1 in some n-t subset: max s[1] > nt/2,
+     *   i.e. cnt[1] >= nt/2 + 1 (strict majority).
+     * Reachability of result 0 in some n-t subset: min s[1] <= nt/2
+     *   (even nt; tie breaks to 0) or min s[1] <= (nt-1)/2 (odd nt),
+     *   i.e. cnt[0] >= (nt + 1) / 2.  The formula works uniformly.
+     *
+     * Output is a pure binary; no D_FLAG legitimate here.
      */
     *result = (cnt[1] > cnt[0]) ? 1 : 0;
     if (n_msgs > nt
-     && cnt[0] >= nt / 2 + 1
+     && cnt[0] >= (nt + 1) / 2
      && cnt[1] >= nt / 2 + 1)
-      return (1); /* permissive: subsets disagree on majority */
+      return (1); /* permissive: both 0 and 1 reachable; no D_FLAG */
     break;
 
   case 1:
     /*
-     * Round 3i+1 (step 2): if >n/2 agree on v, result = (d, v) exactly.
-     * Otherwise any binary value is valid (process keeps own value,
-     * which may differ across correct processes).
+     * Round 3i+2 broadcast: step-2 output.  v|D_FLAG if >n/2 of the
+     * round-3i+1 (step-1 majority) inputs agree on v, else v unchanged
+     * (unchanged path is non-deterministic across peers).
      *
-     * With >n-t messages, a subset might see >n/2 when the full set
-     * doesn't, or vice versa. Permissive if borderline:
-     * the worst-case n-t subset for value v removes (n_msgs - nt)
-     * copies of v. If that could drop below n/2, subsets disagree.
+     * With n_msgs > nt, a subset might reach >n/2 even when the full
+     * set does not, or vice versa.  Worst-case n-t subset for v
+     * removes up to excess = n_msgs - nt copies of v.
      */
     if (cnt[0] * 2 > B_N(f4)) {
       *result = 0 | BRACHA87_D_FLAG;
+      /*
+       * Invariant: n_msgs <= B_N, so excess = n_msgs - nt <= t.
+       * In Bracha's regime t < N/3, and cnt[0] > N/2 > t >= excess,
+       * so the unsigned subtraction below cannot wrap.
+       */
+      assert(cnt[0] >= n_msgs - nt);
       if (n_msgs > nt
        && (cnt[0] - (n_msgs - nt)) * 2 <= B_N(f4))
-        return (1); /* permissive: some subsets lack >n/2 */
+        return (1); /* permissive, D_FLAG legitimate */
       return (0);
     }
     if (cnt[1] * 2 > B_N(f4)) {
       *result = 1 | BRACHA87_D_FLAG;
+      assert(cnt[1] >= n_msgs - nt);
       if (n_msgs > nt
        && (cnt[1] - (n_msgs - nt)) * 2 <= B_N(f4))
-        return (1); /* permissive: some subsets lack >n/2 */
+        return (1); /* permissive, D_FLAG legitimate */
       return (0);
     }
     /*
-     * No majority in full set. But some n-t subset might have >n/2
-     * if cnt[v] > n/2. Always permissive here since the process
-     * keeps its own value (non-deterministic across processes).
+     * No strict majority in full set.  In Bracha's t < n/3 regime
+     * nt > N/2, so max s[v] = min(cnt[v], nt).  Given cnt[v]*2 <= N
+     * (and cnt[v] <= nt by n_msgs <= N), no subset has strict
+     * majority either — D_FLAG is not legitimate for any honest peer.
+     * Value is the peer's prior value (non-deterministic), so
+     * permissive on the base value only.
      */
-    return (1);
+    *result = 0;
+    return (1); /* permissive, no D_FLAG */
 
   case 2:
     /*
-     * Round 3i+2 (step 3): output depends on d-message counts.
-     * If >2t d-messages for v in the full set, even the worst-case
-     * n-t subset has >2t - (n_msgs - nt) = >2t - excess d-messages.
-     * Exact only if all subsets agree; otherwise permissive.
+     * Round 3(i+1) broadcast: step-3 output, which is always a plain
+     * binary value (decided value from case (i), adopted value from
+     * case (ii), or coin from case (iii) — none carry D_FLAG).
+     *
+     * Input S is the round 3i+2 messages (step-2 outputs, which may
+     * carry D_FLAG).  Exact result only when case (i) holds across
+     * every n-t subset: dc[dm] - excess > 2t.  Otherwise the output
+     * depends on the peer's own (d,v) set and/or a coin, so permissive.
+     *
+     * Invariant: excess <= t and dc[dm] > 2t together imply
+     * dc[dm] > excess, so the unsigned subtraction below does not
+     * wrap.  Removing the outer guard would break that invariant.
      */
     {
       unsigned char dm;
@@ -909,16 +982,22 @@ fig4Nfn(
       dm = (dc[1] > dc[0]) ? 1 : 0;
       excess = (n_msgs > nt) ? n_msgs - nt : 0;
       if (dc[dm] > 2u * f4->t) {
-        /* Exact if worst-case subset still has >2t */
+        /*
+         * dc[dm] > 2t and excess <= t together guarantee
+         * dc[dm] > excess, so the subtraction cannot wrap.
+         */
+        assert(dc[dm] >= excess);
         if (dc[dm] - excess > 2u * f4->t) {
           *result = dm;
           return (0);
         }
       }
-      return (1); /* permissive: adopt or coin */
+      *result = 0; /* permissive, no D_FLAG (output is step-3) */
+      return (1);
     }
   }
 
+  /* case 0 exits here via break: exact with *result set above, no D_FLAG */
   return (0);
 }
 
@@ -927,6 +1006,9 @@ bracha87Fig4Sz(
   unsigned int n
  ,unsigned int maxPhases
 ){
+  /* Clamp: maxPhases * 3 must fit in unsigned char round count. */
+  if (maxPhases > BRACHA87_MAX_PHASES)
+    maxPhases = BRACHA87_MAX_PHASES;
   return (sizeof (struct bracha87Fig4) - 1
     + bracha87Fig3Sz(n, maxPhases * 3));
 }
@@ -941,6 +1023,10 @@ bracha87Fig4Init(
  ,bracha87CoinFn coin
  ,void *coinClosure
 ){
+  assert((unsigned int)n + 1 > 3u * (unsigned int)t);
+  /* Clamp: maxPhases * 3 must fit in unsigned char round count. */
+  if (maxPhases > BRACHA87_MAX_PHASES)
+    maxPhases = BRACHA87_MAX_PHASES;
   memset(b, 0, bracha87Fig4Sz(n, maxPhases));
   b->n = n;
   b->t = t;

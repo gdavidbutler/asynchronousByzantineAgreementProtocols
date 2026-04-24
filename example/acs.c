@@ -145,6 +145,21 @@ qShuffle(
 }
 
 /*------------------------------------------------------------------------*/
+/*  Coin — deterministic alternating, adequate for demonstration only.    */
+/*  Adversarial deployments should pass a local random source             */
+/*  (e.g. arc4random).                                                    */
+/*------------------------------------------------------------------------*/
+
+static unsigned char
+demoCoin(
+  void *closure
+ ,unsigned char phase
+){
+  (void)closure;
+  return (phase % 2);
+}
+
+/*------------------------------------------------------------------------*/
 /*  Verbose helpers                                                       */
 /*------------------------------------------------------------------------*/
 
@@ -278,7 +293,8 @@ main(
       goto cleanup;
     }
     acsInit(peers[i], (unsigned char)(n - 1), (unsigned char)t,
-            (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i, 0, 0);
+            (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i,
+            demoCoin, 0);
   }
 
   /*----------------------------------------------------------------------*/
@@ -313,7 +329,7 @@ main(
   while (Qhead < Qtail) {
     struct msg *m;
     struct acs *st;
-    struct acsAct acts[MAX_PEERS + 4];
+    struct acsAct acts[ACS_MAX_ACTS(MAX_PEERS, MAX_PHASES)];
     unsigned int nacts;
     unsigned int k;
     unsigned int oldTail;
@@ -321,9 +337,16 @@ main(
     m = &MsgQ[Qhead++];
     st = peers[m->to];
 
-    if (acsComplete(st))
-      continue;
-
+    /*
+     * Do NOT skip messages addressed to locally-complete peers.
+     * A peer that has decided all N BAs must keep processing
+     * incoming messages so its Fig1 echoes/readys continue to
+     * reach peers still working on some BAs.  Skipping replicates
+     * the post-decide stall the library itself was fixed to avoid
+     * (see acs.c acsConsensusInput comment on a->complete).  The
+     * simulation loop terminates when the message queue drains,
+     * not when any one peer reaches complete.
+     */
     oldTail = Qtail;
 
     if (m->cls == ACS_CLS_PROPOSAL) {

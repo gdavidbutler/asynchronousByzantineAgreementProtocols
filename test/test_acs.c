@@ -32,6 +32,20 @@ check(
 }
 
 /*------------------------------------------------------------------------*/
+/*  Coin — deterministic alternating. Adequate for tests; adversarial     */
+/*  deployments should pass a local random source.                        */
+/*------------------------------------------------------------------------*/
+
+static unsigned char
+testCoin(
+  void *closure
+ ,unsigned char phase
+){
+  (void)closure;
+  return (phase % 2);
+}
+
+/*------------------------------------------------------------------------*/
 /*  Message queue — same pattern as example/acs.c                         */
 /*------------------------------------------------------------------------*/
 
@@ -149,7 +163,8 @@ runAcs(
       return (-1);
     }
     acsInit(peers[i], (unsigned char)(n - 1), (unsigned char)t,
-            (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i, 0, 0);
+            (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i,
+            testCoin, 0);
   }
 
   qInit();
@@ -168,7 +183,7 @@ runAcs(
   while (Qhead < Qtail) {
     struct msg *m;
     struct acs *st;
-    struct acsAct acts[MAX_PEERS + 4];
+    struct acsAct acts[ACS_MAX_ACTS(MAX_PEERS, MAX_PHASES)];
     unsigned int nacts;
     unsigned int k;
     unsigned int oldTail;
@@ -176,9 +191,14 @@ runAcs(
     m = &MsgQ[Qhead++];
     st = peers[m->to];
 
-    if (acsComplete(st))
-      continue;
-
+    /*
+     * Do NOT skip messages addressed to locally-complete peers.
+     * A peer that has decided all N BAs must keep processing
+     * incoming messages so its Fig1 echoes/readys continue to
+     * reach peers still working on some BAs.  Skipping replicates
+     * the post-decide stall the library itself was fixed to avoid
+     * (see acs.c acsConsensusInput comment on a->complete).
+     */
     oldTail = Qtail;
 
     if (m->cls == ACS_CLS_PROPOSAL) {
@@ -494,7 +514,8 @@ testValues(
   for (i = 0; i < n; ++i) {
     peers[i] = (struct acs *)calloc(1, sz);
     acsInit(peers[i], (unsigned char)(n - 1), (unsigned char)t,
-            (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i, 0, 0);
+            (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i,
+            testCoin, 0);
   }
 
   qInit();
@@ -507,7 +528,7 @@ testValues(
   while (Qhead < Qtail) {
     struct msg *m;
     struct acs *st;
-    struct acsAct acts[MAX_PEERS + 4];
+    struct acsAct acts[ACS_MAX_ACTS(MAX_PEERS, MAX_PHASES)];
     unsigned int nacts;
     unsigned int k;
 
@@ -719,6 +740,121 @@ testLargerN(
 }
 
 /*------------------------------------------------------------------------*/
+/*  Post-decide continuation regression test                              */
+/*                                                                        */
+/*  Bracha Fig4 requires a decided process to keep broadcasting so other  */
+/*  peers can decide.  An earlier version of acs.c short-circuited        */
+/*  acsConsensusInput when acsDecision[origin] != 0xFF, silently dropping */
+/*  all post-decide messages.  This test pokes the BA decision marker     */
+/*  directly, then verifies that a fresh consensus INITIAL for that       */
+/*  origin still drives Fig1 (ECHO emission) rather than returning zero.  */
+/*  With the bug:  nacts == 0.                                            */
+/*  With the fix:  nacts >= 1 and includes a CON_SEND ECHO.               */
+/*------------------------------------------------------------------------*/
+
+static void
+testPostDecideContinuation(
+  void
+){
+  struct acs *a;
+  unsigned long sz;
+  struct acsAct acts[ACS_MAX_ACTS(MAX_PEERS, MAX_PHASES)];
+  unsigned int nacts;
+  unsigned int N;
+  unsigned int k;
+  unsigned int nEcho;
+  unsigned char value;
+  unsigned char encN;
+  unsigned char t;
+
+  printf("\nACS — Post-decide continuation regression\n");
+
+  encN = 3;  /* actual N = 4 */
+  t = 1;
+  sz = acsSz(encN, 0, MAX_PHASES);
+  a = (struct acs *)calloc(1, sz);
+  if (!a) {
+    check("alloc acs instance", 0);
+    return;
+  }
+  acsInit(a, encN, t, 0, MAX_PHASES, 0, testCoin, 0);
+
+  N = (unsigned int)encN + 1;
+
+  /*
+   * Simulate prior decide of BA_0: baDecision[0] is the (N+0)th byte
+   * of a->data (voted[N] precedes baDecision[N]).  We also bump
+   * nDecided so internal bookkeeping stays consistent.
+   */
+  a->data[N + 0] = 1;
+  ++a->nDecided;
+
+  /*
+   * Feed a round-0 consensus INITIAL for origin 0 from peer 1.
+   * Fig1 Rule 1 must fire and emit an ECHO action.  Pre-fix this
+   * returned zero because of the "already decided" short-circuit.
+   */
+  value = 1;
+  nacts = acsConsensusInput(a, 0, 0, 1, BRACHA87_INITIAL, 1, value, acts);
+  check("post-decide input produces output", nacts > 0);
+
+  nEcho = 0;
+  for (k = 0; k < nacts; ++k) {
+    if (acts[k].act == ACS_ACT_CON_SEND
+     && acts[k].origin == 0
+     && acts[k].conType == BRACHA87_ECHO)
+      ++nEcho;
+  }
+  check("post-decide input emits CON_SEND ECHO", nEcho >= 1);
+
+  /*
+   * Feed more messages to drive Fig3 round 0 to n-t validated, so
+   * Fig4Round round 0 fires in the already-decided branch and
+   * emits a BROADCAST action for round 1 without DECIDE.  Deliver
+   * INITIALs for enough broadcasters for Fig1 to accept via echoes
+   * between them.  Easiest: INITIAL from every peer for every
+   * broadcaster — the simple all-to-all simulation pattern.
+   */
+  {
+    unsigned char broadcaster;
+    unsigned char from;
+    unsigned char type;
+    int hasPostDecideBroadcast;
+
+    hasPostDecideBroadcast = 0;
+    for (type = BRACHA87_INITIAL; type <= BRACHA87_READY; ++type) {
+      for (broadcaster = 0; broadcaster < N; ++broadcaster) {
+        for (from = 0; from < N; ++from) {
+          unsigned int kk;
+
+          nacts = acsConsensusInput(a, 0, 0, broadcaster,
+                                    type, from, value, acts);
+          for (kk = 0; kk < nacts; ++kk) {
+            /*
+             * A post-decide CON_SEND with round > 0 proves Fig4Round
+             * fired in the already-decided else branch and emitted
+             * a continuation broadcast.
+             */
+            if (acts[kk].act == ACS_ACT_CON_SEND
+             && acts[kk].round > 0)
+              hasPostDecideBroadcast = 1;
+            /* BA_DECIDED must not re-fire for origin 0 */
+            if (acts[kk].act == ACS_ACT_BA_DECIDED
+             && acts[kk].origin == 0)
+              check("no duplicate BA_DECIDED post-decide", 0);
+          }
+        }
+      }
+    }
+    check("post-decide continuation emits next-round CON_SEND",
+          hasPostDecideBroadcast);
+  }
+
+  free(a);
+  printf("  n=4 t=1 BA_0 pre-decided: continuation ok\n");
+}
+
+/*------------------------------------------------------------------------*/
 /*  Main                                                                  */
 /*------------------------------------------------------------------------*/
 
@@ -741,6 +877,7 @@ main(
   testMultiByteValues();
   testIdenticalProposals();
   testLargerN();
+  testPostDecideContinuation();
 
   free(MsgQ);
 

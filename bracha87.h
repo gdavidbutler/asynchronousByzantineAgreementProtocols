@@ -44,8 +44,8 @@
  *   rounds:    unsigned char, 0-based, max 3 * BRACHA87_MAX_PHASES - 1 (254)
  */
 
-#ifndef _BRACHA87_H
-#define _BRACHA87_H
+#ifndef BRACHA87_H
+#define BRACHA87_H
 
 /*
  * Maximum phases for Figure 4 consensus.
@@ -111,12 +111,12 @@
  * where committing to the first value seen blocks the honest one.
  */
 struct bracha87Fig1 {
+  unsigned short ecCnt[2];/* incremental echo counts for binary (vLen==0) */
+  unsigned short rdCnt[2];/* incremental ready counts for binary (vLen==0) */
   unsigned char n;        /* process count encoding: actual = n + 1 */
   unsigned char t;        /* max Byzantine (n + 1 > 3t) */
   unsigned char vLen;     /* value length encoding: actual = vLen + 1 */
   unsigned char flags;    /* BRACHA87_F1_ECHOED/RDSENT/ACCEPTED */
-  unsigned short ecCnt[2];/* incremental echo counts for binary (vLen==0) */
-  unsigned short rdCnt[2];/* incremental ready counts for binary (vLen==0) */
   unsigned char data[1];  /* variable: see bracha87Fig1Sz */
 };
 
@@ -523,4 +523,4 @@ bracha87Fig4Round(
  ,const unsigned char *    /* values */
 );
 
-#endif /* _BRACHA87_H */
+#endif /* BRACHA87_H */

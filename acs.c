@@ -25,18 +25,32 @@
  * N Fig4 instances (binary consensus on inclusion).
  */
 
+#include <assert.h>
 #include <string.h>
 #include "acs.h"
 
 #define A_N(a) ((unsigned int)(a)->n + 1)
 
+/*
+ * Pointer alignment for carving Fig1/Fig4 instances out of a single
+ * buffer.  bracha87Fig4 begins with function-pointer fields, and
+ * bracha87Fig1 begins with 2-byte shorts; rounding up to pointer
+ * alignment subsumes both.  struct acs.pad[7] pairs with this to
+ * place a->data at a pointer-aligned offset from a.
+ */
+#define ACS_ALIGN_P  ((unsigned long)sizeof (void *))
+#define ACS_ALIGN_UP(x)  (((unsigned long)(x) + ACS_ALIGN_P - 1) \
+                         & ~(ACS_ALIGN_P - 1))
+
 /*------------------------------------------------------------------------*/
 /*  Internal layout helpers                                               */
 /*                                                                        */
-/*  data[] layout (N = n + 1, MR = maxPhases * 3):                        */
+/*  data[] layout (N = n + 1, MR = maxPhases * 3, all sub-sizes rounded   */
+/*  up to pointer alignment):                                             */
 /*    voted[N]           per-origin vote status                           */
 /*    baDecision[N]      per-origin BA decision                           */
 /*    conNextRound[N]    per-origin next consensus round to check         */
+/*    (alignment pad to pointer alignment)                                */
 /*    propFig1 area      N * propF1Sz bytes                               */
 /*    conPipeline area   N * (MR * N * conF1Sz + fig4Sz) bytes            */
 /*------------------------------------------------------------------------*/
@@ -46,51 +60,70 @@
 #define ACS_VOTE_ONE  1
 #define ACS_VOTE_ZERO 2
 
+/*
+ * All layout helpers take const struct acs * — they only read the
+ * header fields n/vLen/maxPhases to compute offsets.  Callers that
+ * need to write through the returned pointer cast away const.  This
+ * lets the read-only query functions (acsSubset, acsProposalValue)
+ * stay const-correct.
+ */
+
 static unsigned char *
 acsVoted(
-  struct acs *a
+  const struct acs *a
 ){
-  return (a->data);
+  return ((unsigned char *)a->data);
 }
 
 static unsigned char *
 acsDecision(
-  struct acs *a
+  const struct acs *a
 ){
-  return (a->data + A_N(a));
+  return ((unsigned char *)a->data + A_N(a));
 }
 
 static unsigned char *
 acsConNextRound(
-  struct acs *a
+  const struct acs *a
 ){
-  return (a->data + 2 * A_N(a));
+  return ((unsigned char *)a->data + 2 * A_N(a));
+}
+
+/*
+ * Size of the voted/baDecision/conNextRound header, padded up to
+ * pointer alignment so that propF1Base is aligned.
+ */
+static unsigned long
+headerSz(
+  const struct acs *a
+){
+  return (ACS_ALIGN_UP(3UL * A_N(a)));
 }
 
 static unsigned long
 propF1Sz(
-  struct acs *a
+  const struct acs *a
 ){
-  return (bracha87Fig1Sz(a->n, a->vLen));
+  return (ACS_ALIGN_UP(bracha87Fig1Sz(a->n, a->vLen)));
 }
 
 static unsigned long
 conF1Sz(
-  struct acs *a
+  const struct acs *a
 ){
-  return (bracha87Fig1Sz(a->n, 0));
+  return (ACS_ALIGN_UP(bracha87Fig1Sz(a->n, 0)));
 }
 
 static unsigned long
 fig4Sz(
-  struct acs *a
+  const struct acs *a
 ){
-  return (bracha87Fig4Sz(a->n, a->maxPhases));
+  return (ACS_ALIGN_UP(bracha87Fig4Sz(a->n, a->maxPhases)));
 }
 
 static unsigned int
 maxRounds(
-  struct acs *a
+  const struct acs *a
 ){
   return ((unsigned int)a->maxPhases * 3);
 }
@@ -98,15 +131,15 @@ maxRounds(
 /* Base of proposal Fig1 area */
 static unsigned char *
 propF1Base(
-  struct acs *a
+  const struct acs *a
 ){
-  return (a->data + 3 * A_N(a));
+  return ((unsigned char *)a->data + headerSz(a));
 }
 
 /* Proposal Fig1 instance for origin j */
 static struct bracha87Fig1 *
 propF1(
-  struct acs *a
+  const struct acs *a
  ,unsigned int j
 ){
   return ((struct bracha87Fig1 *)(propF1Base(a) + j * propF1Sz(a)));
@@ -115,7 +148,7 @@ propF1(
 /* Base of consensus pipeline area */
 static unsigned char *
 conBase(
-  struct acs *a
+  const struct acs *a
 ){
   return (propF1Base(a) + A_N(a) * propF1Sz(a));
 }
@@ -123,7 +156,7 @@ conBase(
 /* Size of one consensus pipeline (for origin j) */
 static unsigned long
 conPipelineSz(
-  struct acs *a
+  const struct acs *a
 ){
   return ((unsigned long)maxRounds(a) * A_N(a) * conF1Sz(a) + fig4Sz(a));
 }
@@ -131,7 +164,7 @@ conPipelineSz(
 /* Consensus Fig1 instance for origin j, round r, broadcaster k */
 static struct bracha87Fig1 *
 conF1(
-  struct acs *a
+  const struct acs *a
  ,unsigned int j
  ,unsigned int r
  ,unsigned int k
@@ -146,7 +179,7 @@ conF1(
 /* Consensus Fig4 instance for origin j */
 static struct bracha87Fig4 *
 conF4(
-  struct acs *a
+  const struct acs *a
  ,unsigned int j
 ){
   unsigned char *base;
@@ -156,19 +189,6 @@ conF4(
     + (unsigned long)maxRounds(a) * A_N(a) * conF1Sz(a)));
 }
 
-
-/*------------------------------------------------------------------------*/
-/*  Coin function — deterministic alternating (same as consensus.c)       */
-/*------------------------------------------------------------------------*/
-
-static unsigned char
-acsCoin(
-  void *closure
- ,unsigned char phase
-){
-  (void)closure;
-  return (phase % 2);
-}
 
 /*------------------------------------------------------------------------*/
 /*  Public API                                                            */
@@ -185,17 +205,28 @@ acsSz(
   unsigned long cf1;
   unsigned long f4;
   unsigned long mr;
+  unsigned long hdr;
   unsigned long conPipe;
 
+  /*
+   * Encoded limits: n and vLen carry actual_count - 1 in an unsigned
+   * char, so they must fit 0..255.  maxPhases is bounded by the
+   * unsigned-char round counter (3 * maxPhases <= 255).
+   */
+  if (n > 255 || vLen > 255 || maxPhases == 0
+   || maxPhases > BRACHA87_MAX_PHASES)
+    return (0);
+
   N = n + 1;
-  pf1 = bracha87Fig1Sz(n, vLen);
-  cf1 = bracha87Fig1Sz(n, 0);
-  f4 = bracha87Fig4Sz(n, maxPhases);
+  pf1 = ACS_ALIGN_UP(bracha87Fig1Sz(n, vLen));
+  cf1 = ACS_ALIGN_UP(bracha87Fig1Sz(n, 0));
+  f4 = ACS_ALIGN_UP(bracha87Fig4Sz(n, maxPhases));
   mr = (unsigned long)maxPhases * 3;
+  hdr = ACS_ALIGN_UP(3UL * N);
   conPipe = mr * N * cf1 + f4;
 
   return (sizeof (struct acs) - 1
-    + 3 * N                    /* voted + baDecision + conNextRound */
+    + hdr                      /* voted + baDecision + conNextRound + pad */
     + N * pf1                  /* proposal Fig1 instances */
     + N * conPipe);            /* consensus pipelines */
 }
@@ -215,6 +246,20 @@ acsInit(
   unsigned int i;
   unsigned int j;
   unsigned int r;
+
+  /*
+   * Validate caller contract.  acsSz rejects the same out-of-range
+   * maxPhases by returning 0; if acsInit proceeded past these checks
+   * it would memcpy into fields beyond the allocation and the Fig4
+   * step 3 path would crash on the missing coin.  Bracha also
+   * requires actual_N > 3t (asserted in each Fig*Init below, but
+   * checking here gives a cleaner failure mode).
+   */
+  if (!coin)
+    return;
+  if (!maxPhases || maxPhases > BRACHA87_MAX_PHASES)
+    return;
+  assert((unsigned int)n + 1 > 3u * (unsigned int)t);
 
   memset(a, 0, acsSz(n, vLen, maxPhases));
   a->n = n;
@@ -242,7 +287,7 @@ acsInit(
         for (j = 0; j < N; ++j)
           bracha87Fig1Init(conF1(a, i, r, j), n, t, 0);
       bracha87Fig4Init(conF4(a, i), n, t, maxPhases, 0,
-                       coin ? coin : acsCoin, coinClosure);
+                       coin, coinClosure);
     }
   }
 }
@@ -266,9 +311,6 @@ acsVote(
     return (0);
 
   voted[origin] = vote ? ACS_VOTE_ONE : ACS_VOTE_ZERO;
-
-  /* Set the Fig4 initial value for this consensus */
-  conF4(a, origin)->value = vote;
 
   /* Generate INITIAL broadcast to all peers */
   out->act = ACS_ACT_CON_SEND;
@@ -295,9 +337,26 @@ acsProposalInput(
   unsigned int nact;
   unsigned int k;
 
+  /*
+   * Encoded: a->n = actual_N - 1, so valid peer indices are
+   * 0..a->n inclusive.  "> a->n" rejects actual_N and above.
+   *
+   * Do NOT short-circuit on a->complete.  This peer has locally
+   * decided all N BAs, but other peers may still be working on
+   * some BAs and depend on THIS peer's continued Fig1 echoes and
+   * readys to reach their own n-t thresholds.  Bracha requires
+   * post-decide continuation at the BA level (pitfall #1); the
+   * same obligation applies at the ACS level — a locally-complete
+   * peer must keep participating until the application decides to
+   * exit (e.g. progress-silence quorum).  A blanket complete-guard
+   * causes classic post-decide stalls where the fastest peer
+   * strands the slowest.  The per-action emission blocks below
+   * (BA_DECIDED on Fig4 DECIDE, COMPLETE on nDecided crossing N,
+   * votes via acsVote's voted-state dedup) are idempotent, so
+   * continuing after complete cannot emit duplicate terminal
+   * actions.
+   */
   if (!a || origin > a->n || from > a->n || !value || !out)
-    return (0);
-  if (a->complete)
     return (0);
 
   f1 = propF1(a, origin);
@@ -372,13 +431,30 @@ acsConsensusInput(
 
   if (!a || origin > a->n || broadcaster > a->n || from > a->n || !out)
     return (0);
-  if (a->complete)
-    return (0);
   if (round >= maxRounds(a))
     return (0);
-  /* Skip if this BA already decided */
-  if (acsDecision(a)[origin] != 0xFF)
-    return (0);
+
+  /*
+   * Two intentional non-short-circuits — both are Bracha post-decide
+   * continuation (pitfall #1) applied at different layers.
+   *
+   * 1. We do NOT short-circuit on acsDecision[origin] != 0xFF.  Bracha
+   *    Fig4 requires a decided process to continue broadcasting so
+   *    peers lagging in THIS BA can reach n-t validated and decide.
+   *    The ACS_ACT_BA_DECIDED emission is gated by Fig4Round returning
+   *    DECIDE, which fires exactly once per BA, so idempotence holds.
+   *
+   * 2. We do NOT short-circuit on a->complete.  A locally-complete
+   *    peer has decided all N BAs but other peers may still be
+   *    working on some BAs.  Their Fig1 instances for (origin_X,
+   *    round_Y, broadcaster_THIS) wait on THIS peer's continued
+   *    echoes and readys to cross n-t thresholds.  Dropping inputs
+   *    after local complete strands lagging peers — a classic
+   *    post-decide stall.  ACS_ACT_COMPLETE emission is gated by
+   *    nDecided crossing N, which happens once; continuing past
+   *    complete cannot emit a second ACS_ACT_COMPLETE.  Application
+   *    exit is a separate concern (see progress-silence quorum).
+   */
 
   /* Compute pipeline base once — avoids redundant external calls */
   N = A_N(a);
@@ -503,7 +579,7 @@ acsSubset(
   if (!a || !origins)
     return (0);
 
-  dec = a->data + A_N(a);
+  dec = acsDecision(a);
   cnt = 0;
   for (i = 0; i < A_N(a); ++i) {
     if (dec[i] == 1)
@@ -519,5 +595,5 @@ acsProposalValue(
 ){
   if (!a || origin > a->n)
     return (0);
-  return (bracha87Fig1Value(propF1((struct acs *)a, origin)));
+  return (bracha87Fig1Value(propF1(a, origin)));
 }

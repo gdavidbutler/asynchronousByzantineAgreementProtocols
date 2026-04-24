@@ -48,8 +48,8 @@
  *   maxPhases: unsigned char, for binary consensus (per BKR instance)
  */
 
-#ifndef _ACS_H
-#define _ACS_H
+#ifndef ACS_H
+#define ACS_H
 
 #include "bracha87.h"
 
@@ -102,6 +102,14 @@ struct acs {
   unsigned char nDecided;   /* count of BAs that have decided */
   unsigned char threshold;  /* 1 if n-t proposals accepted (vote-0 done) */
   unsigned char complete;   /* 1 if all N BAs decided */
+  /*
+   * Pad data[] to a pointer-aligned offset so Fig4 instances carved
+   * out of data[] are correctly aligned for their function-pointer
+   * fields. With 9 leading chars we need 7 bytes of pad to reach
+   * offset 16, which is a multiple of sizeof (void *) on all
+   * common 32- and 64-bit ABIs.
+   */
+  unsigned char pad[7];
   unsigned char data[1];    /* variable: see acsSz */
 };
 
@@ -124,7 +132,15 @@ acsSz(
  ,unsigned int             /* maxPhases: per binary consensus instance */
 );
 
-/* Initialize an ACS instance. Caller has allocated acsSz bytes. */
+/*
+ * Initialize an ACS instance. Caller has allocated acsSz bytes.
+ *
+ * coin must be non-null. For Bracha's t < n/3 regime a per-peer
+ * local source (e.g. arc4random) is appropriate; see Mostefaoui,
+ * Perrin, Weibel (PODC 2024). A deterministic coin such as
+ * phase%2 is safe only under a non-adversarial scheduler and is
+ * not supplied as a default.
+ */
 void
 acsInit(
   struct acs *
@@ -133,24 +149,45 @@ acsInit(
  ,unsigned char            /* vLen: actual proposal length = vLen + 1 */
  ,unsigned char            /* maxPhases */
  ,unsigned char            /* self: this peer's index */
- ,bracha87CoinFn           /* coin function for binary consensus */
+ ,bracha87CoinFn           /* coin function, must be non-null */
  ,void *                   /* coin closure */
 );
 
 /*
  * Maximum output actions from a single input call.
- * Proposal input: 2 (echo/ready) + N (consensus initials on threshold).
- * Consensus input: 2 (echo/ready) + 1 (broadcast) + 2 (decided/complete).
- * Use N + 4 to be safe for both.
+ *
+ * Proposal input (ACS_CLS_PROPOSAL):
+ *   up to 2 (echo/ready) + 1 (vote-1 on accept) + N (vote-0 for all
+ *   remaining origins when n-t accepted threshold hits).
+ *   Bound: N + 3.
+ *
+ * Consensus input (ACS_CLS_CONSENSUS):
+ *   up to 2 (echo/ready) from the Fig1 input, plus a cascade over
+ *   newly-validated rounds.  Adversarial delivery can make Fig3's
+ *   forward cascade validate many rounds in a single Fig3Accept call
+ *   (round k+1 unlocks when round k crosses n-t, etc.), so the
+ *   per-call ceiling is:
+ *     2 (echo/ready) + M (CON_SEND per round advanced)
+ *       + 1 (BA_DECIDED, fires at most once per BA)
+ *       + 1 (COMPLETE, fires at most once per ACS instance)
+ *   where M = maxPhases * 3 is the BA's round bound.  Bound: M + 4.
+ *
+ * The unified per-call bound is the larger of the two, plus the
+ * non-accept items in the triggering Fig1 output.  ACS_MAX_ACTS
+ * takes maxPhases so the cascade bound is exact for the configured
+ * consensus, not the 85-phase absolute ceiling.
  */
-#define ACS_MAX_ACTS(n) ((unsigned int)(n) + 1 + 4)
+#define ACS_MAX_ACTS(n, maxPhases) \
+  (((unsigned int)(n) + 4) > ((unsigned int)(maxPhases) * 3 + 4) \
+   ? ((unsigned int)(n) + 4) \
+   : ((unsigned int)(maxPhases) * 3 + 4))
 
 /*
  * Process a proposal broadcast message (ACS_CLS_PROPOSAL).
  *
  * These are Fig1 messages carrying proposal values.
  * Returns number of actions written to out[].
- * Caller provides out[] with room for ACS_MAX_ACTS(n) entries.
+ * Caller provides out[] with room for ACS_MAX_ACTS(n, maxPhases) entries.
  *
  * On ACS_ACT_PROP_ECHO / ACS_ACT_PROP_READY:
  *   Caller sends the proposal echo/ready to all peers.
@@ -167,7 +204,7 @@ acsProposalInput(
  ,unsigned char            /* type: BRACHA87_INITIAL/ECHO/READY */
  ,unsigned char            /* from: sender of this message */
  ,const unsigned char *    /* value: vLen + 1 bytes */
- ,struct acsAct *          /* out: actions, room for ACS_MAX_ACTS */
+ ,struct acsAct *          /* out: actions, room for ACS_MAX_ACTS(n, maxPhases) */
 );
 
 /*
@@ -175,7 +212,7 @@ acsProposalInput(
  *
  * These are Fig1 messages for the binary consensus on origin's inclusion.
  * Returns number of actions written to out[].
- * Caller provides out[] with room for ACS_MAX_ACTS(n) entries.
+ * Caller provides out[] with room for ACS_MAX_ACTS(n, maxPhases) entries.
  *
  * The consensus for each origin is a full Fig1+Fig3+Fig4 pipeline
  * (same structure as consensus.c), deciding 0 or 1.
@@ -199,7 +236,7 @@ acsConsensusInput(
  ,unsigned char            /* type: BRACHA87_INITIAL/ECHO/READY */
  ,unsigned char            /* from: sender of this message */
  ,unsigned char            /* value: binary consensus value */
- ,struct acsAct *          /* out: actions, room for ACS_MAX_ACTS */
+ ,struct acsAct *          /* out: actions, room for ACS_MAX_ACTS(n, maxPhases) */
 );
 
 /*
@@ -232,4 +269,4 @@ acsProposalValue(
  ,unsigned char            /* origin */
 );
 
-#endif /* _ACS_H */
+#endif /* ACS_H */
