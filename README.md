@@ -46,7 +46,7 @@ message -> Fig1(n,t) -> accept -> Fig3(N) -> round complete -> Fig4(coin) -> dec
 
 ```
 N proposals -> N Fig1(n,t,vLen) -> accept -> vote 1 in BA
-                                   n-t accepted -> vote 0 in remaining BAs
+                                   n-t BAs decided 1 -> vote 0 in remaining BAs
                                    N BA instances -> Fig1+Fig3+Fig4 each -> common subset
 ```
 
@@ -76,9 +76,11 @@ Decided processes continue participating so others can reach consensus. The prot
 
 ### ACS -- Asynchronous Common Subset
 
-Composes Fig 1 and Fig 4 into multi-value agreement using the BKR construction (Ben-Or, Kelmer, Rabin 1994; also described in Miller et al. 2016 "HoneyBadger BFT").
+Composes Fig 1 and Fig 4 into multi-value agreement using the BKR construction (Ben-Or, Kelmer, Rabin 1994). See `BKR94ACS.txt` for the line-by-line extract used as the implementation's reference.
 
-Each of N peers proposes an arbitrary value (up to vLen+1 bytes). N Fig 1 instances reliably broadcast the proposals. N Fig 4 instances run binary consensus on "include this origin?" When a peer accepts origin j's proposal via Fig 1, it votes 1 in BA_j. When n-t proposals have been accepted, it votes 0 for all remaining BAs. The common subset is {j : BA_j decided 1}, guaranteed to contain at least n-t origins.
+Each of N peers proposes an arbitrary value (up to vLen+1 bytes). N Fig 1 instances reliably broadcast the proposals. N Fig 4 instances run binary consensus on "include this origin?" When a peer accepts origin j's proposal via Fig 1, it votes 1 in BA_j. When n-t BAs have *decided 1*, it votes 0 for every BA in which it has not yet voted. The common subset is {j : BA_j decided 1}, guaranteed to contain at least n-t origins.
+
+The step-2 trigger is "n-t BAs decided with output 1," not "n-t Fig 1 ACCEPTs." The two coincide in benign runs but diverge under asynchrony or Byzantine scheduling, and only the decide-1 trigger satisfies Part A case (i) of the BKR94 Lemma 2 proof.
 
 Two message classes flow on the network: proposal messages (Fig 1 carrying arbitrary values) and consensus messages (Fig 1 carrying binary values for per-origin BA instances). Consensus messages are routed internally by (origin, round, broadcaster) -- the broadcaster identifies whose Fig 1 broadcast within a consensus round, distinct from the message sender.
 
@@ -172,7 +174,11 @@ Issues discovered by reading the paper against the code. Most were missed by iso
 
 5. **Committed value memcpy.** The memcpy on Rules 4/5/6 appears redundant but is essential. A Byzantine initial can cause commitment to the wrong value; the memcpy corrects it when the threshold-reaching value differs from the committed value.
 
-6. **Subset majority threshold for even n-t.** The step 1 permissive check used `(nt+1)/2` as the threshold. For even n-t (when n=3t+2), integer division made this one too low, causing false permissiveness. Fix: `nt/2+1`. Verified by exhaustive enumeration for n=4..16.
+6. **Subset-majority reachability threshold (step 1).** Under N's tie-break-to-0, value 0 is reachable in some n-t subset iff `cnt[0] >= (nt+1)/2` (unified formula: equals `nt/2` for even n-t, `nt/2+1` for odd); value 1 is reachable iff `cnt[1] >= nt/2+1` (strict majority). Permissive iff both reachable. Using the symmetric `>= nt/2+1` test on both sides wrongly rejects honest tie-subset 0s when n-t is even. Verified by exhaustive enumeration for n=4..16.
+
+7. **Forward cascade fires on every growth past n-t, not only first crossing.** `VALID^r_p` is existential over n-t subsets of `VALID^{r-1}_p` and monotone in it (paper definition + Lemma 6), so new validated messages at round k unlock stored unvalidated messages at k+1 even after round k first reached n-t. Gating the forward re-check on "first crossing only" strands honest round-(k+1) messages when validation of them depended on subsets that only exist after k grew.
+
+8. **Permissive D_FLAG permission conveyed via `*result`.** On permissive return from Fig 4's N function (`rc > 0`), `*result & BRACHA87_D_FLAG` is set only when some n-t subset legitimately produces a decision candidate. Fig 3 rejects incoming D_FLAG when that bit is clear, preventing Byzantine d-injection in the no-majority windows of step 3 cases 1 and 2.
 
 ## Building
 
@@ -186,10 +192,10 @@ make clobber    # remove all generated files
 The consensus example demonstrates binary consensus (Fig1+Fig3+Fig4):
 
 ```bash
-./consensus 4 1                          # 4 peers, 1 Byzantine fault
-./consensus -s 42 7 2                    # shuffled delivery
-./consensus -b 3 7 2                     # Byzantine peer 0 equivocates
-./consensus -v 4 1 0 0 1 1              # verbose trace, split initial values
+./example_consensus 4 1                          # 4 peers, 1 Byzantine fault
+./example_consensus -s 42 7 2                    # shuffled delivery
+./example_consensus -b 3 7 2                     # Byzantine peer 0 equivocates
+./example_consensus -v 4 1 0 0 1 1              # verbose trace, split initial values
 ```
 
 The ACS example demonstrates multi-value agreement on arbitrary strings:
@@ -202,6 +208,35 @@ The ACS example demonstrates multi-value agreement on arbitrary strings:
 ```
 
 Compiler flags: `-std=c89 -pedantic -Wall -Wextra -Os -g`
+
+## Deployment Notes
+
+This library is protocol-only. A working deployment needs a transport layer satisfying the three System Model assumptions above, plus identity, keys, a coin source, and a termination policy. The points below are load-bearing; do not "optimize" them away.
+
+### Post-decide continuation is mandatory
+
+A decided peer must keep broadcasting (Implementation Note 1) so others can reach consensus. Two obvious exit mechanisms are both wrong:
+
+- Exit on `ACS_ACT_COMPLETE` — violates post-decide continuation; peers deciding last can be stranded.
+- Broadcast a "DONE" message and exit on a threshold of receipts — the DONE has no retransmit siblings in the typical ledger model; loss of the initial emission strands peers that never hear it before early completers exit.
+
+The principled alternative is a **progress-silence quorum exit.** Each peer tracks the local tick at which every other peer last advanced its observable state (Fig 4 round, Fig 1 proposal/consensus phase transition, etc.). A peer whose state has not advanced for a chosen silence window is "done-silent." Exit when the local instance is complete AND at least `n-t-1` others are done-silent. The threshold is `n-t-1`, not `n-t` — self is implicit because completion is known locally. Using `n-t` is silently wrong at `t>0` and unreachable at `t=0`.
+
+### Coin choice
+
+Fig 4 step 3 case (iii) — when neither decision-count rule fires — requires a coin. Options:
+
+- **Common coin** (same value across all peers per phase): requires a shared randomness source such as a verifiable random beacon or a distributed coin protocol.
+- **Local coin** (each peer flips independently): e.g. `arc4random_buf` per peer.
+- **Deterministic coin** (e.g. `phase & 1`): effectively a cheap common coin under a non-adversarial scheduler. Useful for deterministic tests, not recommended for adversarial threat models.
+
+Mostéfaoui, Perrin, and Weibel (PODC 2024, *"Randomized Consensus: Common Coins Are Not the Holy Grail!"*) prove common coin is optimal **only when `t > n/3`**; in Bracha's `t < n/3` regime local coin actually outperforms. The naïve "all honest peers must flip identically" lower bound ignores Fig 4's convergence dynamics: most phases terminate via step 3 case (i) (`>2t` agreement, no coin used) or case (ii) (`>t` agreement, adopt and amplify); case (iii) is the tie-breaker. At practical `n` values within `maxPhases = 85`, local coin works well.
+
+Guidance: **for `t < n/3`, use a local coin.** Reach for a common coin only when pushing beyond `t = n/3` (which Bracha itself does not cover).
+
+### No timing in the protocol
+
+The protocol's correctness — both safety and eventual termination — depends on no timing assumption; this is the asynchronous-BFT model. Any timing parameters in a deployment (retransmit cadence, silence thresholds, pump tick) govern the transport wrapper and termination policy, not the state machines in this library. Correctness holds under arbitrary asynchrony; termination speed depends on the operator's tuning.
 
 ## License
 
