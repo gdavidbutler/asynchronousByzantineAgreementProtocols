@@ -1,0 +1,49 @@
+# Bracha 1987, "Asynchronous Byzantine Agreement Protocols"
+# Information and Computation 75, 130-143 (1987)
+#
+# Figure 2 - Abstract Protocol Round
+#
+# Figure 2 specifies the generic n-t threshold mechanism used by
+# round-based protocols built on top of the reliable broadcast
+# of Figure 1: on delivery of a round-tagged message, deduplicate
+# per (round, sender), record, and signal completion when n-t
+# distinct messages have been received for that round.
+#
+# In Bracha's paper, Figure 2 is the abstract protocol round
+# upon which Figure 3 specialises with the VALID^k correctness
+# predicate.  In our C, Figure 3 subsumes Figure 2's role - this
+# file captures Figure 2 for paper completeness only.  There is
+# no bracha87Fig2ToC.dtc and no bracha87Fig2ToC.c; the C
+# implementation of bracha87 needs no Figure 2 emission.
+#
+# Inputs (the situation when delivering (round k, v) from
+# sender j; "post-record" means the count after the prospective
+# new record):
+#   "have received from sender in round k"             { yes, no }
+#   "round k already complete"                         { yes, no }
+#   "post-record round-receive-count(k) >= n-t"        { yes, no }
+#
+# Outputs:
+#   "record (sender, k, v)"      { yes, no }
+#   "signal round k complete"    { yes, no }
+
+# ===== record (sender, k, v) =====
+
+# Rule 2.1.  Upon delivery of (round k, v) from sender j, if not
+# already received from j in round k, record (j, v) for round k.
+@"record (sender, k, v)","have received from sender in round k"
+yes,no
+no,yes
+
+# ===== signal round k complete =====
+
+# Rule 2.2.  When n-t distinct (round k, *) messages have been
+# received - that is, when this delivery is from a new sender
+# and brings the count to n-t for a round not yet complete -
+# signal round k complete.  The "round k already complete" guard
+# enforces idempotence: the signal fires exactly once per round.
+@"signal round k complete","have received from sender in round k","round k already complete","post-record round-receive-count(k) >= n-t"
+yes,no,no,yes
+no,no,no,no
+no,no,yes,
+no,yes,,

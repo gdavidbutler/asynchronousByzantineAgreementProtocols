@@ -72,6 +72,12 @@
 #define BKR94ACS_VOTE_ONE  1
 #define BKR94ACS_VOTE_ZERO 2
 
+/* ACS-event discriminator for the bkr94acsRules.c dispatch.  See
+ * bkr94acsToC.dtc; the values are opaque tokens compared by equality. */
+#define BKR94ACS_ACS_EVENT_Q   0
+#define BKR94ACS_ACS_EVENT_BA0 1
+#define BKR94ACS_ACS_EVENT_BA1 2
+
 /*
  * All layout helpers take const struct bkr94acs * — they only read
  * the header fields n/vLen/maxPhases to compute offsets.  Callers
@@ -356,6 +362,14 @@ bkr94acsProposalInput(
   unsigned int nf1;
   unsigned int nact;
   unsigned int k;
+  unsigned char acsEvent;
+  unsigned char inputToBAj;
+  unsigned char fanoutTriggered;
+  unsigned char postCountOneAtNT;
+  unsigned char postCountAllN;
+  unsigned char doInput1;
+  unsigned char doInput0Fanout;
+  unsigned char doOutputSubset;
 
   /*
    * Encoded: a->n = actual_N - 1, so valid peer indices are
@@ -401,26 +415,29 @@ bkr94acsProposalInput(
     } else if (f1out[k] == BRACHA87_ACCEPT) {
       /*
        * BKR94 Step 1: "For each Pj for whom you (Pi) know Q(j) = 1,
-       * participate in BA_j with input 1."
-       *
-       * In this deployment Q(j) = 1 is carried by Fig1 ACCEPT for
-       * origin j (reliable broadcast of P_j's proposal completed).
-       * Bracha87 Lemma 4 gives BKR94's Q assumption (2) for free:
-       * if any honest accepts, every honest eventually accepts, so
-       * every honest eventually learns Q(j) for every j.
-       *
-       * Step 2's "n-t BAs with output 1" trigger is NOT here; it
-       * fires in bkr94acsConsensusInput's DECIDE branch.  Triggering
-       * vote-0 on n-t Fig1 ACCEPTs instead (a HoneyBadger-style
-       * optimization) would be the wrong reading of the paper:
-       * Part A case (i) of the Lemma 2 proof requires the
-       * precondition "2t+1 BAs have already terminated with
-       * output 1" for Step 2 to fire, and weakening it to "n-t
-       * Fig1 accepts" gives no proof of Part A under BKR94's BA
-       * validity axiom (which promises output b only when all
-       * correct inputs are b, not when a quorum are).
+       * participate in BA_j with input 1."  Q(j) = 1 is carried by
+       * Fig1 ACCEPT for origin j (Bracha87 Lemma 4 gives BKR94's Q
+       * assumption (2) for free).  Step 2's n-t BA-output-1 trigger
+       * fires in bkr94acsConsensusInput; only Step 1 is reachable at
+       * this dispatch site, but the bridge sees the full rule set so
+       * the unreachable outputs are zeroed by the dispatch and the
+       * post-include applies only doInput1.
        */
-      nact += bkr94acsVote(a, origin, 1, &out[nact]);
+      acsEvent = BKR94ACS_ACS_EVENT_Q;
+      inputToBAj = bkr94acsVoted(a)[origin];
+      fanoutTriggered = a->threshold ? 1 : 0;
+      postCountOneAtNT = 0;
+      postCountAllN = 0;
+      doInput1 = 0;
+      doInput0Fanout = 0;
+      doOutputSubset = 0;
+#include "bkr94acsRules.c"
+      /* Step 2/3 outputs are unreachable on a Q event; the dispatch
+       * still resolves them to 0 at every leaf. */
+      (void)doInput0Fanout;
+      (void)doOutputSubset;
+      if (doInput1)
+        nact += bkr94acsVote(a, origin, 1, &out[nact]);
     }
   }
 
@@ -451,6 +468,14 @@ bkr94acsConsensusInput(
   unsigned int nact;
   unsigned int k;
   unsigned char *nextRound;
+  unsigned char acsEvent;
+  unsigned char inputToBAj;
+  unsigned char fanoutTriggered;
+  unsigned char postCountOneAtNT;
+  unsigned char postCountAllN;
+  unsigned char doInput1;
+  unsigned char doInput0Fanout;
+  unsigned char doOutputSubset;
 
   if (!a || origin > a->n || broadcaster > a->n || from > a->n || !out)
     return (0);
@@ -524,6 +549,8 @@ bkr94acsConsensusInput(
         ++*nextRound;
 
         if (act & BRACHA87_DECIDE) {
+          /* BA-decided notification (always emitted; not part of
+           * BKR94 rules, just an observability signal). */
           bkr94acsDecision(a)[origin] = f4->decision;
           out[nact].act = BKR94ACS_ACT_BA_DECIDED;
           out[nact].origin = origin;
@@ -533,44 +560,43 @@ bkr94acsConsensusInput(
           out[nact].broadcaster = 0;
           ++nact;
           ++a->nDecided;
-
-          /*
-           * BKR94 Step 2: "Upon completing 2t+1 BA protocols with
-           * output 1, enter input 0 to every BA protocol for which
-           * you have not yet entered a value."
-           *
-           * 2t+1 is n-t in the paper's regime (n = 3t+1) and is the
-           * threshold we use for all supported (n, t).  The trigger
-           * is a BA decide with value 1, not a Fig1 accept — see
-           * Part A case (i) of the Lemma 2 proof, which relies on
-           * "2t+1 BAs have already terminated with output 1" as the
-           * step 2 precondition.
-           *
-           * Guarded by !threshold so the vote-0 fanout fires at most
-           * once per BKR94 ACS instance.
-           */
-          if (f4->decision == 1 && !a->threshold) {
+          if (f4->decision == 1)
             ++a->nDecidedOne;
-            if (a->nDecidedOne >= A_N(a) - a->t) {
-              unsigned int j;
-
-              a->threshold = 1;
-              for (j = 0; j < A_N(a); ++j)
-                nact += bkr94acsVote(a, j, 0, &out[nact]);
-            }
-          }
 
           /*
-           * BKR94 Step 3: "Upon completing all n BA protocols, let
-           * SubSet_i be the set of indices j for which BA_j had
-           * output 1.  Output SubSet_i."
-           *
-           * We emit BKR94ACS_ACT_COMPLETE once when nDecided reaches
-           * N.  bkr94acsSubset implements the "j for which BA_j had
-           * output 1" read.  Part C of the proof (BA agreement)
-           * guarantees every honest peer computes the same SubSet.
+           * BKR94 Steps 2 and 3 dispatch.  The bridge maps "post-
+           * output BA-output-1 count >= n-t" to nDecidedOne >= n-t
+           * (post-increment); "post-output BA-output count == n" to
+           * nDecided >= n.  Step 2's threshold-firing rule (vote 0
+           * to all unvoted BAs once when count reaches n-t) and
+           * Step 3's all-decided rule (output SubSet) are both
+           * guarded by their respective post-output predicates and
+           * by acsEvent's branching on BA_1 vs BA_0.  Lemma 2 Part A
+           * case (i) requires Step 2's trigger to be a BA decide of
+           * 1, not a Fig1 accept; the .dtc carries that exactly.
            */
-          if (a->nDecided >= A_N(a)) {
+          acsEvent = f4->decision
+            ? BKR94ACS_ACS_EVENT_BA1
+            : BKR94ACS_ACS_EVENT_BA0;
+          inputToBAj = bkr94acsVoted(a)[origin];
+          fanoutTriggered = a->threshold ? 1 : 0;
+          postCountOneAtNT = a->nDecidedOne >= A_N(a) - a->t;
+          postCountAllN = a->nDecided >= A_N(a);
+          doInput1 = 0;
+          doInput0Fanout = 0;
+          doOutputSubset = 0;
+#include "bkr94acsRules.c"
+          /* Step 1 is unreachable on a BA-output event; the dispatch
+           * still resolves doInput1 to 0 at every leaf. */
+          (void)doInput1;
+          if (doInput0Fanout) {
+            unsigned int j;
+
+            a->threshold = 1;
+            for (j = 0; j < A_N(a); ++j)
+              nact += bkr94acsVote(a, j, 0, &out[nact]);
+          }
+          if (doOutputSubset) {
             a->complete = 1;
             out[nact].act = BKR94ACS_ACT_COMPLETE;
             out[nact].origin = 0;

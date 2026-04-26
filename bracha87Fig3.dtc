@@ -1,0 +1,90 @@
+# Bracha 1987, "Asynchronous Byzantine Agreement Protocols"
+# Information and Computation 75, 130-143 (1987)
+#
+# Figure 3 - Correctness Enforcement (VALID sets)
+#
+# Figure 3 specialises Figure 2 with the VALID^k correctness
+# predicate.  Where Figure 2 counts arrivals, Figure 3 counts
+# arrivals satisfying VALID^k; round k is complete when the
+# validated count reaches n-t.
+#
+# VALID^k is defined recursively:
+#   VALID^0:        v in {0, 1}
+#   VALID^k (k>=1): exists n-t messages in VALID^{k-1} such that
+#                    v = N(k-1, those messages)
+# where N is the protocol-specific function supplied by Figure 4.
+# The implementation evaluates VALID^k via a C function (the
+# existential quantifier over n-t-subsets of VALID^{k-1} is a
+# search, not a decision); that computation is below the DTC
+# layer.  bracha87Fig3ToC.dtc carries the predicate-name binding
+# and the C expression that evaluates it.
+#
+# Inputs (the situation when delivering (round k, v) from
+# sender j):
+#   "have stored from sender in round k"             { yes, no }
+#   "VALID^k holds for this message"                 { yes, no }
+#   "round k already complete"                       { yes, no }
+#   "post-mark VALID^k count >= n-t"                 { yes, no }
+#
+# Outputs:
+#   "store (sender, k, v)"                  { yes, no }
+#   "mark (sender, k, v) valid"             { yes, no }
+#   "signal round k complete"               { yes, no }
+#   "cascade re-evaluate higher rounds"     { yes, no }
+#
+# The signal and cascade outputs differ in their idempotence:
+# signal fires once per round (guarded by "round k already
+# complete"); cascade fires on every growth past n-t at round k.
+# Per CLAUDE.md pitfall 7, VALID^r (r > k) is monotone in
+# VALID^{r-1}, so additional validations at k can unlock stored-
+# but-not-yet-valid messages at higher rounds even after round k
+# has first reached n-t.  The cascade output gates the C-side
+# loop that re-evaluates rounds k+1, k+2, ...
+
+# ===== store (sender, k, v) =====
+
+# Rule 3.1.  Upon delivery of (round k, v) from sender j, if
+# not already stored from j in round k, store the message.  All
+# non-duplicate deliveries are stored, whether VALID^k holds at
+# this moment or not - cascade re-evaluation may validate them
+# later.
+@"store (sender, k, v)","have stored from sender in round k"
+yes,no
+no,yes
+
+# ===== mark (sender, k, v) valid =====
+
+# Rule 3.2.  When a newly-stored message satisfies VALID^k, mark
+# it valid.
+@"mark (sender, k, v) valid","have stored from sender in round k","VALID^k holds for this message"
+yes,no,yes
+no,no,no
+no,yes,
+
+# ===== signal round k complete =====
+
+# Rule 3.3.  When this delivery is newly stored, just marked
+# valid, and brings the post-mark validated count to n-t for a
+# round not yet complete, signal round k complete.  Idempotent
+# via the "round k already complete" guard.
+@"signal round k complete","have stored from sender in round k","VALID^k holds for this message","round k already complete","post-mark VALID^k count >= n-t"
+yes,no,yes,no,yes
+no,no,yes,no,no
+no,no,yes,yes,
+no,no,no,,
+no,yes,,,
+
+# ===== cascade re-evaluate higher rounds =====
+
+# Rule 3.4.  Whenever validation at round k brings or holds the
+# validated count at >= n-t, fire the cascade so the C-side loop
+# re-checks stored-but-not-valid messages at rounds k+1, k+2, ...
+# against their VALID^r predicates.  Fires on every growth past
+# n-t, not only the first crossing - VALID^r is monotone in
+# VALID^{r-1}, so each additional validation at k can unlock new
+# messages at higher rounds.
+@"cascade re-evaluate higher rounds","have stored from sender in round k","VALID^k holds for this message","post-mark VALID^k count >= n-t"
+yes,no,yes,yes
+no,no,yes,no
+no,no,no,
+no,yes,,

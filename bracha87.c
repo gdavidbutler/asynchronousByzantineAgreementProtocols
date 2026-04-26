@@ -232,151 +232,67 @@ bracha87Fig1Input(
   unsigned int nout;
   unsigned int ec;
   unsigned int rd;
+  unsigned char haveEchoed;
+  unsigned char haveSentReady;
+  unsigned char ecGtHalfNT;
+  unsigned char rdGeTPlus1;
+  unsigned char rdGe2TPlus1;
+  unsigned char sendEcho;
+  unsigned char sendReady;
+  unsigned char acceptV;
 
   if (!b || !value || !out || from > b->n || (b->flags & BRACHA87_F1_ACCEPTED))
     return (0);
 
-  nout = 0;
-
+  /* Per-sender deduplication and count update; ec/rd are 0 on the
+   * branches where the corresponding count cannot fire a rule. */
+  ec = 0;
+  rd = 0;
   switch (type) {
-
   case BRACHA87_INITIAL:
-    /*
-     * Rule 1: in(initial, v) from p, !echoed -> echo(v) to all
-     *
-     * Initial comes from the broadcast origin. If we haven't
-     * echoed yet, commit to this value and echo it.
-     */
-    if (b->flags & BRACHA87_F1_ECHOED)
-      return (0);
-    fig1Commit(b, value);
-    out[nout++] = BRACHA87_ECHO_ALL;
-    /*
-     * No cascade needed: Rules 4/5 require echo/ready counts that
-     * can't have reached their thresholds while !echoed was true
-     * (otherwise Rule 2 or 3 would have already set echoed, and
-     * we wouldn't be here). The initial changes no counts.
-     */
     break;
-
   case BRACHA87_ECHO:
-    /*
-     * Deduplicate: one echo per sender.
-     */
     if (BIT_TST(F1_ECFROM(b), from))
       return (0);
     fig1SetEc(b, from, value);
-
-    /*
-     * Fast path: once rdSent, no echo rule can fire.
-     * rdSent implies echoed, so Rule 2 (!echoed) and Rule 4
-     * (!rdSent) are dead. Rule 6 needs rdCnt to change, but
-     * an echo does not affect rdCnt.
-     */
-    if (b->flags & BRACHA87_F1_RDSENT)
-      break;
-
     ec = fig1EcCnt(b, value);
-
-    /*
-     * Rule 2: !echoed && echo_count[v] > (n+t)/2 -> echo(v) to all
-     */
-    if (!(b->flags & BRACHA87_F1_ECHOED)
-     && ec >= (B_N(b) + b->t) / 2 + 1) {
-      fig1Commit(b, value);
-      out[nout++] = BRACHA87_ECHO_ALL;
-    }
-
-    /*
-     * Rule 4: echoed && !rdSent && echo_count[v] > (n+t)/2 -> ready(v)
-     *
-     * Fires for any value v meeting the threshold (paper's rule).
-     * Updates committed value so caller broadcasts ready(v).
-     */
-    if ((b->flags & BRACHA87_F1_ECHOED) && !(b->flags & BRACHA87_F1_RDSENT)
-     && ec >= (B_N(b) + b->t) / 2 + 1) {
-      memcpy(F1_VALUE(b), value, F1_VLEN(b));
-      b->flags |= BRACHA87_F1_RDSENT;
-      out[nout++] = BRACHA87_READY_ALL;
-    }
-
-    /*
-     * Rule 6 cascade: rdSent was just set by Rule 4 above
-     * (the fast path guarantees we only reach here when rdSent
-     * was not set on entry). Check accumulated ready count.
-     */
-    if ((b->flags & BRACHA87_F1_RDSENT) && !(b->flags & BRACHA87_F1_ACCEPTED)
-     && fig1RdCnt(b, value) >= 2u * b->t + 1) {
-      memcpy(F1_VALUE(b), value, F1_VLEN(b));
-      b->flags |= BRACHA87_F1_ACCEPTED;
-      out[nout++] = BRACHA87_ACCEPT;
-    }
     break;
-
   case BRACHA87_READY:
-    /*
-     * Deduplicate: one ready per sender.
-     */
     if (BIT_TST(F1_RDFROM(b), from))
       return (0);
     fig1SetRd(b, from, value);
-
-    /*
-     * Fast path: once rdSent, only Rule 6 can fire.
-     * rdSent implies echoed, so Rule 3 (!echoed) and Rule 5
-     * (!rdSent) are dead.
-     */
-    if (b->flags & BRACHA87_F1_RDSENT) {
-      /* Rule 6: rdSent && ready_count[v] >= 2t+1 -> accept(v) */
-      if (fig1RdCnt(b, value) >= 2u * b->t + 1) {
-        memcpy(F1_VALUE(b), value, F1_VLEN(b));
-        b->flags |= BRACHA87_F1_ACCEPTED;
-        out[nout++] = BRACHA87_ACCEPT;
-      }
-      break;
-    }
-
     rd = fig1RdCnt(b, value);
-
-    /*
-     * Rule 3: !echoed && ready_count[v] >= t+1 -> echo(v) to all
-     */
-    if (!(b->flags & BRACHA87_F1_ECHOED)
-     && rd >= (unsigned int)b->t + 1) {
-      fig1Commit(b, value);
-      out[nout++] = BRACHA87_ECHO_ALL;
-    }
-
-    /*
-     * Rule 5: echoed && !rdSent && ready_count[v] >= t+1 -> ready(v)
-     *
-     * Fires for any value v meeting the threshold (paper's rule).
-     * Updates committed value so caller broadcasts ready(v).
-     */
-    if ((b->flags & BRACHA87_F1_ECHOED) && !(b->flags & BRACHA87_F1_RDSENT)
-     && rd >= (unsigned int)b->t + 1) {
-      memcpy(F1_VALUE(b), value, F1_VLEN(b));
-      b->flags |= BRACHA87_F1_RDSENT;
-      out[nout++] = BRACHA87_READY_ALL;
-    }
-
-    /*
-     * Rule 6: rdSent && ready_count[v] >= 2t+1 -> accept(v)
-     *
-     * Fires for any value v with sufficient ready count.
-     */
-    if ((b->flags & BRACHA87_F1_RDSENT) && !(b->flags & BRACHA87_F1_ACCEPTED)
-     && rd >= 2u * b->t + 1) {
-      memcpy(F1_VALUE(b), value, F1_VLEN(b));
-      b->flags |= BRACHA87_F1_ACCEPTED;
-      out[nout++] = BRACHA87_ACCEPT;
-    }
     break;
-
   default:
     return (0);
   }
 
+  haveEchoed    = (b->flags & BRACHA87_F1_ECHOED) ? 1 : 0;
+  haveSentReady = (b->flags & BRACHA87_F1_RDSENT) ? 1 : 0;
+  ecGtHalfNT    = ec >= (B_N(b) + b->t) / 2 + 1;
+  rdGeTPlus1    = rd >= (unsigned int)b->t + 1;
+  rdGe2TPlus1   = rd >= 2u * b->t + 1;
+  sendEcho  = 0;
+  sendReady = 0;
+  acceptV   = 0;
+
+#include "bracha87Fig1.c"
+
+  nout = 0;
+  if (sendEcho) {
+    fig1Commit(b, value);
+    out[nout++] = BRACHA87_ECHO_ALL;
+  }
+  if (sendReady) {
+    memcpy(F1_VALUE(b), value, F1_VLEN(b));
+    b->flags |= BRACHA87_F1_RDSENT;
+    out[nout++] = BRACHA87_READY_ALL;
+  }
+  if (acceptV) {
+    memcpy(F1_VALUE(b), value, F1_VLEN(b));
+    b->flags |= BRACHA87_F1_ACCEPTED;
+    out[nout++] = BRACHA87_ACCEPT;
+  }
   return (nout);
 }
 
@@ -654,6 +570,14 @@ bracha87Fig3Accept(
   unsigned char *arvd;
   unsigned char *vald;
   unsigned char *vals;
+  unsigned char haveStored;
+  unsigned char validKHolds;
+  unsigned char roundKComplete;
+  unsigned char postMarkAtNT;
+  unsigned char doStore;
+  unsigned char doMarkValid;
+  unsigned char doSignalComplete;
+  unsigned char doCascade;
 
   if (!b || k >= b->maxRounds || sender > b->n)
     return (0);
@@ -665,40 +589,47 @@ bracha87Fig3Accept(
   vald = rec + 1 + bs;
   vals = rec + 1 + 2 * bs;
 
-  /* Deduplicate: one accepted message per sender per round */
-  if (BIT_TST(arvd, sender))
-    return (0);
+  /* Boundary inputs.  fig3IsValid is short-circuited on duplicate:
+   * the dispatch zeros every output when haveStored is 1 anyway, and
+   * the predicate is the one expensive call here. */
+  haveStored = BIT_TST(arvd, sender) ? 1 : 0;
+  validKHolds = !haveStored && fig3IsValid(b, k, value);
+  roundKComplete = BIT_TST(F3_CBMP(b), k) ? 1 : 0;
+  postMarkAtNT = (*rec + validKHolds) >= B_N(b) - b->t;
 
-  /* Record the accepted message (stored for re-evaluation) */
-  BIT_SET(arvd, sender);
-  vals[sender] = value;
+  doStore = 0;
+  doMarkValid = 0;
+  doSignalComplete = 0;
+  doCascade = 0;
 
-  /* Check VALID^k */
-  if (!fig3IsValid(b, k, value)) {
-    if (validCount)
-      *validCount = *rec;
-    return (0);
+#include "bracha87Fig3.c"
+
+  /* Apply outputs in order: store, mark valid, signal complete, cascade. */
+  if (doStore) {
+    BIT_SET(arvd, sender);
+    vals[sender] = value;
   }
-
-  /* Mark valid */
-  BIT_SET(vald, sender);
-  ++*rec;
-
-  /*
-   * Fig 2 round coordination: when VALID^k has reached n-t, re-evaluate
-   * stored messages at r = k+1, k+2, ...  VALID^{r} is existential over
-   * n-t subsets of VALID^{r-1} and is monotone in VALID^{r-1} (paper
-   * VALID definition + Lemma 6), so growth at r-1 past n-t can unlock
-   * previously-stored but not-yet-valid round-r messages.  Therefore
-   * re-evaluation must fire on any growth at r-1 that reaches n-t, not
-   * only on the first crossing.  Termination: each pass either adds at
-   * least one valid (changed) or stops.
-   */
-  if (*rec >= B_N(b) - b->t) {
+  if (doMarkValid) {
+    BIT_SET(vald, sender);
+    ++*rec;
+  }
+  if (doSignalComplete) {
+    BIT_SET(F3_CBMP(b), k);
+  }
+  if (doCascade) {
+    /*
+     * Fig 2 round coordination: when VALID^k has reached n-t,
+     * re-evaluate stored messages at r = k+1, k+2, ...  VALID^{r}
+     * is existential over n-t subsets of VALID^{r-1} and is
+     * monotone in VALID^{r-1} (paper VALID definition + Lemma 6),
+     * so growth at r-1 past n-t can unlock previously-stored but
+     * not-yet-valid round-r messages.  Therefore re-evaluation
+     * must fire on any growth at r-1 that reaches n-t, not only
+     * on the first crossing.  Termination: each pass either adds
+     * at least one valid (changed) or stops.
+     */
     unsigned int r;
 
-    if (!BIT_TST(F3_CBMP(b), k))
-      BIT_SET(F3_CBMP(b), k);
     for (r = (unsigned int)k + 1; r < b->maxRounds; ++r) {
       unsigned char csnd[256];
       unsigned char cval[256];
@@ -775,7 +706,7 @@ bracha87Fig3Accept(
 
   if (validCount)
     *validCount = *rec;
-  return (BRACHA87_VALIDATED);
+  return (doMarkValid ? BRACHA87_VALIDATED : 0);
 }
 
 unsigned int
@@ -1058,6 +989,16 @@ bracha87Fig4Round(
   unsigned int i;
   unsigned char v;
   unsigned char dmax;
+  unsigned char subRound;
+  unsigned char haveDecided;
+  unsigned char n2Half;
+  unsigned char gt2T;
+  unsigned char gtT;
+  unsigned char setMajority;
+  unsigned char setDMajority;
+  unsigned char decideV;
+  unsigned char adoptV;
+  unsigned char setCoin;
 
   (void)senders;
   if (!b || !n_msgs)
@@ -1077,89 +1018,74 @@ bracha87Fig4Round(
         ++dc[v];
     }
   }
+  dmax = (dc[1] > dc[0]) ? 1 : 0;
 
-  switch (sub) {
+  /* Boundary inputs.  At-most-one of dc[0]/dc[1] can exceed t (and
+   * therefore 2t), since their sum is bounded by n_msgs <= n-t and
+   * 2t+2 > n-t when n > 3t -- so dmax disambiguates safely. */
+  subRound    = (unsigned char)sub;
+  haveDecided = b->decided ? 1 : 0;
+  n2Half      = (cnt[0] * 2 > B_N(b)) || (cnt[1] * 2 > B_N(b));
+  gt2T        = dc[dmax] > 2u * b->t;
+  gtT         = dc[dmax] > (unsigned int)b->t;
 
-  case 0:
-    /*
-     * Phase step 1 (round 3i):
-     *   value_p := majority value of the n-t validated messages.
-     */
+  setMajority  = 0;
+  setDMajority = 0;
+  decideV      = 0;
+  adoptV       = 0;
+  setCoin      = 0;
+
+#include "bracha87Fig4.c"
+
+  /* Apply value updates from dispatch outputs.  At most one fires. */
+  if (setMajority)
     b->value = (cnt[1] > cnt[0]) ? 1 : 0;
+  if (setDMajority)
+    b->value = (unsigned char)(((cnt[1] * 2 > B_N(b)) ? 1 : 0) | BRACHA87_D_FLAG);
+  if (decideV) {
+    b->value = dmax;
+    b->decision = dmax;
+    b->decided = 1;
+  }
+  if (adoptV)
+    b->value = dmax;
+  if (setCoin)
+    b->value = b->coin(b->coinClosure, (unsigned char)ph);
+
+  /* Procedural advance + return code.  Phase advance happens only at
+   * end-of-phase (sub=2); the decide/exhausted/maxPhases return
+   * codes can't be expressed declaratively so they stay in C. */
+  switch (sub) {
+  case 0:
     b->phase = (unsigned char)ph;
     b->subRound = 1;
     return (BRACHA87_BROADCAST);
-
   case 1:
-    /*
-     * Phase step 2 (round 3i+1):
-     *   If >n/2 same value v: value_p := (d, v)
-     *   Otherwise: value_p unchanged
-     *
-     * Threshold: more than n/2 of the n-t validated messages.
-     * The paper says "more than n/2 of the messages."
-     */
-    if (cnt[0] * 2 > B_N(b))
-      b->value = 0 | BRACHA87_D_FLAG;
-    else if (cnt[1] * 2 > B_N(b))
-      b->value = 1 | BRACHA87_D_FLAG;
-    /* else: value_p unchanged (no d flag) */
     b->phase = (unsigned char)ph;
     b->subRound = 2;
     return (BRACHA87_BROADCAST);
-
   case 2:
-    /*
-     * Phase step 3 (round 3i+2):
-     *   Count only d-flagged messages (decision candidates).
-     *
-     *   (i)   If >2t d-messages with (d,v): decide v
-     *   (ii)  If >t d-messages with (d,v): value_p := v
-     *   (iii) Otherwise: value_p := coin
-     *
-     *   Paper: all three cases fall through to "Go to round 1
-     *   of phase i+1." A decided process continues participating
-     *   so that other correct processes can also reach consensus.
-     */
-    dmax = (dc[1] > dc[0]) ? 1 : 0;
-
-    if (!b->decided) {
-      /* (i) >2t d-messages with same value -> decide AND continue */
-      if (dc[dmax] > 2u * b->t) {
-        b->value = dmax;
-        b->decision = dmax;
-        b->decided = 1;
-        if (ph + 1 >= b->maxPhases) {
-          /* Decided at operational limit; cannot continue */
-          return (BRACHA87_DECIDE);
-        }
-        b->phase = (unsigned char)(ph + 1);
-        b->subRound = 0;
-        return (BRACHA87_DECIDE | BRACHA87_BROADCAST);
-      }
-
-      /* Operational limit without decision */
+    if (decideV) {
       if (ph + 1 >= b->maxPhases)
-        return (BRACHA87_EXHAUSTED);
-
-      /* (ii) >t d-messages with same value -> adopt */
-      if (dc[dmax] > (unsigned int)b->t)
-        b->value = dmax;
-      else
-        /* (iii) coin flip */
-        b->value = b->coin(b->coinClosure, (unsigned char)ph);
+        return (BRACHA87_DECIDE);
+      b->phase = (unsigned char)(ph + 1);
+      b->subRound = 0;
+      return (BRACHA87_DECIDE | BRACHA87_BROADCAST);
     }
-    /* Already decided: value is fixed at decision */
-    else {
+    if (haveDecided) {
+      /* Post-decide continuation: broadcast the decision. */
       b->value = b->decision;
       if (ph + 1 >= b->maxPhases)
-        return (0); /* already decided, cannot continue */
+        return (0);
+      b->phase = (unsigned char)(ph + 1);
+      b->subRound = 0;
+      return (BRACHA87_BROADCAST);
     }
-
+    if (ph + 1 >= b->maxPhases)
+      return (BRACHA87_EXHAUSTED);
     b->phase = (unsigned char)(ph + 1);
     b->subRound = 0;
     return (BRACHA87_BROADCAST);
   }
-
   return (0);
 }

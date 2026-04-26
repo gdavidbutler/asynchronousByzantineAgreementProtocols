@@ -38,6 +38,34 @@ These assumptions are not optional — they are load-bearing requirements of eve
 
 Without these guarantees, the protocol's safety and liveness proofs do not hold.
 
+## Paper-Faithful Dispatch via DTC
+
+Each module's per-call decision logic is captured in a CSV decision table written in the paper's vocabulary (`bracha87Fig{1,3,4}.dtc`, `bkr94acs.dtc`). A small bridge per module (`*ToC.dtc`) maps domain names and values to C identifiers and constants. The decisionTableCompiler (`../decisionTableCompiler/dtc`) co-compiles each pair to an optimal-depth pseudocode dispatch, which a local `psu.awk` translates to a C snippet the entry-point function `#include`s.
+
+| Source | Bridge | Generated snippet | Entry point | Depth |
+|--------|--------|-------------------|-------------|-------|
+| `bracha87Fig1.dtc` | `bracha87Fig1ToC.dtc` | `bracha87Fig1.c` | `bracha87Fig1Input` | 7 |
+| `bracha87Fig2.dtc` | (none — Fig 3 subsumes) | — | — | — |
+| `bracha87Fig3.dtc` | `bracha87Fig3ToC.dtc` | `bracha87Fig3.c` | `bracha87Fig3Accept` | 4 |
+| `bracha87Fig4.dtc` | `bracha87Fig4ToC.dtc` | `bracha87Fig4.c` | `bracha87Fig4Round` | 6 |
+| `bkr94acs.dtc` | `bkr94acsToC.dtc` | `bkr94acsRules.c` | both bkr94acs entry points (one snippet, two `#include`s) | 7 |
+
+dtc enforces exhaustiveness and exclusivity of the rules at compile time. Depths are full-optimum (the `-q` heuristic flag is not used; full search confirms each is depth-minimal for its boundary-input set). The C wrapper computes boundary inputs, `#include`s the dispatch, and applies the boolean outputs as side effects in an order that is the API contract (e.g. for Fig 1: `echo` before `ready` before `accept`). See `decisionTableCompiler/README.md` for the bridge mechanism.
+
+**Audit chain:**
+
+```
+paper rules            <-> .dtc files                human, rule-by-rule comments
+.dtc files              -> compiled dispatch         dtc, exhaustive/exclusive
+C wrapper boundary I/O                               human inspection
+fig3IsValid, fig4Nfn, Fig 3 cascade                  test/test_predicates.c —
+                                                     exhaustive enumeration vs
+                                                     paper-direct reference at
+                                                     n=4, t=1
+```
+
+`fig3IsValid` is paper-correct **given a caller's N that exposes the existential subset quantifier via `rc > 0`**. The Fig 3 dispatch invokes N once on the full validated set; N's responsibility is to answer "could some n-t subset legitimately produce this value?" If a caller supplies an N whose permissive return is suppressed, `fig3IsValid` correctly rejects values the paper definition would admit via a strict subset. `fig4Nfn` is the canonical N for Fig 4 and exposes the existential analytically; its correspondence test (all 960 bounded inputs across the three sub-rounds) anchors that delegation.
+
 ## Architecture
 
 ### Binary Consensus Pipeline (bracha87)
@@ -184,14 +212,18 @@ Issues discovered by reading the paper against the code. Most were missed by iso
 
 8. **Permissive D_FLAG permission conveyed via `*result`.** On permissive return from Fig 4's N function (`rc > 0`), `*result & BRACHA87_D_FLAG` is set only when some n-t subset legitimately produces a decision candidate. Fig 3 rejects incoming D_FLAG when that bit is clear, preventing Byzantine d-injection in the no-majority windows of step 3 cases 1 and 2.
 
+9. **Post-decide value preservation across sub-rounds.** During post-decide continuation (Note 1), `b->value` is preserved as the decision through every sub-round of subsequent phases. The .dtc-faithful Fig 4 dispatch zeroes the `setMajority` and `setDMajority` outputs when `have_decided = yes`, so adversarial inputs whose majority disagrees with the decision cannot drift the broadcast value away from it. Verified by `testFig4PostDecideAdversarial` (which would have failed against a pre-DTC version that overwrote `b->value` with majority/(d, majority) at sub-rounds 0 and 1 of post-decide phases).
+
 ## Building
 
 ```bash
-make            # build tests and example
-make check      # run tests
+make            # build .o and example
+make check      # build and run tests (test_bracha87, test_bkr94acs, test_predicates)
 make clean      # remove build artifacts
-make clobber    # remove all generated files
+make clobber    # remove DTC generated .c files
 ```
+
+Building requires `../decisionTableCompiler/dtc` and `awk` to compile the `.dtc` rule tables to dispatch C snippets; the Makefile invokes both automatically. The generated `.psu` and `*Fig{1,3,4}.c` / `bkr94acsRules.c` files are reproducible artifacts (`make clobber` removes them, the next `make` regenerates).
 
 The bracha87 example demonstrates binary consensus (Fig1+Fig3+Fig4):
 

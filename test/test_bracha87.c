@@ -1950,6 +1950,107 @@ testFig4PostDecide(
 }
 
 /*
+ * Test Fig4 post-decide value preservation under adversarial inputs.
+ *
+ * Bracha post-decide-continuation (pitfall #1) requires a decided
+ * process to keep broadcasting its decision value — not whatever
+ * majority/(d, majority) the next phase's validated set would suggest.
+ * The .dtc-faithful Fig4 dispatch zeroes setMajority and setDMajority
+ * when have_decided=yes; this test exercises that explicitly by
+ * feeding inputs whose majority disagrees with the decision and
+ * checking that b->value remains the decision through every sub-round
+ * of the next phase.
+ *
+ * If sub=0 set value to majority post-decide, b->value would drift to
+ * the adversarial majority and the decided peer's continuation
+ * broadcast would carry the wrong value, potentially stranding peers
+ * still trying to decide.
+ */
+static void
+testFig4PostDecideAdversarial(
+  void
+){
+  struct bracha87Fig4 *b;
+  unsigned long sz;
+  unsigned char vals[MAX_N];
+  unsigned char senders[MAX_N];
+  unsigned int i;
+  unsigned int act;
+
+  printf("\n  Post-decide value preservation under adversarial majority:\n");
+
+  sz = bracha87Fig4Sz(3, 10);
+  for (i = 0; i < 4; ++i) senders[i] = (unsigned char)i;
+
+  /* Decide 0; then feed phase 1 inputs whose majority is 1. */
+  b = (struct bracha87Fig4 *)calloc(1, sz);
+  CoinVal = 0;
+  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+
+  for (i = 0; i < 4; ++i) vals[i] = 0;
+  bracha87Fig4Round(b, 0, 4, senders, vals);
+  bracha87Fig4Round(b, 1, 4, senders, vals);
+  for (i = 0; i < 4; ++i) vals[i] = 0 | BRACHA87_D_FLAG;
+  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  check("Decide 0: decided", b->decided == 1 && b->decision == 0);
+  check("Decide 0: DECIDE|BROADCAST",
+        act == (BRACHA87_DECIDE | BRACHA87_BROADCAST));
+
+  /* Phase 1 sub=0: 4 plain 1s. Buggy: b->value = majority = 1.
+   * Paper-faithful: b->value preserved at decision = 0. */
+  for (i = 0; i < 4; ++i) vals[i] = 1;
+  act = bracha87Fig4Round(b, 3, 4, senders, vals);
+  printf("    decide=0, sub=0 maj=1  : act=%u value=%u\n", act, b->value);
+  check("Adversarial sub=0: BROADCAST", act == BRACHA87_BROADCAST);
+  check("Adversarial sub=0: value=decision (not majority)", b->value == 0);
+
+  /* Phase 1 sub=1: 4 plain 1s. cnt[1]*2 > B_N(=4), so n2Half fires.
+   * Buggy: b->value = 1 | D_FLAG = 0x81. Paper-faithful: 0. */
+  for (i = 0; i < 4; ++i) vals[i] = 1;
+  act = bracha87Fig4Round(b, 4, 4, senders, vals);
+  printf("    decide=0, sub=1 (d,1)? : act=%u value=0x%02x\n", act, b->value);
+  check("Adversarial sub=1: BROADCAST", act == BRACHA87_BROADCAST);
+  check("Adversarial sub=1: value=decision (no D_FLAG drift)",
+        b->value == 0);
+
+  /* Phase 1 sub=2: 4 d-flagged 1s. Original C explicitly assigns
+   * b->value = b->decision here; new code does too. Either way 0. */
+  for (i = 0; i < 4; ++i) vals[i] = 1 | BRACHA87_D_FLAG;
+  act = bracha87Fig4Round(b, 5, 4, senders, vals);
+  check("Adversarial sub=2: BROADCAST", act == BRACHA87_BROADCAST);
+  check("Adversarial sub=2: value=decision", b->value == 0);
+  check("Adversarial: decision unchanged", b->decision == 0);
+
+  free(b);
+
+  /* Mirror: decide 1, then feed adversarial 0-majority. */
+  b = (struct bracha87Fig4 *)calloc(1, sz);
+  bracha87Fig4Init(b, 3, 1, 10, 1, testCoin, 0);
+
+  for (i = 0; i < 4; ++i) vals[i] = 1;
+  bracha87Fig4Round(b, 0, 4, senders, vals);
+  bracha87Fig4Round(b, 1, 4, senders, vals);
+  for (i = 0; i < 4; ++i) vals[i] = 1 | BRACHA87_D_FLAG;
+  bracha87Fig4Round(b, 2, 4, senders, vals);
+  check("Mirror decide 1: decided", b->decided == 1 && b->decision == 1);
+
+  for (i = 0; i < 4; ++i) vals[i] = 0;
+  bracha87Fig4Round(b, 3, 4, senders, vals);
+  printf("    decide=1, sub=0 maj=0  : value=%u\n", b->value);
+  check("Mirror sub=0: value=decision", b->value == 1);
+
+  bracha87Fig4Round(b, 4, 4, senders, vals);
+  printf("    decide=1, sub=1 (d,0)? : value=0x%02x\n", b->value);
+  check("Mirror sub=1: value=decision", b->value == 1);
+
+  for (i = 0; i < 4; ++i) vals[i] = 0 | BRACHA87_D_FLAG;
+  bracha87Fig4Round(b, 5, 4, senders, vals);
+  check("Mirror sub=2: value=decision", b->value == 1);
+  check("Mirror: decision unchanged", b->decision == 1);
+  free(b);
+}
+
+/*
  * Test Fig4 edge cases.
  */
 static void
@@ -3716,6 +3817,7 @@ main(
   testFig4Steps();
   testFig4Step3Boundary();
   testFig4PostDecide();
+  testFig4PostDecideAdversarial();
   testFig4EdgeCases();
   testFig4SubsetMajority();
   testFig4SubsetMajorityBoundary();

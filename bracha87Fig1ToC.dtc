@@ -1,0 +1,55 @@
+# Bridge from bracha87Fig1.dtc (paper vocabulary) to C symbols used in
+# bracha87Fig1Input.  '~'-prefixed names are C boundary symbols; the
+# post-'~' text is the bare C identifier and each row's right-hand side
+# is the literal C token (constant macro, integer literal) the local
+# translator substitutes verbatim into 'if (id == TOKEN) goto Lk;' and
+# 'id = TOKEN;'.
+#
+# Scope: only the BFT predicates whose ordering benefits from joint
+# optimization with the paper's rules.  Trivial structural guards
+# (null pointers, range, dedup, already-accepted) stay as a C-side
+# early-exit -- DTC has no ordering insight to add there, and modeling
+# them costs code size and a fast-path return.
+
+# Message kind: bridge directly to the function parameter 'type'.
+@"kind of message",~type
+"(initial, v)",BRACHA87_INITIAL
+"(echo, v)",BRACHA87_ECHO
+"(ready, v)",BRACHA87_READY
+
+# Per-process state flags reduced to 0/1.
+@"have echoed",~haveEchoed
+yes,1
+no,0
+
+@"have sent ready",~haveSentReady
+yes,1
+no,0
+
+# Threshold predicates (paper: strict > (n+t)/2 for echo; >= for ready).
+@"echo-count(v) > (n+t)/2",~ecGtHalfNT
+yes,1
+no,0
+
+@"ready-count(v) >= t+1",~rdGeTPlus1
+yes,1
+no,0
+
+@"ready-count(v) >= 2t+1",~rdGe2TPlus1
+yes,1
+no,0
+
+# Domain action -> boolean local that drives post-dispatch side effects
+# (fig1Commit / memcpy / flag set / out[nout++]=...).
+
+@~sendEcho,"send (echo, v)"
+1,yes
+0,no
+
+@~sendReady,"send (ready, v)"
+1,yes
+0,no
+
+@~acceptV,"accept(v)"
+1,yes
+0,no

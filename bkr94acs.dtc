@@ -1,0 +1,116 @@
+# Ben-Or, Kelmer, Rabin 1994
+# "Asynchronous Secure Computations with Optimal Resilience"
+# Section 4 Figure 3 - Protocol Agreement[Q]
+#
+# Paper-faithful capture of the BKR94 Asynchronous Common Subset
+# (ACS) protocol's rules.  Identifier and predicate translation,
+# and any C-side bridge decisions (sender validation, message
+# routing across origin/round/broadcaster, etc.), live in
+# bkr94acsToC.dtc.
+#
+# Composition.  BKR94 ACS is built on top of N reliable-broadcast
+# instances (one per origin proposing a value) and N binary-
+# agreement instances BA_j (one per origin, deciding whether to
+# include that origin's proposal in the agreed subset).  The
+# rules below describe what the ACS layer does in response to
+# the events those underlying primitives surface; the primitives
+# themselves are specified in bracha87.dtc.
+#
+# In this deployment Q(j) = 1 - the BKR94 predicate "P_j has
+# broadcast a value" - is realised by Bracha87's Figure 1
+# accepting the reliable broadcast of P_j's proposal.  Bracha's
+# Lemma 4 makes this realisation satisfy BKR94's assumption (2)
+# on Q (if any honest accepts, every honest eventually accepts).
+# The realisation choice is recorded in bkr94acsToC.dtc and is
+# not a paper concern.
+#
+# The Step 2 trigger is "n-t BA outputs of 1," not "n-t Q(j) = 1
+# events".  These coincide in benign runs but diverge under
+# asynchrony or Byzantine scheduling; only the BA-output-1
+# trigger satisfies Part A case (i) of the BKR94 Lemma 2 proof.
+# A HoneyBadger-style optimisation that fires Step 2 on the
+# count of Q(j) = 1 events would be the wrong reading of the
+# paper.
+#
+# Inputs (the situation when an ACS-layer event is processed;
+# j is the origin to which the event refers):
+#   "kind of ACS event"     { Q(j) = 1, BA_j outputs 0, BA_j outputs 1 }
+#   "input to BA_j"         { none, 0, 1 }
+#                             - the value, if any, this process
+#                               has previously entered to BA_j
+#   "input-0 fanout already triggered"               { yes, no }
+#   "post-output BA-output-1 count >= n-t"           { yes, no }
+#                             - n-t = 2t+1 in Bracha's regime;
+#                               the count is the number of BA_j
+#                               that have output 1, after this
+#                               event is recorded
+#   "post-output BA-output count == n"               { yes, no }
+#                             - the total number of BAs that
+#                               have output any value, after
+#                               this event is recorded
+#
+# Outputs:
+#   "input 1 to BA_j"               { yes, no }
+#   "input 0 to all unvoted BAs"    { yes, no }
+#   "output SubSet"                 { yes, no }
+#                                     - SubSet := { j : BA_j had output 1 }
+#                                       computed when this output fires
+
+# ================================================================
+# Step 1 - Input 1 to BA_j when Q(j) = 1
+# ================================================================
+
+# Rule 1.  When Q(j) = 1 becomes known to me, if I have not
+# entered a value to BA_j, input 1 to BA_j.  BKR94 Lemma 4 (via
+# the underlying reliable broadcast) guarantees that every
+# honest process eventually learns Q(j) = 1 if any does, so
+# every honest process eventually executes Rule 1 for j.
+@"input 1 to BA_j","kind of ACS event","input to BA_j"
+yes,"Q(j) = 1",none
+no,"Q(j) = 1",0
+no,"Q(j) = 1",1
+no,"BA_j outputs 0",
+no,"BA_j outputs 1",
+
+# ================================================================
+# Step 2 - Input 0 to all unvoted BAs at n-t BA outputs of 1
+# ================================================================
+
+# Rule 2.  Upon BA_j outputting 1, if the count of BAs that have
+# output 1 has reached n-t (= 2t+1 in Bracha's regime) and the
+# input-0 fanout has not yet fired, enter input 0 to every BA
+# for which I have not yet entered a value.  The "fanout already
+# triggered" guard makes this fire exactly once per ACS instance.
+#
+# The fanout itself - iterating over the N BAs and inputting 0
+# where input is none - is a C-side loop; the DTC fires the
+# go-signal "input 0 to all unvoted BAs" and the C does the
+# enumeration.
+@"input 0 to all unvoted BAs","kind of ACS event","post-output BA-output-1 count >= n-t","input-0 fanout already triggered"
+yes,"BA_j outputs 1",yes,no
+no,"BA_j outputs 1",yes,yes
+no,"BA_j outputs 1",no,
+no,"BA_j outputs 0",,
+no,"Q(j) = 1",,
+
+# ================================================================
+# Step 3 - Output SubSet when all n BAs have output
+# ================================================================
+
+# Rule 3.  Upon any BA_j outputting, if all n BAs have now
+# output a value, output SubSet := { j : BA_j had output 1 }.
+# BKR94 Lemma 2 Part A guarantees |SubSet| >= 2t+1 = n-t; Part C
+# guarantees cross-process agreement on SubSet; Part D
+# guarantees Q(j) = 1 for every j in SubSet.  The "all n BAs"
+# threshold can only be reached once per ACS instance (each BA
+# outputs at most once), so this rule is naturally idempotent.
+#
+# Computing the SubSet itself - iterating over the N BAs and
+# collecting indices with output 1 - is a C-side loop; the DTC
+# fires the go-signal and the C produces the set.
+@"output SubSet","kind of ACS event","post-output BA-output count == n"
+yes,"BA_j outputs 1",yes
+yes,"BA_j outputs 0",yes
+no,"BA_j outputs 1",no
+no,"BA_j outputs 0",no
+no,"Q(j) = 1",

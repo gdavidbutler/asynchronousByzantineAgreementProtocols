@@ -1,0 +1,125 @@
+# Bracha 1987, "Asynchronous Byzantine Agreement Protocols"
+# Information and Computation 75, 130-143 (1987)
+#
+# Figure 4 - Consensus Protocol
+#
+# Figure 4 specifies the binary consensus protocol over the
+# Figure 3 round structure.  Each phase i comprises three sub-
+# rounds (paper rounds 3i, 3i+1, 3i+2), each completed by Figure
+# 3 delivering n-t validated messages.  On each completion event,
+# Figure 4 updates the local value, may decide, and broadcasts
+# for the next sub-round.
+#
+# Per phase i:
+#   Step 1 (sub-round 0, paper round 3i):
+#     V_i := majority of n-t validated round-(3i-1) values
+#     (V_0 := initial value for phase 0)
+#   Step 2 (sub-round 1, paper round 3i+1):
+#     if more than n/2 round-(3i) messages have the same value v
+#       then V_i := (d, v)
+#       else V_i unchanged (non-deterministic across peers)
+#   Step 3 (sub-round 2, paper round 3i+2):
+#     case (i)   more than 2t round-(3i+1) messages of form (d, v)
+#                  agree on v: decide v
+#     case (ii)  more than t (and at most 2t) such messages: V_{i+1} := v
+#     case (iii) otherwise: V_{i+1} := coin_i
+#     advance to phase i+1, sub-round 0
+#
+# Bracha pitfall 1 (post-decide continuation): a process that has
+# decided MUST continue broadcasting, with V := decision, until
+# the surrounding application releases it.  The "have decided"
+# guard in each step's update rule preserves the decision value
+# while still emitting broadcast and advance side-effects.
+#
+# Predicates appearing as inputs are computed by C functions over
+# the validated set delivered by Figure 3 (majority counts,
+# d-flag tallies); see bracha87Fig4ToC.dtc for their bindings.
+# The coin function for case (iii) is supplied by the surrounding
+# application; the DTC selects the coin output, the C invokes it.
+#
+# Inputs (the situation when Figure 3 signals round k complete;
+# k mod 3 names the sub-round):
+#   "sub-round"                                              { 0, 1, 2 }
+#   "have decided"                                           { yes, no }
+#   ">n/2 round-(3i) messages have same value v"             { yes, no }
+#   ">2t round-(3i+1) messages of form (d,v) agree on v"     { yes, no }
+#   ">t round-(3i+1) messages of form (d,v) agree on v"      { yes, no }
+#
+# Outputs:
+#   "set value to majority of round (3i-1)"     { yes, no }
+#   "set value to (d, majority of round (3i))"  { yes, no }
+#   "decide v"                                  { yes, no }
+#   "adopt v"                                   { yes, no }
+#   "set value to coin flip"                    { yes, no }
+#
+# Two further actions - broadcast the value, advance to the next
+# sub-round - are implicit on every sub-round completion event;
+# they are not modelled as DTC outputs because they have no
+# yes/no decision (they always fire here).  The C wrapper may
+# attach implementation-level terminal handling (e.g. suppress
+# broadcast at maxPhases limit) by gating them on additional
+# state outside this file.
+
+# ===== Step 1: set value to majority of round (3i-1) =====
+
+# Rule 4.1.  At sub-round 0, set V_i to the majority of the n-t
+# validated round-(3i-1) values.  Skipped when already decided
+# (the decision value is preserved).
+@"set value to majority of round (3i-1)","sub-round","have decided"
+yes,0,no
+no,0,yes
+no,1,
+no,2,
+
+# ===== Step 2: set value to (d, majority of round (3i)) =====
+
+# Rule 4.2.  At sub-round 1, if more than n/2 of the round-(3i)
+# messages have the same value v, set V_i := (d, v).  Otherwise
+# V_i is unchanged.  Skipped when already decided.
+@"set value to (d, majority of round (3i))","sub-round","have decided",">n/2 round-(3i) messages have same value v"
+yes,1,no,yes
+no,1,no,no
+no,1,yes,
+no,0,,
+no,2,,
+
+# ===== Step 3 case (i): decide v =====
+
+# Rule 4.3.  At sub-round 2, if more than 2t of the round-(3i+1)
+# messages of form (d, v) agree on v, decide v.  Skipped when
+# already decided (decision is final; the second time through
+# the same case the rule does not re-fire).
+@"decide v","sub-round","have decided",">2t round-(3i+1) messages of form (d,v) agree on v"
+yes,2,no,yes
+no,2,no,no
+no,2,yes,
+no,0,,
+no,1,,
+
+# ===== Step 3 case (ii): adopt v =====
+
+# Rule 4.4.  At sub-round 2, if more than t (but not more than 2t)
+# of the round-(3i+1) messages of form (d, v) agree on v, set
+# V_{i+1} := v.  Skipped when already decided or when case (i)
+# fired.
+@"adopt v","sub-round","have decided",">2t round-(3i+1) messages of form (d,v) agree on v",">t round-(3i+1) messages of form (d,v) agree on v"
+yes,2,no,no,yes
+no,2,no,yes,
+no,2,no,no,no
+no,2,yes,,
+no,0,,,
+no,1,,,
+
+# ===== Step 3 case (iii): set value to coin flip =====
+
+# Rule 4.5.  At sub-round 2, if no more than t of the
+# round-(3i+1) messages of form (d, v) agree on v, set
+# V_{i+1} := coin_i.  Skipped when already decided or when case
+# (i) or (ii) fired.
+@"set value to coin flip","sub-round","have decided",">2t round-(3i+1) messages of form (d,v) agree on v",">t round-(3i+1) messages of form (d,v) agree on v"
+yes,2,no,no,no
+no,2,no,yes,
+no,2,no,no,yes
+no,2,yes,,
+no,0,,,
+no,1,,,

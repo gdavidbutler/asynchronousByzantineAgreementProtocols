@@ -1,0 +1,43 @@
+# Bridge from bracha87Fig3.dtc (paper vocabulary) to C symbols used in
+# bracha87Fig3Accept.  Identifier form: each value is a literal C token
+# (constant or 0/1) the local translator substitutes verbatim into
+# 'if (id == TOKEN) goto Lk;' / 'id = TOKEN;'.
+#
+# All four paper-side inputs are bridged because the BFT rules test
+# them; structural guards (b null, k out of range, sender out of
+# range) stay as a C early-exit -- DTC has no ordering insight there.
+
+@"have stored from sender in round k",~haveStored
+yes,1
+no,0
+
+@"VALID^k holds for this message",~validKHolds
+yes,1
+no,0
+
+@"round k already complete",~roundKComplete
+yes,1
+no,0
+
+@"post-mark VALID^k count >= n-t",~postMarkAtNT
+yes,1
+no,0
+
+# Domain action -> boolean local that drives a post-dispatch side
+# effect.  Order in C: store, mark valid, signal complete, cascade.
+
+@~doStore,"store (sender, k, v)"
+1,yes
+0,no
+
+@~doMarkValid,"mark (sender, k, v) valid"
+1,yes
+0,no
+
+@~doSignalComplete,"signal round k complete"
+1,yes
+0,no
+
+@~doCascade,"cascade re-evaluate higher rounds"
+1,yes
+0,no

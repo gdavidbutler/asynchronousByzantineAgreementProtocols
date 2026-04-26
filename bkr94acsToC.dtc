@@ -1,0 +1,50 @@
+# Bridge from bkr94acs.dtc (paper vocabulary) to C symbols used in
+# bkr94acsProposalInput (Q(j)=1 dispatch site) and bkr94acsConsensusInput
+# (BA_j outputs dispatch site).  The same dispatch is #include'd at both
+# sites; C-function-scoped labels keep them distinct.
+#
+# Event constants (BKR94ACS_ACS_EVENT_*) and vote constants
+# (BKR94ACS_VOTE_*) are file-local macros in bkr94acs.c; the bridge
+# substitutes them verbatim into 'if (id == TOKEN) goto Lk;' tests.
+#
+# Structural guards (a null, origin/from out of range) stay as a C
+# early-exit in each entry point; only the ACS rules are bridged.
+
+@"kind of ACS event",~acsEvent
+"Q(j) = 1",BKR94ACS_ACS_EVENT_Q
+"BA_j outputs 0",BKR94ACS_ACS_EVENT_BA0
+"BA_j outputs 1",BKR94ACS_ACS_EVENT_BA1
+
+@"input to BA_j",~inputToBAj
+none,BKR94ACS_VOTE_NONE
+0,BKR94ACS_VOTE_ZERO
+1,BKR94ACS_VOTE_ONE
+
+@"input-0 fanout already triggered",~fanoutTriggered
+yes,1
+no,0
+
+@"post-output BA-output-1 count >= n-t",~postCountOneAtNT
+yes,1
+no,0
+
+@"post-output BA-output count == n",~postCountAllN
+yes,1
+no,0
+
+# Domain action -> boolean local that drives a post-dispatch side effect.
+# - doInput1: bkr94acsVote(a, origin, 1, ...)
+# - doInput0Fanout: loop over all BAs, vote 0 where unvoted; set threshold.
+# - doOutputSubset: emit BKR94ACS_ACT_COMPLETE; set complete.
+
+@~doInput1,"input 1 to BA_j"
+1,yes
+0,no
+
+@~doInput0Fanout,"input 0 to all unvoted BAs"
+1,yes
+0,no
+
+@~doOutputSubset,"output SubSet"
+1,yes
+0,no

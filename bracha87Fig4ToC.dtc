@@ -1,0 +1,54 @@
+# Bridge from bracha87Fig4.dtc (paper vocabulary) to C symbols used in
+# bracha87Fig4Round.  Identifier form: each value is a literal C token
+# (constant or 0/1/2) substituted verbatim by the local translator.
+#
+# All five BFT inputs are bridged.  The five DTC outputs are boolean
+# locals that gate post-dispatch value-update side effects.  Two
+# implicit actions the paper notes -- broadcast and advance to the
+# next sub-round -- and the procedural decide/exhausted/maxPhases
+# return-code machinery stay in C: their ordering and conditional
+# return values aren't expressible declaratively.
+
+@"sub-round",~subRound
+0,0
+1,1
+2,2
+
+@"have decided",~haveDecided
+yes,1
+no,0
+
+@">n/2 round-(3i) messages have same value v",~n2Half
+yes,1
+no,0
+
+@">2t round-(3i+1) messages of form (d,v) agree on v",~gt2T
+yes,1
+no,0
+
+@">t round-(3i+1) messages of form (d,v) agree on v",~gtT
+yes,1
+no,0
+
+# Domain action -> boolean local that drives a value-update side
+# effect.  At most one of these fires per call.
+
+@~setMajority,"set value to majority of round (3i-1)"
+1,yes
+0,no
+
+@~setDMajority,"set value to (d, majority of round (3i))"
+1,yes
+0,no
+
+@~decideV,"decide v"
+1,yes
+0,no
+
+@~adoptV,"adopt v"
+1,yes
+0,no
+
+@~setCoin,"set value to coin flip"
+1,yes
+0,no

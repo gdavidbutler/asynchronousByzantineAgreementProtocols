@@ -1,0 +1,115 @@
+# Bracha 1987, "Asynchronous Byzantine Agreement Protocols"
+# Information and Computation 75, 130-143 (1987)
+#
+# Figure 1 - Reliable Broadcast Primitive
+#
+# The reliable broadcast primitive is given by six rules.  Each
+# rule is of the form: upon receiving a particular kind of
+# message, if a particular state holds, take a particular action.
+#
+# Each correct process p_i maintains, per broadcast instance:
+#   "have echoed"      - has p_i sent (echo, v)?
+#   "have sent ready"  - has p_i sent (ready, v)?
+# and counts the (echo, v) and (ready, v) messages received from
+# distinct senders, separately for each value v.
+#
+# The decision tables below answer the three questions a process
+# faces upon receiving any message: should I send (echo, v),
+# send (ready, v), or accept(v)?  Each row is taken directly
+# from a rule of the paper.  A blank cell means the rule does
+# not depend on the value of that input.
+#
+# Names appearing in this file are written in the paper's
+# notation - embedded commas, parentheses, and inequality forms
+# included.  The file bracha87Fig1ToC.dtc maps each name and
+# value to a C-friendly identifier and to the C expression
+# evaluated at runtime.
+#
+# Inputs (the situation when the message is processed; v denotes
+# the value carried by the message):
+#   "kind of message"            { (initial, v), (echo, v), (ready, v) }
+#   "have echoed"                { yes, no }
+#   "have sent ready"            { yes, no }
+#   "echo-count(v) > (n+t)/2"    { yes, no }
+#   "ready-count(v) >= t+1"      { yes, no }
+#   "ready-count(v) >= 2t+1"     { yes, no }
+#
+# Outputs (the actions the process may take):
+#   "send (echo, v)"             { yes, no }
+#   "send (ready, v)"            { yes, no }
+#   "accept(v)"                  { yes, no }
+#
+# When a single received message satisfies the preconditions of
+# more than one rule, all such rules fire on that message.  The
+# one place this requires an explicit row (rather than emerging
+# from independent evaluation of the three tables) is Rule 3
+# leading into Rule 5; that row is labelled below.
+#
+# Cells covering states unreachable by the rules' invariants
+# (e.g. "have echoed = no" with "have sent ready = yes", which
+# Rules 4 and 5 prevent) are coded as no-action rows so that
+# every input combination resolves.
+
+# ===== send (echo, v) =====
+
+# Rule 1.  Upon receiving (initial, v) from the broadcaster,
+# if I have not echoed, send (echo, v).
+@"send (echo, v)","kind of message","have echoed"
+yes,"(initial, v)",no
+no,"(initial, v)",yes
+
+# Rule 2.  Upon receiving more than (n+t)/2 (echo, v) messages,
+# if I have not echoed, send (echo, v).
+@"send (echo, v)","kind of message","have echoed","echo-count(v) > (n+t)/2"
+yes,"(echo, v)",no,yes
+no,"(echo, v)",no,no
+no,"(echo, v)",yes,
+
+# Rule 3.  Upon receiving t+1 (ready, v) messages, if I have not
+# echoed, send (echo, v).
+@"send (echo, v)","kind of message","have echoed","ready-count(v) >= t+1"
+yes,"(ready, v)",no,yes
+no,"(ready, v)",no,no
+no,"(ready, v)",yes,
+
+# ===== send (ready, v) =====
+
+# No rule sends ready upon receiving (initial, v).
+@"send (ready, v)","kind of message"
+no,"(initial, v)"
+
+# Rule 4.  Upon receiving more than (n+t)/2 (echo, v) messages,
+# if I have echoed but not sent ready, send (ready, v).
+@"send (ready, v)","kind of message","have echoed","have sent ready","echo-count(v) > (n+t)/2"
+yes,"(echo, v)",yes,no,yes
+no,"(echo, v)",yes,no,no
+no,"(echo, v)",yes,yes,
+no,"(echo, v)",no,no,
+no,"(echo, v)",no,yes,
+
+# Rule 5.  Upon receiving t+1 (ready, v) messages, if I have
+# echoed but not sent ready, send (ready, v).
+@"send (ready, v)","kind of message","have echoed","have sent ready","ready-count(v) >= t+1"
+yes,"(ready, v)",yes,no,yes
+no,"(ready, v)",yes,no,no
+no,"(ready, v)",yes,yes,
+
+# Rule 3 leading into Rule 5.  Upon receiving t+1 (ready, v)
+# messages while I have not echoed, Rule 3 fires (send (echo, v),
+# set "have echoed").  In the resulting state - "have echoed"
+# now yes, "have sent ready" still no, "ready-count(v) >= t+1"
+# still yes - Rule 5's preconditions hold, so Rule 5 also fires
+# on this same message.
+@"send (ready, v)","kind of message","have echoed","have sent ready","ready-count(v) >= t+1"
+yes,"(ready, v)",no,no,yes
+no,"(ready, v)",no,no,no
+no,"(ready, v)",no,yes,
+
+# ===== accept(v) =====
+
+# Rule 6.  Upon receiving 2t+1 (ready, v) messages, accept(v).
+@"accept(v)","kind of message","ready-count(v) >= 2t+1"
+yes,"(ready, v)",yes
+no,"(ready, v)",no
+no,"(initial, v)",
+no,"(echo, v)",
