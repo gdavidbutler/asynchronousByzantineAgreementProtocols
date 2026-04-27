@@ -35,7 +35,7 @@
 # The signal and cascade outputs differ in their idempotence:
 # signal fires once per round (guarded by "round k already
 # complete"); cascade fires on every growth past n-t at round k.
-# Per CLAUDE.md pitfall 7, VALID^r (r > k) is monotone in
+# Per README.md "Implementation Notes" #7, VALID^r (r > k) is monotone in
 # VALID^{r-1}, so additional validations at k can unlock stored-
 # but-not-yet-valid messages at higher rounds even after round k
 # has first reached n-t.  The cascade output gates the C-side

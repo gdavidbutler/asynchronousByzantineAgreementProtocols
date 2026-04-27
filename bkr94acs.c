@@ -338,7 +338,23 @@ bkr94acsVote(
 
   voted[origin] = vote ? BKR94ACS_VOTE_ONE : BKR94ACS_VOTE_ZERO;
 
-  /* Initial broadcast of our BA input to all peers */
+  /*
+   * Initial broadcast of our BA input.  Mark the corresponding
+   * (origin, round=0, broadcaster=self) consensus Fig1 as the
+   * originator and store the value, so bkr94acsPump's BPR walk
+   * replays BKR94ACS_ACT_CON_SEND with conType=INITIAL until
+   * loopback or echo / ready cascade sets ECHOED on that Fig1.
+   * Consensus Fig1s are vLen=0 (binary value), so we pass the
+   * raw vote byte (0 or 1), not the BKR94ACS_VOTE_* encoding
+   * stored in voted[].
+   */
+  {
+    unsigned char binary;
+
+    binary = vote ? 1 : 0;
+    bracha87Fig1Origin(conF1(a, origin, 0, a->self), &binary);
+  }
+
   out->act = BKR94ACS_ACT_CON_SEND;
   out->origin = (unsigned char)origin;
   out->round = 0;
@@ -610,7 +626,24 @@ bkr94acsConsensusInput(
 
         if ((act & BRACHA87_BROADCAST)
          && *nextRound < mr) {
-          /* Broadcast INITIAL for the new consensus round (self is broadcaster) */
+          /*
+           * Broadcast INITIAL for the new consensus round
+           * (self is broadcaster).  Mark the corresponding
+           * (origin, round=*nextRound, broadcaster=self)
+           * consensus Fig1 as the originator and store the
+           * value so bkr94acsPump replays this INITIAL on
+           * subsequent ticks until ECHOED (loopback or echo /
+           * ready cascade) takes over.  Same pattern as the
+           * round-0 case in bkr94acsVote.
+           */
+          {
+            unsigned char binary;
+
+            binary = f4->value;
+            bracha87Fig1Origin(conF1(a, origin, *nextRound, a->self),
+                               &binary);
+          }
+
           out[nact].act = BKR94ACS_ACT_CON_SEND;
           out[nact].origin = origin;
           out[nact].round = *nextRound;
@@ -691,4 +724,224 @@ bkr94acsProposalValue(
   if (!a || origin > a->n)
     return (0);
   return (bracha87Fig1Value(propF1(a, origin)));
+}
+
+unsigned int
+bkr94acsPropose(
+  struct bkr94acs *a
+ ,const unsigned char *value
+ ,struct bkr94acsAct *out
+){
+  if (!a || !value || !out)
+    return (0);
+
+  /*
+   * Mark the local proposal Fig1 (origin = self) as the
+   * broadcast originator.  bracha87Fig1Origin sets F1_ORIGIN
+   * and copies value into the committed-value slot so
+   * bracha87Fig1Value returns it (without setting ECHOED --
+   * Rule 1 still fires from bkr94acsProposalInput receiving
+   * (initial, v) via the network loopback).
+   *
+   * Until loopback or echo / ready cascade sets ECHOED,
+   * bkr94acsPump replays BKR94ACS_ACT_PROP_INITIAL every
+   * tick.  After ECHOED, the proposal Fig1's own BPR carries
+   * the value forward via echo / ready replays.
+   */
+  bracha87Fig1Origin(propF1(a, a->self), value);
+
+  out->act = BKR94ACS_ACT_PROP_INITIAL;
+  out->origin = a->self;
+  out->round = 0;
+  out->conType = 0;
+  out->conValue = 0;
+  out->broadcaster = 0;
+  return (1);
+}
+
+/*
+ * BPR pump.  Walks the cursor forward until a Fig1 instance
+ * with replay output is found (or the cursor wraps back to its
+ * starting position with no work).  Per-call ceiling:
+ * BKR94ACS_PUMP_MAX_ACTS (3 actions = INITIAL + ECHO + READY
+ * for one Fig1).
+ *
+ * Cursor walks two phases:
+ *   phase 0: proposal Fig1s, origin 0..N-1
+ *   phase 1: consensus Fig1s, (origin, round, broadcaster)
+ *            in that order; round bounded by the per-origin
+ *            conNextRound (no committed state past the
+ *            current Fig4 round).
+ *
+ * Per-origin pump-gate (see bkr94acs.dtc BPR section) trims
+ * the proposal walk for BAs that have decided 0 (excluded
+ * from SubSet); the consensus walk is unconditional, with
+ * Fig1Bpr returning 0 on uncommitted instances.
+ *
+ * Internal helpers fold each cursor advance step into the
+ * walker.  Plain-C three-arm switch over BA decision is the
+ * BPR gate (see bkr94acs.dtc BPR documentation block); the
+ * pitfall #1 reasoning is captured in the .dtc, the C
+ * implementation is the trivial mechanical guard.
+ */
+static int
+bkr94acsPumpOriginGate(
+  const struct bkr94acs *a
+ ,unsigned int origin
+){
+  unsigned char dec;
+
+  /*
+   * BA decision states:
+   *   0xFF -> undecided    -> pump (Q(j)=1 may still be
+   *                                 learned by other peers)
+   *   0    -> decided 0    -> skip (j excluded; Step 2's
+   *                                 fanout already conveyed
+   *                                 our vote)
+   *   1    -> decided 1    -> pump (Bracha post-decide
+   *                                 continuation: peers that
+   *                                 have not yet observed
+   *                                 Fig1 ACCEPT for j still
+   *                                 need our echoes/readys)
+   */
+  dec = bkr94acsDecision(a)[origin];
+  return (dec != 0);  /* 0xFF and 1 -> pump; 0 -> skip */
+}
+
+static unsigned int
+bkr94acsPumpEmitProposal(
+  struct bkr94acs *a
+ ,unsigned int origin
+ ,struct bkr94acsAct *out
+){
+  unsigned char f1out[3];
+  unsigned int n;
+  unsigned int k;
+  unsigned int nact;
+
+  n = bracha87Fig1Bpr(propF1(a, origin), f1out);
+  nact = 0;
+  for (k = 0; k < n; ++k) {
+    out[nact].act = (f1out[k] == BRACHA87_INITIAL_ALL)
+                    ? BKR94ACS_ACT_PROP_INITIAL
+                  : (f1out[k] == BRACHA87_ECHO_ALL)
+                    ? BKR94ACS_ACT_PROP_ECHO
+                  :   BKR94ACS_ACT_PROP_READY;
+    out[nact].origin = (unsigned char)origin;
+    out[nact].round = 0;
+    out[nact].conType = 0;
+    out[nact].conValue = 0;
+    out[nact].broadcaster = 0;
+    ++nact;
+  }
+  return (nact);
+}
+
+static unsigned int
+bkr94acsPumpEmitConsensus(
+  struct bkr94acs *a
+ ,unsigned int origin
+ ,unsigned int round
+ ,unsigned int broadcaster
+ ,struct bkr94acsAct *out
+){
+  struct bracha87Fig1 *f1;
+  const unsigned char *cv;
+  unsigned char f1out[3];
+  unsigned int n;
+  unsigned int k;
+  unsigned int nact;
+
+  f1 = conF1(a, origin, round, broadcaster);
+  n = bracha87Fig1Bpr(f1, f1out);
+  if (!n)
+    return (0);
+  cv = bracha87Fig1Value(f1);
+  if (!cv)
+    return (0);
+
+  nact = 0;
+  for (k = 0; k < n; ++k) {
+    out[nact].act = BKR94ACS_ACT_CON_SEND;
+    out[nact].origin = (unsigned char)origin;
+    out[nact].round = (unsigned char)round;
+    out[nact].conType = (f1out[k] == BRACHA87_INITIAL_ALL)
+                       ? BRACHA87_INITIAL
+                     : (f1out[k] == BRACHA87_ECHO_ALL)
+                       ? BRACHA87_ECHO
+                     :   BRACHA87_READY;
+    out[nact].conValue = cv[0];
+    out[nact].broadcaster = (unsigned char)broadcaster;
+    ++nact;
+  }
+  return (nact);
+}
+
+unsigned int
+bkr94acsPump(
+  struct bkr94acs *a
+ ,struct bkr94acsAct *out
+){
+  unsigned int N;
+  unsigned int mr;
+  unsigned int swept;
+  unsigned int total;
+  unsigned int nact;
+
+  if (!a || !out)
+    return (0);
+
+  N = A_N(a);
+  mr = maxRounds(a);
+  /*
+   * Cursor space size: N proposals + N origins * mr rounds *
+   * N broadcasters consensus Fig1s.  swept counts cursor
+   * advances; total bounds the maximum walk before declaring
+   * idle (one full cycle through the entire space).
+   */
+  total = N + N * mr * N;
+  swept = 0;
+
+  while (swept < total) {
+    nact = 0;
+
+    if (a->cursorPhase == 0) {
+      /* Proposal Fig1 cursor */
+      if (bkr94acsPumpOriginGate(a, a->cursorOrigin))
+        nact = bkr94acsPumpEmitProposal(a, a->cursorOrigin, out);
+
+      /* Advance: next origin; on wrap, switch to consensus phase */
+      ++a->cursorOrigin;
+      if (a->cursorOrigin >= N) {
+        a->cursorOrigin = 0;
+        a->cursorPhase = 1;
+        a->cursorRound = 0;
+        a->cursorBroadcaster = 0;
+      }
+    } else {
+      /* Consensus Fig1 cursor: (origin, round, broadcaster) */
+      nact = bkr94acsPumpEmitConsensus(a, a->cursorOrigin,
+        a->cursorRound, a->cursorBroadcaster, out);
+
+      /* Advance broadcaster, then round, then origin */
+      ++a->cursorBroadcaster;
+      if (a->cursorBroadcaster >= N) {
+        a->cursorBroadcaster = 0;
+        ++a->cursorRound;
+        if (a->cursorRound >= mr) {
+          a->cursorRound = 0;
+          ++a->cursorOrigin;
+          if (a->cursorOrigin >= N) {
+            a->cursorOrigin = 0;
+            a->cursorPhase = 0;
+          }
+        }
+      }
+    }
+
+    ++swept;
+    if (nact)
+      return (nact);
+  }
+  return (0);
 }

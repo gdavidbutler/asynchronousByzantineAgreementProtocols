@@ -113,3 +113,115 @@ yes,"(ready, v)",yes
 no,"(ready, v)",no
 no,"(initial, v)",
 no,"(echo, v)",
+
+# ===========================================================
+# Bracha Phase Re-emitter (BPR)
+# ===========================================================
+#
+# Bracha's correctness proof presumes a reliable point-to-point
+# channel between honest parties.  Over an unreliable datagram
+# network that assumption is not satisfied.  BPR is the smallest
+# rule set that, joined with the six paper rules above, restores
+# eventual delivery by re-emitting the broadcast actions an
+# instance has committed to whenever the application's pump
+# ticks.  BPR replaces the application-layer "ledger + per-peer
+# evidence" mechanism: replay state is intrinsic to Bracha's own
+# committed flags (echoed, rdSent) plus an "am origin" bit that
+# names this peer as the broadcast originator.
+#
+# Justification: end-to-end argument (Saltzer/Reed/Clark 1984;
+# see SRC84.txt).  The "still owed" predicate lives at the Bracha
+# endpoint -- F1_ECHOED, F1_RDSENT, F1_ORIGIN -- so the
+# retransmission function is placed at the endpoint that holds
+# the knowledge needed to implement it correctly.  A separate
+# stubborn-link layer below would have to be told by Bracha when
+# to retire (folding the function back here anyway) and would lack
+# Bracha's information per SRC84 P3(b).
+#
+# Composition.  BPR rules consume the paper outputs as inputs.
+# DTC chains the dispatch: Bracha rules compute first; BPR rules
+# observe Bracha's decisions and the committed-state flags, then
+# emit distinct "replay" outputs.  The chain is one-directional -
+# BPR cannot affect Bracha decisions - so an audit of paper
+# fidelity reads only the paper section above without having to
+# consider any BPR row.
+#
+# Trigger.  The application calls bracha87Fig1Bpr on an instance
+# whenever its own pump cadence advances.  No wall-clock
+# predicate appears anywhere; the application's tick IS the
+# event, so asynchrony is preserved.  The Bpr wrapper enters the
+# merged dispatch with a "kind of message" that cannot fire any
+# paper rule given current committed state (kind=(initial, v)
+# with have echoed=yes leaves Rules 1-3 inhibited and Rules 4-6
+# unmet).  Bracha outputs come back all "no" and the chained BPR
+# rules fire from the committed flags.  In silent periods the
+# application omits the call and the protocol stays silent,
+# which is the principled stance under asynchrony.
+#
+# Discriminator.  bracha87.c selects which outputs to apply by
+# entry point: bracha87Fig1Input applies the paper outputs and
+# discards BPR outputs (replay would be redundant when first-
+# emit fires); bracha87Fig1Bpr applies BPR outputs and discards
+# the paper outputs (which are guaranteed all "no" in its call
+# path).  No discriminator is required inside the dispatch.
+#
+# Saturation.  bracha87Fig1Bpr does NOT short-circuit on
+# "accepted".  Bracha's eventual delivery requires the accepting
+# peer to keep replaying (ready, v) so peers still under the
+# 2t+1 ready threshold can cross it -- the very purpose of
+# replay is helping OTHER peers' progress, not the local
+# peer's.  The application's silence-quorum exit is what
+# eventually frees the instance.
+#
+# Originator (initial, v) replay -- not in this dispatch.
+# A peer that originates a broadcast emits (initial, v) on
+# every Bpr call as long as the origin flag is set, regardless
+# of "have echoed".  The "stop INITIAL replay once we have
+# echoed locally" optimisation is incorrect: in the n = 3t + 1
+# regime, the Rule 2 echo threshold (n+t)/2 + 1 equals the
+# count of honest peers, so any honest peer that missed the
+# bootstrap (initial, v) can leave the cascade one echo short
+# forever -- only the originator can break the deadlock by
+# re-sending.  Symmetric with the "READY replay continues
+# post-accept" rule above (gap 3): both refuse local-state-as-
+# saturation arguments because BPR's purpose is helping OTHER
+# peers, not the local one.  Single-bit guard ("am origin")
+# over a single output with no test-ordering insight; the
+# wrapper bracha87Fig1Bpr emits BRACHA87_INITIAL_ALL as a C
+# early-emit before the dispatch include.  See
+# decisionTableCompiler/README.md "Cross-Domain Bridge Pattern"
+# -- a trivial single-input/single-output guard stays in C;
+# the BPR rules below are the cases that benefit from joint
+# optimisation with the paper rules.
+#
+# Additional outputs introduced by BPR (in this dispatch):
+#   "replay (echo, v)"           { yes, no }
+#   "replay (ready, v)"          { yes, no }
+#
+# No new input value, no new C constant, no change to "kind of
+# message" or its bridge.
+
+# ===== replay (echo, v) =====
+#
+# Replay the committed echo iff Bracha is not firing send (echo,
+# v) on this dispatch and "have echoed" is set.  The committed
+# value is already in the instance state from a prior firing of
+# Rule 1, 2, or 3; BPR does not change it.
+@"replay (echo, v)","send (echo, v)","have echoed"
+no,yes,
+yes,no,yes
+no,no,no
+
+# ===== replay (ready, v) =====
+#
+# Replay the committed ready iff Bracha is not firing send
+# (ready, v) on this dispatch and "have sent ready" is set.  The
+# committed value is already in the instance state from a prior
+# firing of Rule 4 or 5; BPR does not change it.  The accepted
+# flag does NOT gate this rule: an honest peer that accepted
+# early owes its ready to peers still below the 2t+1 threshold,
+# and the whole point of replay is delivering it.
+@"replay (ready, v)","send (ready, v)","have sent ready"
+no,yes,
+yes,no,yes
+no,no,no

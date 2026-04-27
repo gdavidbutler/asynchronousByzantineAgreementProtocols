@@ -221,6 +221,17 @@ fig1Commit(
 }
 
 
+void
+bracha87Fig1Origin(
+  struct bracha87Fig1 *b
+ ,const unsigned char *value
+){
+  if (!b || !value)
+    return;
+  memcpy(F1_VALUE(b), value, F1_VLEN(b));
+  b->flags |= BRACHA87_F1_ORIGIN;
+}
+
 unsigned int
 bracha87Fig1Input(
   struct bracha87Fig1 *b
@@ -240,6 +251,8 @@ bracha87Fig1Input(
   unsigned char sendEcho;
   unsigned char sendReady;
   unsigned char acceptV;
+  unsigned char replayEcho;
+  unsigned char replayReady;
 
   if (!b || !value || !out || from > b->n || (b->flags & BRACHA87_F1_ACCEPTED))
     return (0);
@@ -272,11 +285,18 @@ bracha87Fig1Input(
   ecGtHalfNT    = ec >= (B_N(b) + b->t) / 2 + 1;
   rdGeTPlus1    = rd >= (unsigned int)b->t + 1;
   rdGe2TPlus1   = rd >= 2u * b->t + 1;
-  sendEcho  = 0;
-  sendReady = 0;
-  acceptV   = 0;
+  sendEcho    = 0;
+  sendReady   = 0;
+  acceptV     = 0;
+  replayEcho  = 0;
+  replayReady = 0;
 
 #include "bracha87Fig1.c"
+
+  /* Entry-point discriminator: BPR replay outputs are
+   * exhaustiveness-only on the Input path and discarded. */
+  (void)replayEcho;
+  (void)replayReady;
 
   nout = 0;
   if (sendEcho) {
@@ -300,9 +320,110 @@ const unsigned char *
 bracha87Fig1Value(
   const struct bracha87Fig1 *b
 ){
-  if (!b || !(b->flags & BRACHA87_F1_ECHOED))
+  if (!b || !(b->flags & (BRACHA87_F1_ECHOED | BRACHA87_F1_ORIGIN)))
     return (0);
   return (F1_VALUE(b));
+}
+
+unsigned int
+bracha87Fig1Bpr(
+  struct bracha87Fig1 *b
+ ,unsigned char *out
+){
+  unsigned int nout;
+  unsigned char type;
+  unsigned char haveEchoed;
+  unsigned char haveSentReady;
+  unsigned char ecGtHalfNT;
+  unsigned char rdGeTPlus1;
+  unsigned char rdGe2TPlus1;
+  unsigned char sendEcho;
+  unsigned char sendReady;
+  unsigned char acceptV;
+  unsigned char replayEcho;
+  unsigned char replayReady;
+
+  if (!b || !out)
+    return (0);
+
+  /* Nothing committed yet and not the originator -> nothing to replay. */
+  if (!(b->flags & (BRACHA87_F1_ECHOED | BRACHA87_F1_ORIGIN)))
+    return (0);
+
+  nout = 0;
+
+  /*
+   * Origin-side INITIAL replay: an originator replays
+   * (initial, v) on every Bpr call, whether or not it has
+   * locally echoed.  Stopping at ECHOED would assume the cascade
+   * is self-sustaining via Rule 2 once enough peers have
+   * echoed -- but Rule 2's echo threshold is (n+t)/2+1 and at
+   * the boundary regime n = 3t+1 with t honest peers
+   * occluded by drop or byzantine silence, the threshold is
+   * exactly the count of honest peers.  Any honest peer that
+   * missed the bootstrap INITIAL can leave the cascade one
+   * echo short forever; only the originator can break the
+   * deadlock by re-sending INITIAL.
+   *
+   * The "always replay INITIAL when ORIGIN" rule is symmetric
+   * with the "always replay READY when RDSENT" rule in the
+   * dispatch (gap 3): both reject local-state-as-saturation
+   * arguments because the load-bearing case is helping
+   * OTHER peers, not the local one.  Application's silence-
+   * quorum exit retires the instance.
+   *
+   * Single-bit guard, captured in C rather than as a DTC
+   * sub-table (see decisionTableCompiler/README.md
+   * "Cross-Domain Bridge Pattern" -- a single boundary-input
+   * gate with no ordering insight stays in C).
+   */
+  if (b->flags & BRACHA87_F1_ORIGIN)
+    out[nout++] = BRACHA87_INITIAL_ALL;
+
+  /*
+   * Echo / ready replay: chain on the merged paper+BPR
+   * dispatch.  Bpr enters with a "kind of message" that cannot
+   * fire any paper rule given current committed state -- type =
+   * INITIAL with have echoed = yes leaves Rules 1-3 inhibited
+   * (need !echoed) and Rules 4-6 unmet (need kind = (echo, v)
+   * or (ready, v)).  Bracha outputs come back all "no" and the
+   * chained BPR rules fire from "send X = no AND have-X-state =
+   * yes".  Threshold predicates are immaterial to the chained
+   * BPR rules in this state; 0 suffices.
+   *
+   * In the origin-but-not-echoed branch (above), the INITIAL
+   * replay is already emitted; the dispatch is skipped because
+   * ECHOED clear means the BPR echo / ready rules would emit
+   * no-replay regardless of their other inputs (their guards
+   * require haveEchoed = yes / haveSentReady = yes).
+   */
+  if (b->flags & BRACHA87_F1_ECHOED) {
+    type          = BRACHA87_INITIAL;
+    haveEchoed    = 1;
+    haveSentReady = (b->flags & BRACHA87_F1_RDSENT) ? 1 : 0;
+    ecGtHalfNT    = 0;
+    rdGeTPlus1    = 0;
+    rdGe2TPlus1   = 0;
+    sendEcho    = 0;
+    sendReady   = 0;
+    acceptV     = 0;
+    replayEcho  = 0;
+    replayReady = 0;
+
+#include "bracha87Fig1.c"
+
+    /* Bracha outputs are guaranteed 0 by the type/state passed;
+     * Bpr applies BPR replay outputs only. */
+    (void)sendEcho;
+    (void)sendReady;
+    (void)acceptV;
+
+    if (replayEcho)
+      out[nout++] = BRACHA87_ECHO_ALL;
+    if (replayReady)
+      out[nout++] = BRACHA87_READY_ALL;
+  }
+  return (nout);
 }
 
 /*************************************************************************/

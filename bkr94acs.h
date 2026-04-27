@@ -93,11 +93,12 @@
 /*  Caller sends the described messages on the network.                  */
 /*************************************************************************/
 
-#define BKR94ACS_ACT_PROP_ECHO   1  /* send proposal echo to all for .origin */
-#define BKR94ACS_ACT_PROP_READY  2  /* send proposal ready to all for .origin */
-#define BKR94ACS_ACT_CON_SEND    3  /* send consensus msg: .origin .round .conType .conValue */
-#define BKR94ACS_ACT_BA_DECIDED  4  /* BA for .origin decided .conValue */
-#define BKR94ACS_ACT_COMPLETE    5  /* all N BAs decided; common subset final */
+#define BKR94ACS_ACT_PROP_INITIAL 6  /* send proposal initial to all for .origin (BPR) */
+#define BKR94ACS_ACT_PROP_ECHO    1  /* send proposal echo to all for .origin */
+#define BKR94ACS_ACT_PROP_READY   2  /* send proposal ready to all for .origin */
+#define BKR94ACS_ACT_CON_SEND     3  /* send consensus msg: .origin .round .conType .conValue */
+#define BKR94ACS_ACT_BA_DECIDED   4  /* BA for .origin decided .conValue */
+#define BKR94ACS_ACT_COMPLETE     5  /* all N BAs decided; common subset final */
 
 struct bkr94acsAct {
   unsigned char act;          /* BKR94ACS_ACT_* */
@@ -123,13 +124,30 @@ struct bkr94acs {
   unsigned char threshold;  /* 1 iff BKR94 Step 2 has fired (vote-0 fanout done) */
   unsigned char complete;   /* 1 iff all N BAs decided (Step 3 complete) */
   /*
+   * BPR pump cursor.  bkr94acsPump walks (cursorPhase,
+   * cursorOrigin, cursorRound, cursorBroadcaster) forward across
+   * calls, emitting one Fig1 instance worth of replays per call
+   * (or 0 if a full sweep finds nothing committed -- the
+   * application's "idle" signal).  Cursor advances until it
+   * either finds replays to emit or wraps back to where it
+   * started.
+   *
+   *   cursorPhase: 0 = proposal Fig1s, 1 = consensus Fig1s
+   *   cursorOrigin / cursorRound / cursorBroadcaster:
+   *     position within the current phase's instance space
+   */
+  unsigned char cursorPhase;
+  unsigned char cursorOrigin;
+  unsigned char cursorRound;
+  unsigned char cursorBroadcaster;
+  /*
    * Pad data[] to a pointer-aligned offset so Fig4 instances carved
    * out of data[] are correctly aligned for their function-pointer
-   * fields. With 9 leading chars we need 7 bytes of pad to reach
-   * offset 16, which is a multiple of sizeof (void *) on all
-   * common 32- and 64-bit ABIs.
+   * fields.  Header is now 13 bytes; pad 3 bytes to reach offset 16,
+   * a multiple of sizeof (void *) on all common 32- and 64-bit
+   * ABIs.
    */
-  unsigned char pad[7];
+  unsigned char pad[3];
   unsigned char data[1];    /* variable: see bkr94acsSz */
 };
 
@@ -200,6 +218,18 @@ bkr94acsInit(
  */
 #define BKR94ACS_MAX_ACTS(n, maxPhases) \
   ((unsigned int)(maxPhases) * 3 + (unsigned int)(n) + 5)
+
+/*
+ * Maximum output actions from a single bkr94acsPump call.
+ *
+ * The cursor visits one Fig1 instance per pump call.  Per-Fig1
+ * Bpr emits at most 3 actions (INITIAL_ALL + ECHO_ALL +
+ * READY_ALL).  Pump tags each as a struct bkr94acsAct (proposal
+ * or consensus, with origin / round / broadcaster /
+ * conType filled by the cursor position), so the per-call
+ * bound is 3.
+ */
+#define BKR94ACS_PUMP_MAX_ACTS  3
 
 /*
  * Process a proposal broadcast message (BKR94ACS_CLS_PROPOSAL).
@@ -280,12 +310,82 @@ bkr94acsSubset(
 
 /*
  * Query: get the accepted proposal value for an origin.
- * Returns pointer to the vLen + 1 byte value, or 0 if not yet accepted.
+ * Returns pointer to the vLen + 1 byte value, or 0 if not yet
+ * accepted (or, for self-origin, not yet proposed).
  */
 const unsigned char *
 bkr94acsProposalValue(
   const struct bkr94acs *
  ,unsigned char            /* origin */
+);
+
+/*
+ * Submit this peer's proposal value.
+ *
+ * Marks the local proposal Fig1 (origin = self) as the broadcast
+ * originator and stores the value to be broadcast.  Returns one
+ * action (BKR94ACS_ACT_PROP_INITIAL with origin = self) for the
+ * caller to broadcast immediately.  Thereafter bkr94acsPump
+ * replays BKR94ACS_ACT_PROP_INITIAL on every tick until the
+ * originator's own loopback (or echo / ready cascade derived
+ * from peers' messages) sets ECHOED on the proposal Fig1, after
+ * which the proposal Fig1's own BPR carries the value via echo
+ * / ready replays.
+ *
+ * Caller reads the value back via bkr94acsProposalValue(self).
+ *
+ * Returns 0 if a is null.  Idempotent on the value pointer:
+ * re-calling overwrites the stored value.
+ */
+unsigned int
+bkr94acsPropose(
+  struct bkr94acs *
+ ,const unsigned char *    /* value: vLen + 1 bytes */
+ ,struct bkr94acsAct *     /* out: room for 1 entry */
+);
+
+/*
+ * Bracha Phase Re-emitter pump tick.
+ *
+ * End-to-end argument applied to BKR94 ACS (Saltzer/Reed/Clark
+ * 1984; see SRC84.txt and the BPR section of README.md): the
+ * "still owed" predicate combines Bracha's committed flags with
+ * this layer's per-origin BA-decided state, all of which live
+ * at the BKR endpoint.
+ *
+ * The application calls bkr94acsPump on its own cadence (no
+ * wall-clock predicate inside; the call IS the event).  Pump
+ * advances an internal cursor through the (origin, [round,
+ * broadcaster]) Fig1 instance space, finds the next instance
+ * with replay output, and emits that instance's actions tagged
+ * as struct bkr94acsAct.  Returns the number of actions
+ * written to out[] (0..BKR94ACS_PUMP_MAX_ACTS).
+ *
+ * Returns 0 only when a full sweep of the cursor finds no
+ * committed instance with anything to replay -- the
+ * application's idle signal at the ACS layer.  The application
+ * uses 0-returns to gate its silence-quorum exit.
+ *
+ * Replaces the application-layer ledger entirely.  Per-record
+ * destination masks, per-peer evidence tracking, and pump
+ * scheduling over an external record list are not needed; the
+ * Fig1 committed-state flags plus the BA-decision gate (see
+ * bkr94acs.dtc BPR section) are the entire replay state.
+ *
+ * Out actions:
+ *   BKR94ACS_ACT_PROP_INITIAL/ECHO/READY for proposal Fig1
+ *     replays (.origin = which proposal).
+ *   BKR94ACS_ACT_CON_SEND for consensus Fig1 replays
+ *     (.origin = which BA, .round, .broadcaster, .conType =
+ *      INITIAL/ECHO/READY, .conValue read from Fig1Value).
+ *
+ * Caller provides out[] with room for BKR94ACS_PUMP_MAX_ACTS
+ * entries.
+ */
+unsigned int
+bkr94acsPump(
+  struct bkr94acs *
+ ,struct bkr94acsAct *     /* out: room for BKR94ACS_PUMP_MAX_ACTS */
 );
 
 #endif /* BKR94ACS_H */

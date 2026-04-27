@@ -114,3 +114,38 @@ yes,"BA_j outputs 0",yes
 no,"BA_j outputs 1",no
 no,"BA_j outputs 0",no
 no,"Q(j) = 1",
+
+# Bracha Phase Re-emitter (BPR) per-origin pump gate -- not in
+# this dispatch.
+#
+# Justification for BPR's placement at this layer: end-to-end
+# argument (Saltzer/Reed/Clark 1984; see SRC84.txt).  The
+# "still owed" predicate for proposal-Fig1 replay combines
+# Bracha's committed flags with this layer's per-origin
+# BA-decided state (undecided / decided 0 / decided 1); both
+# live at the BKR endpoint, so the retire-or-pump decision is
+# made here rather than below.
+#
+# bkr94acsPump walks per-origin proposal Fig1 instances and
+# decides whether to emit replays based on the local BA
+# decision state ({ undecided, decided 0, decided 1 }):
+#   - undecided  -> pump  (Q(j)=1 may still be learned by
+#                          other honest peers; their Fig1(j)
+#                          needs our echoes / readys)
+#   - decided 0  -> skip  (j excluded from SubSet; Step 2's
+#                          fanout already conveyed our vote)
+#   - decided 1  -> pump  (Bracha post-decide continuation:
+#                          peers that have not yet observed
+#                          Fig1 ACCEPT for j still need our
+#                          echoes / readys, else their BA_j
+#                          stays undecided and may go to 0
+#                          via Step 2, violating cross-process
+#                          agreement on SubSet)
+#
+# Three-rule single-input single-output guard with no
+# interaction with the Rules 1-3 dispatch and no test ordering
+# to optimise; captured in C as a switch over the BA decision
+# byte rather than a sub-table (same call as the Fig1 origin
+# INITIAL replay gate -- see bracha87Fig1.dtc BPR section).
+# The pitfall #1 (post-decide continuation) reasoning lives in
+# the comment at the bkr94acsPump cursor site.

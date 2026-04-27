@@ -3416,6 +3416,415 @@ testFig1ValueSwitch(
 }
 
 /*
+ * BPR (Bracha Phase Re-emitter) unit tests.
+ *
+ * White-box tests of the bracha87Fig1Bpr entry point against the
+ * contract in bracha87Fig1.dtc's BPR section: dispatch over the
+ * (reconsider) discriminator and the existing committed-state
+ * flags only; outputs reuse BRACHA87_ECHO_ALL / READY_ALL with
+ * no commit and no flag change.
+ *
+ * Configuration: n=4, t=1.  Echo threshold (n+t)/2+1 = 3, Rule 5
+ * ready threshold t+1 = 2, accept threshold 2t+1 = 3.
+ */
+static void
+testFig1Bpr(
+  void
+){
+  struct bracha87Fig1 *b;
+  unsigned long sz;
+  unsigned char out[3];
+  unsigned int nout;
+  unsigned char val[VLEN];
+  unsigned char committed[VLEN];
+  unsigned int i;
+
+  printf("\n  Fig1 BPR (Bracha Phase Re-emitter) tests:\n");
+
+  memcpy(val, "AAAA", VLEN);
+
+  sz = bracha87Fig1Sz(3, VLEN - 1);
+
+  /*
+   * Fresh instance: nothing committed.  BPR has no echo or ready
+   * to replay; returns 0 actions.  Repeat calls are idempotent.
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR fresh: 0 actions", nout == 0);
+  check("BPR fresh: ECHOED clear", !(b->flags & BRACHA87_F1_ECHOED));
+  check("BPR fresh: RDSENT clear", !(b->flags & BRACHA87_F1_RDSENT));
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR fresh idempotent: 0 actions", nout == 0);
+  printf("    fresh                : %u actions\n", nout);
+  free(b);
+
+  /*
+   * After Rule 1 (INITIAL -> ECHOED): BPR replays the echo.
+   * One action, ECHO_ALL.  Repeat calls return the same.
+   * State flags unchanged across BPR calls.
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  check("BPR after Rule 1: ECHOED set", (b->flags & BRACHA87_F1_ECHOED));
+  check("BPR after Rule 1: RDSENT clear", !(b->flags & BRACHA87_F1_RDSENT));
+
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR echoed: 1 action", nout == 1);
+  check("BPR echoed: action is ECHO_ALL", out[0] == BRACHA87_ECHO_ALL);
+  check("BPR echoed: ECHOED still set", (b->flags & BRACHA87_F1_ECHOED));
+  check("BPR echoed: RDSENT still clear", !(b->flags & BRACHA87_F1_RDSENT));
+
+  /* Idempotency under repeat */
+  for (i = 0; i < 5; ++i) {
+    nout = bracha87Fig1Bpr(b, out);
+    check("BPR echoed: idempotent count", nout == 1);
+    check("BPR echoed: idempotent action", out[0] == BRACHA87_ECHO_ALL);
+  }
+  printf("    after Rule 1         : %u action(s) per call, 6 calls all ECHO_ALL\n",
+         (unsigned)1);
+  free(b);
+
+  /*
+   * After Rule 5 fires (echoed + t+1=2 readys -> RDSENT): BPR
+   * replays both echo and ready.  Two actions in order: ECHO_ALL
+   * then READY_ALL.
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
+  check("BPR after Rule 5: ECHOED set", (b->flags & BRACHA87_F1_ECHOED));
+  check("BPR after Rule 5: RDSENT set", (b->flags & BRACHA87_F1_RDSENT));
+  check("BPR after Rule 5: not yet accepted",
+        !(b->flags & BRACHA87_F1_ACCEPTED));
+
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR rdSent: 2 actions", nout == 2);
+  check("BPR rdSent: first ECHO_ALL", nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
+  check("BPR rdSent: second READY_ALL", nout >= 2 && out[1] == BRACHA87_READY_ALL);
+
+  /* Idempotency under repeat */
+  for (i = 0; i < 5; ++i) {
+    nout = bracha87Fig1Bpr(b, out);
+    check("BPR rdSent: idempotent count", nout == 2);
+    check("BPR rdSent: idempotent ECHO_ALL", out[0] == BRACHA87_ECHO_ALL);
+    check("BPR rdSent: idempotent READY_ALL", out[1] == BRACHA87_READY_ALL);
+  }
+  printf("    after Rule 5         : %u actions per call, 6 calls all ECHO+READY\n",
+         (unsigned)2);
+  free(b);
+
+  /*
+   * After Rule 4 fires (echoed + (n+t)/2+1 = 3 echoes -> RDSENT
+   * with no readys yet): BPR replays both committed actions.
+   * This path stresses DTC's leaf merger - the BPR rule must
+   * keep type discrimination at (RDSENT=1, rdGeTPlus1=no) where
+   * the paper rules produce all-zero outputs.
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 3, val, out);
+  check("BPR after Rule 4: ECHOED set", (b->flags & BRACHA87_F1_ECHOED));
+  check("BPR after Rule 4: RDSENT set", (b->flags & BRACHA87_F1_RDSENT));
+  check("BPR after Rule 4: not yet accepted",
+        !(b->flags & BRACHA87_F1_ACCEPTED));
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR rule4 path: 2 actions", nout == 2);
+  check("BPR rule4 path: ECHO_ALL first", nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
+  check("BPR rule4 path: READY_ALL second", nout >= 2 && out[1] == BRACHA87_READY_ALL);
+  printf("    after Rule 4 (no readys): %u actions, ECHO+READY\n", nout);
+  free(b);
+
+  /*
+   * After Rule 6 fires (2t+1 = 3 readys -> ACCEPTED): BPR keeps
+   * replaying ECHO + READY.  Bracha eventual delivery (Lemma 4)
+   * requires the accepting peer to keep helping peers still
+   * below the 2t+1 threshold cross it; replay is the mechanism
+   * for that under fair-loss.  An accepted-implies-silent gate
+   * would strand slower peers (gap 3 of the Apr-26 BPR review).
+   * The application's silence-quorum exit retires the instance.
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);
+  check("BPR after Rule 6: ACCEPTED set",
+        (b->flags & BRACHA87_F1_ACCEPTED));
+
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR post-accept: 2 actions (helping slow peers)", nout == 2);
+  check("BPR post-accept: ECHO_ALL first",
+        nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
+  check("BPR post-accept: READY_ALL second",
+        nout >= 2 && out[1] == BRACHA87_READY_ALL);
+  for (i = 0; i < 3; ++i) {
+    nout = bracha87Fig1Bpr(b, out);
+    check("BPR post-accept: idempotent count", nout == 2);
+    check("BPR post-accept: idempotent ECHO_ALL", out[0] == BRACHA87_ECHO_ALL);
+    check("BPR post-accept: idempotent READY_ALL", out[1] == BRACHA87_READY_ALL);
+  }
+  printf("    after Rule 6         : %u actions (post-accept ECHO+READY replay)\n", nout);
+  free(b);
+
+  /*
+   * Value preservation across BPR calls.  Drive to RDSENT, then
+   * call BPR repeatedly.  bracha87Fig1Value content must be
+   * byte-identical to the originally committed value - BPR must
+   * not re-commit, must not mutate the value buffer.
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
+  memcpy(committed, bracha87Fig1Value(b), VLEN);
+  for (i = 0; i < 10; ++i)
+    bracha87Fig1Bpr(b, out);
+  check("BPR value preservation: committed value intact",
+        memcmp(bracha87Fig1Value(b), committed, VLEN) == 0);
+  check("BPR value preservation: matches input",
+        memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
+  printf("    value preservation   : 10 BPR calls, value byte-identical\n");
+  free(b);
+
+  /*
+   * Cross-talk discipline: bracha87Fig1Input now also computes
+   * the BPR replay outputs (the merged dispatch produces all
+   * five), but the wrapper discards them on the Input path so
+   * Bracha's emission count is unaffected.  Verified directly
+   * here for two cases: (a) Input call that fires a paper rule,
+   * Bracha's action count is exactly the paper count - no stray
+   * replay piggy-backed; (b) Input call after committed state
+   * exists but no paper rule fires, BPR's would-be replay is
+   * silently discarded - Input returns 0 actions.
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  /* (a) Rule 1 fires alone: pre-state echoed=0, BPR replay is
+   * inhibited by its chained input "send (echo, v) = yes" - the
+   * dispatch produces sendEcho=yes and replayEcho=no together. */
+  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  check("BPR cross-talk: Rule 1 emits exactly 1 action",
+        nout == 1 && out[0] == BRACHA87_ECHO_ALL);
+  /* (b) Subsequent ECHO from peer 1 with no threshold met: no
+   * Bracha rule fires.  BPR replay would say yes (echoed=1,
+   * sendEcho=no), but the Input wrapper discards it. */
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 1, val, out);
+  check("BPR cross-talk: non-firing Input emits 0 actions",
+        nout == 0);
+  printf("    cross-talk discard   : Input emits paper count, BPR replay ignored\n");
+  free(b);
+
+  /*
+   * Interleaved Input + BPR: insert BPR calls between every
+   * message arrival.  Bracha's rules must still fire on the same
+   * messages and accept must occur at the same point as a pure-
+   * Input run.  This pins the property that BPR rules are silent
+   * (don't fire send/ready/accept) when entered via Input - i.e.
+   * no cross-talk between the two entry points.
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+
+  bracha87Fig1Bpr(b, out);     /* fresh */
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);  /* Rule 1 */
+  bracha87Fig1Bpr(b, out);     /* echoed */
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
+  bracha87Fig1Bpr(b, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);   /* Rule 5 */
+  check("BPR interleaved: RDSENT after 2nd READY",
+        (b->flags & BRACHA87_F1_RDSENT));
+  bracha87Fig1Bpr(b, out);     /* rdSent */
+  bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);   /* Rule 6 */
+  check("BPR interleaved: ACCEPTED after 3rd READY",
+        (b->flags & BRACHA87_F1_ACCEPTED));
+  check("BPR interleaved: value matches input",
+        memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR interleaved: post-accept BPR returns 2 (ECHO+READY)",
+        nout == 2);
+  printf("    interleaved          : Input+BPR sequence, accept at expected point\n");
+  free(b);
+
+  /*
+   * Originator INITIAL replay (gap 4 of the Apr-26 BPR review).
+   *
+   * bracha87Fig1Origin sets BRACHA87_F1_ORIGIN and stores the
+   * value to be broadcast.  Until Rule 1, 2, or 3 sets ECHOED
+   * (loopback or echo / ready cascade), bracha87Fig1Bpr emits
+   * BRACHA87_INITIAL_ALL on every call so the originator's
+   * (initial, v) survives loss to all other honest peers.
+   *
+   * Once ECHOED is set the INITIAL replay drops; ECHO replay
+   * carries the value forward (Rule 2 lets any peer with > (n+t)/2
+   * echoes echo on its own, so origin's INITIAL is redundant).
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Origin(b, val);
+  check("BPR origin: ORIGIN flag set",
+        (b->flags & BRACHA87_F1_ORIGIN));
+  check("BPR origin: ECHOED clear pre-loopback",
+        !(b->flags & BRACHA87_F1_ECHOED));
+  check("BPR origin: Value() returns committed value",
+        bracha87Fig1Value(b)
+        && memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
+
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR origin pre-loopback: 1 action", nout == 1);
+  check("BPR origin pre-loopback: action is INITIAL_ALL",
+        out[0] == BRACHA87_INITIAL_ALL);
+
+  /* Idempotency under repeat */
+  for (i = 0; i < 5; ++i) {
+    nout = bracha87Fig1Bpr(b, out);
+    check("BPR origin pre-loopback: idempotent count", nout == 1);
+    check("BPR origin pre-loopback: idempotent INITIAL_ALL",
+          out[0] == BRACHA87_INITIAL_ALL);
+  }
+
+  /* Now self-feed (loopback): Rule 1 fires, ECHOED gets set.
+   * INITIAL replay continues (BPR rule, not gated by ECHOED) AND
+   * ECHO replay starts. */
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  check("BPR origin post-loopback: ECHOED set",
+        (b->flags & BRACHA87_F1_ECHOED));
+  check("BPR origin post-loopback: ORIGIN still set",
+        (b->flags & BRACHA87_F1_ORIGIN));
+
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR origin post-loopback: 2 actions (INITIAL+ECHO replay)",
+        nout == 2);
+  check("BPR origin post-loopback: INITIAL_ALL first",
+        nout >= 1 && out[0] == BRACHA87_INITIAL_ALL);
+  check("BPR origin post-loopback: ECHO_ALL second",
+        nout >= 2 && out[1] == BRACHA87_ECHO_ALL);
+
+  printf("    origin INITIAL replay: pre-loopback INITIAL_ALL, post-loopback INITIAL+ECHO\n");
+  free(b);
+
+  /*
+   * Origin + advanced-state matrix.  An originator's Fig1 can
+   * progress through every committed-state combination (echoed
+   * via Rule 1, rdSent via Rule 4 / 5, accepted via Rule 6) just
+   * like a non-origin Fig1.  Verify Bpr replay outputs at each
+   * combination match the non-origin replay rules: once ECHOED,
+   * INITIAL replay stops; ECHO replay takes over; RDSENT adds
+   * READY replay; ACCEPTED keeps both (gap 3).
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Origin(b, val);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);  /* Rule 1 -> ECHOED */
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);    /* Rule 5 -> RDSENT */
+  check("BPR origin+rdSent: ORIGIN set",
+        (b->flags & BRACHA87_F1_ORIGIN));
+  check("BPR origin+rdSent: ECHOED set",
+        (b->flags & BRACHA87_F1_ECHOED));
+  check("BPR origin+rdSent: RDSENT set",
+        (b->flags & BRACHA87_F1_RDSENT));
+  check("BPR origin+rdSent: not yet accepted",
+        !(b->flags & BRACHA87_F1_ACCEPTED));
+
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR origin+rdSent: 3 actions (INITIAL+ECHO+READY)", nout == 3);
+  check("BPR origin+rdSent: INITIAL_ALL first",
+        nout >= 1 && out[0] == BRACHA87_INITIAL_ALL);
+  check("BPR origin+rdSent: ECHO_ALL second",
+        nout >= 2 && out[1] == BRACHA87_ECHO_ALL);
+  check("BPR origin+rdSent: READY_ALL third",
+        nout >= 3 && out[2] == BRACHA87_READY_ALL);
+  free(b);
+
+  /* Origin + ACCEPTED (Rule 6 fires).  Same outputs: ECHO+READY,
+   * no INITIAL.  Asserts gap 3 fix applies symmetrically to
+   * originator instances. */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Origin(b, val);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);  /* Rule 1 -> ECHOED */
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);    /* Rule 5 -> RDSENT */
+  bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);    /* Rule 6 -> ACCEPTED */
+  check("BPR origin+accepted: ORIGIN set",
+        (b->flags & BRACHA87_F1_ORIGIN));
+  check("BPR origin+accepted: ACCEPTED set",
+        (b->flags & BRACHA87_F1_ACCEPTED));
+
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR origin+accepted: 3 actions (INITIAL+ECHO+READY)", nout == 3);
+  check("BPR origin+accepted: INITIAL_ALL first",
+        nout >= 1 && out[0] == BRACHA87_INITIAL_ALL);
+  check("BPR origin+accepted: ECHO_ALL second",
+        nout >= 2 && out[1] == BRACHA87_ECHO_ALL);
+  check("BPR origin+accepted: READY_ALL third",
+        nout >= 3 && out[2] == BRACHA87_READY_ALL);
+  for (i = 0; i < 5; ++i) {
+    nout = bracha87Fig1Bpr(b, out);
+    check("BPR origin+accepted: idempotent count", nout == 3);
+    check("BPR origin+accepted: idempotent INITIAL_ALL",
+          out[0] == BRACHA87_INITIAL_ALL);
+    check("BPR origin+accepted: idempotent ECHO_ALL",
+          out[1] == BRACHA87_ECHO_ALL);
+    check("BPR origin+accepted: idempotent READY_ALL",
+          out[2] == BRACHA87_READY_ALL);
+  }
+  printf("    origin state matrix  : ORIGIN+RDSENT and ORIGIN+ACCEPTED emit INITIAL+ECHO+READY\n");
+  free(b);
+
+  /*
+   * Defensive: NULL pointer guards and re-Origin idempotency.
+   * Origin called twice with different values is "user error
+   * but defined" -- the second call overwrites the stored value
+   * and clears no flags.  This mirrors the API doc and guards
+   * the case where an application Init+Origin sequence is
+   * re-driven (e.g. epoch restart).
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+
+  bracha87Fig1Origin(0, val);  /* NULL b -> no crash */
+  bracha87Fig1Origin(b, 0);    /* NULL value -> no crash, no flag set */
+  check("BPR origin NULL value: ORIGIN flag NOT set",
+        !(b->flags & BRACHA87_F1_ORIGIN));
+
+  /* Real Origin call works */
+  bracha87Fig1Origin(b, val);
+  check("BPR origin defensive: ORIGIN set after real call",
+        (b->flags & BRACHA87_F1_ORIGIN));
+
+  /* Re-Origin overwrites value */
+  {
+    unsigned char val2[VLEN];
+    memcpy(val2, "BBBB", VLEN);
+    bracha87Fig1Origin(b, val2);
+    check("BPR origin re-call: value overwritten",
+          memcmp(bracha87Fig1Value(b), val2, VLEN) == 0);
+  }
+
+  /* NULL out to Bpr -> 0 actions, no crash */
+  nout = bracha87Fig1Bpr(b, 0);
+  check("BPR NULL out: 0 actions", nout == 0);
+
+  /* NULL b to Bpr -> 0 actions, no crash */
+  nout = bracha87Fig1Bpr(0, out);
+  check("BPR NULL b: 0 actions", nout == 0);
+
+  printf("    defensive guards     : NULL ptrs handled, re-Origin overwrites value\n");
+  free(b);
+}
+
+/*
  * Test echo threshold with even n+t.
  *
  * The echo quorum must be strictly greater than (n+t)/2 to guarantee
@@ -3834,6 +4243,7 @@ main(
   testByzantineComposed();
   testPostDecideMultiPhase();
   testFig1ValueSwitch();
+  testFig1Bpr();
 
   printf("\n===================\n");
   if (Fail)

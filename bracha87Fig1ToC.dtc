@@ -53,3 +53,25 @@ no,0
 @~acceptV,"accept(v)"
 1,yes
 0,no
+
+# ===========================================================
+# Bracha Phase Re-emitter (BPR)
+# ===========================================================
+#
+# Bridge entries for the BPR additions in bracha87Fig1.dtc.  Same
+# binding style as above: '~'-prefixed C identifiers on the left,
+# paper-vocabulary names on the right.
+#
+# One new boundary input ("am origin"; the BPR rules need to
+# distinguish the broadcast originator from a passive receiver).
+# Three replay outputs.  The wire encoding for replayed messages
+# re-uses BRACHA87_INITIAL / BRACHA87_ECHO / BRACHA87_READY, so
+# only the per-action local boolean output needs a bridge.
+
+@~replayEcho,"replay (echo, v)"
+1,yes
+0,no
+
+@~replayReady,"replay (ready, v)"
+1,yes
+0,no

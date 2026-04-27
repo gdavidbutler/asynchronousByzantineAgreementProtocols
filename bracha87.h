@@ -89,14 +89,16 @@
 #define BRACHA87_READY   2
 
 /* Figure 1 output actions */
-#define BRACHA87_ECHO_ALL  1  /* send echo(v) to all peers */
-#define BRACHA87_READY_ALL 2  /* send ready(v) to all peers */
-#define BRACHA87_ACCEPT    3  /* accept(v) */
+#define BRACHA87_INITIAL_ALL 4  /* send (initial, v) to all peers (BPR) */
+#define BRACHA87_ECHO_ALL    1  /* send echo(v) to all peers */
+#define BRACHA87_READY_ALL   2  /* send ready(v) to all peers */
+#define BRACHA87_ACCEPT      3  /* accept(v) */
 
 /* Figure 1 state flags (bitmap) */
 #define BRACHA87_F1_ECHOED   0x01
 #define BRACHA87_F1_RDSENT   0x02
 #define BRACHA87_F1_ACCEPTED 0x04
+#define BRACHA87_F1_ORIGIN   0x08  /* this peer is the broadcast originator */
 
 /*
  * Figure 1 state.
@@ -146,6 +148,36 @@ bracha87Fig1Init(
 );
 
 /*
+ * Mark this Fig1 instance as the broadcast originator and store
+ * the value to be broadcast.  Sets BRACHA87_F1_ORIGIN; copies
+ * value into the committed-value slot so bracha87Fig1Value
+ * returns it (without setting BRACHA87_F1_ECHOED -- Rule 1 still
+ * fires from the receipt of (initial, v) via bracha87Fig1Input).
+ *
+ * BPR replays BRACHA87_INITIAL_ALL on every bracha87Fig1Bpr
+ * call as long as ORIGIN is set, regardless of ECHOED state.
+ * Stopping INITIAL replay at "we ECHOED locally" leaves a
+ * stall-able boundary case: in the n = 3t + 1 regime, the
+ * (n+t)/2+1 echo threshold equals the count of honest peers,
+ * so any honest peer that missed the bootstrap INITIAL can
+ * leave the cascade one echo short forever.  Symmetric with
+ * the "READY replay continues post-accept" rule (gap 3 above)
+ * -- both refuse local-state-as-saturation arguments because
+ * BPR's purpose is helping OTHER peers, not the local one.
+ *
+ * Caller emits BRACHA87_INITIAL_ALL once at origin time and
+ * relies on BPR thereafter.
+ *
+ * Idempotent: re-calling overwrites the stored value.  The
+ * intended use is one call at proposal time.
+ */
+void
+bracha87Fig1Origin(
+  struct bracha87Fig1 *
+ ,const unsigned char *    /* value: vLen + 1 bytes */
+);
+
+/*
  * Process one incoming message. Returns number of actions (0..3).
  * Actions written to out[] in order (echo, ready, accept).
  * Caller provides out[] with room for 3 entries.
@@ -163,10 +195,61 @@ bracha87Fig1Input(
  ,unsigned char *          /* out: actions, room for 3 */
 );
 
-/* Committed value (valid after echoed, guaranteed valid after accept) */
+/*
+ * Committed value.
+ *
+ * Returns non-null when either:
+ *   - this instance is the originator (BRACHA87_F1_ORIGIN set via
+ *     bracha87Fig1Origin), or
+ *   - Rule 1, 2, or 3 has fired (BRACHA87_F1_ECHOED set).
+ *
+ * Originator-only state returns the value supplied at
+ * bracha87Fig1Origin so BPR can re-broadcast it before any
+ * loopback or echo-cascade has set ECHOED.
+ */
 const unsigned char *
 bracha87Fig1Value(
   const struct bracha87Fig1 *
+);
+
+/*
+ * BPR - Bracha Phase Re-emitter.
+ *
+ * End-to-end argument applied to Bracha (Saltzer/Reed/Clark
+ * 1984; see SRC84.txt and the BPR section of README.md): the
+ * "still owed" predicate lives at the Bracha endpoint, so
+ * retransmission is placed here.
+ *
+ * Re-emit the broadcast actions this instance has committed to
+ * (initial if origin and not yet echoed, echo if echoed, ready
+ * if rdSent) so eventual delivery holds under fair-loss without
+ * an application-layer ledger.  Returns the number of actions
+ * (0..3) for the caller to broadcast.
+ *
+ * Reactive: rules fire only when called.  No wall-clock predicate
+ * appears anywhere; the application's pump tick IS the event, so
+ * asynchrony is preserved.  The rate of pump calls bounds replay
+ * volume.
+ *
+ * Does NOT short-circuit on accepted: an honest peer that has
+ * accepted owes its (ready, v) to peers still below the 2t+1
+ * threshold, and replay is the only mechanism Bracha provides
+ * for getting it there under loss.  The application's silence-
+ * quorum exit is what eventually retires the instance.
+ *
+ * Returns 0 only when there is nothing committed to replay
+ * (a non-origin instance that has not echoed -- the natural
+ * "idle" signal at the Fig1 level).
+ *
+ * Out actions reuse BRACHA87_INITIAL_ALL / BRACHA87_ECHO_ALL /
+ * BRACHA87_READY_ALL; the committed value is read via
+ * bracha87Fig1Value, same as after Input.  Order of actions in
+ * out[]: initial, echo, ready.
+ */
+unsigned int
+bracha87Fig1Bpr(
+  struct bracha87Fig1 *
+ ,unsigned char *          /* out: actions, room for 3 */
 );
 
 /*************************************************************************/

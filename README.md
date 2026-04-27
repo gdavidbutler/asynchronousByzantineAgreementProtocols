@@ -28,15 +28,15 @@ The paper's proofs depend on three assumptions about the communication system (S
 
 > "We assume a reliable message system in which no messages are lost or generated. Each process can directly send messages to any other process, and can identify the sender of every message it receives."
 
-These assumptions are not optional — they are load-bearing requirements of every lemma and theorem in the paper. This library is a pure state machine with no I/O. **The caller is responsible for building a transport layer that satisfies all three properties:**
+These assumptions are not optional — they are load-bearing requirements of every lemma and theorem in the paper. This library is a pure state machine with no I/O. **The caller is responsible for building a transport layer that satisfies them:**
 
-1. **Reliable delivery.** Every message sent between correct processes must eventually arrive. The protocol is asynchronous (no timing assumptions), but it requires liveness: messages cannot be silently dropped. In practice this means retransmission, forward error correction, etc.
+1. **Eventual delivery under fair-loss.** Every message sent between correct processes must eventually arrive — but messages may be silently dropped any finite number of times in transit. The Bracha Phase Re-emitter (BPR, see below) closes the gap from "fair-loss point-to-point" to "reliable delivery" intrinsically, so the transport need not provide retransmission of its own; the caller's pump tick is what drives BPR's replays. Per-message reliability is no longer the transport's job.
 
 2. **No message fabrication.** The transport must not generate messages that were never sent. A Byzantine process may send arbitrary content, but the transport itself must not invent messages. In practice this means authenticated channels.
 
 3. **Sender identification.** The receiver must know which process sent each message, and a Byzantine process must not be able to impersonate a correct one. In practice this means authentication bound to process identity.
 
-Without these guarantees, the protocol's safety and liveness proofs do not hold.
+The protocol's correctness (both safety and termination) does not depend on any timing assumption — that is the asynchronous-BFT model. Pump cadence, silence-quorum exit windows, and any other timing parameters in a deployment are operator-tuning, not protocol invariants.
 
 ## Paper-Faithful Dispatch via DTC
 
@@ -118,6 +118,78 @@ Two message classes flow on the network: proposal messages (Fig 1 carrying arbit
 
 The bkr94acs state machine knows its own peer index (self), which the bracha87 figures do not need. This is because bkr94acs manages internal routing: when Fig 4 says BROADCAST, bkr94acs must tag the outgoing INITIAL with self as the broadcaster.
 
+## Bracha Phase Re-emitter (BPR)
+
+Bracha's correctness proofs presume reliable point-to-point channels between correct processes. Over fair-loss datagrams that assumption is not satisfied. **BPR is the smallest rule set that, joined with the paper rules, restores eventual delivery — replacing the application-layer ledger entirely.**
+
+### Why BPR exists
+
+BPR is the end-to-end argument (Saltzer, Reed, Clark 1984 — see `SRC84.txt`) applied to Bracha. The reliability function — "deliver INITIAL/ECHO/READY despite a fair-loss network" — depends on knowledge that lives only at the Bracha state-machine endpoint (the `F1_ORIGIN`/`F1_ECHOED`/`F1_RDSENT` flags and the BKR per-origin BA-decided state). A lower link layer cannot decide when to retire without being told by Bracha — i.e., without folding the function back into the endpoint anyway — so the principled placement is at the endpoint itself.
+
+Without BPR, an application using this library would need its own ledger to track per-record destinations, per-peer evidence of receipt, and a cursor-driven retransmit pump — the standard "deployment-layer reliability" pattern. Three properties make BPR a better fit:
+
+1. **All replay state is already in the protocol.** The committed-action flags (`F1_ECHOED`, `F1_RDSENT`) plus a one-bit `F1_ORIGIN` flag (set by `bracha87Fig1Origin`) encode everything needed to decide which actions to re-emit. No parallel data structure.
+2. **The pump is event-driven, not wall-clock-driven.** The application's pump tick is the only event; no `pumpNs` floor, no per-record evidence tracking, no destination masks.
+3. **Asynchrony is preserved.** No timing predicate appears anywhere in the protocol; the application's tick *is* the event, and silent ticks emit nothing.
+
+### Replay rules
+
+Three replay outputs, each gated on a single committed-state flag. None short-circuit on local saturation (e.g. "we accepted, so stop replaying ready") — BPR's purpose is helping *other* peers progress, not the local one.
+
+| Replay action | Flag gate | Notes |
+|---|---|---|
+| `BRACHA87_INITIAL_ALL` | `F1_ORIGIN` | Originator emits its own (initial, v) on every Bpr call. The "stop once we ECHOed locally" optimisation is incorrect: in the n = 3t+1 boundary regime the echo-cascade threshold (n+t)/2+1 equals the count of honest peers, so any honest peer that missed the bootstrap can leave the cascade one echo short forever — only the originator can break the deadlock. |
+| `BRACHA87_ECHO_ALL` | `F1_ECHOED` | Chained DTC rule: fires whenever Bracha is not firing send-echo on this dispatch and have-echoed is set. |
+| `BRACHA87_READY_ALL` | `F1_RDSENT` | Chained DTC rule: fires whenever have-sent-ready is set. Continues post-accept (the "ACCEPTED → stop replay" optimisation strands slow peers). |
+
+Two of the three (`replay (echo, v)` and `replay (ready, v)`) are captured as DTC sub-tables at the bottom of `bracha87Fig1.dtc`, chaining on existing paper-rule outputs and inputs. The third (origin INITIAL replay) is a single-bit C early-emit; the design intent is documented in the .dtc's BPR text section. This split follows the "trivial guards stay in C" principle from `decisionTableCompiler/README.md` — BPR rules whose ordering benefits from joint optimisation with paper rules go in DTC; single-input single-output guards stay in C.
+
+### Where the pump is called
+
+The pump is exposed at the layer that owns the Fig 1 instances:
+
+| Layer | Pump entry point? | Why |
+|---|---|---|
+| Fig 1 | `bracha87Fig1Bpr` | Broadcast state lives here. |
+| Fig 2 | n/a | Reference-only. |
+| Fig 3 | none | Validator over already-accepted messages; no message state. |
+| Fig 4 | none | Round-driven; Fig 4 broadcasts are new Fig 1 instantiations in the caller. |
+| bkr94acs | `bkr94acsPump` | Owns N proposal Fig 1 instances + N×R×N consensus Fig 1 instances + N Fig 4 instances internally; only the bkr94acs pump can reach them. |
+
+`bkr94acsPump` walks an internal cursor over (proposal phase, then consensus phase by origin × round × broadcaster), emits one Fig 1 instance's replays per call (≤ 3 actions), and returns 0 only when a full sweep finds nothing — the application's idle signal. Per-origin gating skips proposal replays for BA instances that decided 0 (the origin is excluded from the common subset and no honest peer needs further evidence); BAs decided 1 keep replaying per Bracha post-decide continuation.
+
+### Application loop
+
+With BPR, the application loop is two operations: drain the network and tick the pump. No ledger, no per-record mask, no per-peer evidence.
+
+```c
+struct bkr94acsAct out[BKR94ACS_PUMP_MAX_ACTS];
+struct bkr94acsAct propAct;
+
+/* Self-initiation: mark the local proposal Fig 1 as origin and
+ * emit one PROP_INITIAL action for the application to broadcast. */
+bkr94acsPropose(a, my_value, &propAct);
+broadcast_action(propAct);
+
+while (!silenceQuorumExit) {
+  /* Drain ingress: Input handles paper rules + cascades. */
+  while (network_recv(&msg)) {
+    n = (msg.cls == BKR94ACS_CLS_PROPOSAL)
+      ? bkr94acsProposalInput(a, ...)
+      : bkr94acsConsensusInput(a, ...);
+    for (k = 0; k < n; ++k) broadcast_action(actions[k]);
+  }
+
+  /* Pump tick: BPR re-emits committed actions. */
+  n = bkr94acsPump(a, out);
+  for (k = 0; k < n; ++k) broadcast_action(out[k]);
+
+  sleep(tickMs);
+}
+```
+
+`silenceQuorumExit` is the application's termination policy — see Deployment Notes below.
+
 ## API Overview
 
 ### bracha87 Entry Points
@@ -126,8 +198,10 @@ The bkr94acs state machine knows its own peer index (self), which the bracha87 f
 |---|---|
 | `bracha87Fig1Sz(n, vLen)` | Compute allocation size for a Fig 1 instance |
 | `bracha87Fig1Init(...)` | Initialize a Fig 1 instance |
+| `bracha87Fig1Origin(f1, value)` | Mark this instance as broadcast originator and store the value (BPR — enables INITIAL replay) |
 | `bracha87Fig1Input(f1, type, from, value, out)` | Process one incoming message; returns action count (0-3) |
-| `bracha87Fig1Value(f1)` | Retrieve committed value |
+| `bracha87Fig1Bpr(f1, out)` | Emit committed-action replays (BPR pump tick); returns action count (0-3); 0 = idle |
+| `bracha87Fig1Value(f1)` | Retrieve committed value (returns non-null when ORIGIN or ECHOED) |
 | `bracha87Fig3Sz(n, maxRounds)` | Compute allocation size for a Fig 3 instance |
 | `bracha87Fig3Init(...)` | Initialize with N function and closure |
 | `bracha87Fig3Accept(f3, round, sender, value, &vc)` | Submit an accepted message for validation |
@@ -143,13 +217,19 @@ The bkr94acs state machine knows its own peer index (self), which the bracha87 f
 |---|---|
 | `bkr94acsSz(n, vLen, maxPhases)` | Compute allocation size for a BKR94 ACS instance |
 | `bkr94acsInit(...)` | Initialize with peer index, coin function, and closure |
+| `bkr94acsPropose(acs, value, out)` | Mark local proposal Fig 1 as originator and emit one PROP_INITIAL action (BPR) |
 | `bkr94acsProposalInput(acs, origin, type, from, value, out)` | Process a proposal broadcast message; returns action count |
 | `bkr94acsConsensusInput(acs, origin, round, broadcaster, type, from, value, out)` | Process a consensus message; returns action count |
+| `bkr94acsPump(acs, out)` | BPR pump tick; cursor walks one Fig 1 per call; returns action count (0-3); 0 = full-sweep idle |
 | `bkr94acsComplete(acs)` | Check if all N BAs have decided |
 | `bkr94acsSubset(acs, origins)` | Retrieve the decided common subset |
 | `bkr94acsProposalValue(acs, origin)` | Retrieve accepted proposal value for an origin |
 
 ### Caller Composition Pattern
+
+For multi-value agreement, use `bkr94acs` and the application loop shown in the **Bracha Phase Re-emitter (BPR)** section above — it manages all Fig 1 instances internally and provides `bkr94acsPump` for BPR replays.
+
+For raw binary consensus (Fig 1 + Fig 3 + Fig 4 directly), the caller manages the Fig 1 instances per (origin, round). On every tick, the application iterates its Fig 1 array and calls `bracha87Fig1Bpr` per entry.
 
 ```c
 /* Per process: */
@@ -158,10 +238,13 @@ struct bracha87Fig4 *fig4;                 /* embeds Fig3 */
 struct bracha87Fig3 *fig3 = (struct bracha87Fig3 *)fig4->data;
 unsigned char nextRound = 0;
 
-/* On incoming message (round, type, from, origin, value): */
-f1 = fig1[round * n + origin];  /* rounds are 0-based */
-nout = bracha87Fig1Input(f1, type, from, &value, out);
+/* Self-initiation: mark our own (origin=self, round=0) Fig 1 as originator. */
+bracha87Fig1Origin(fig1[0 * n + self], &my_initial_value);
+broadcast INITIAL(my_initial_value) for round 0, origin self, to all peers
 
+/* On incoming message (round, type, from, origin, value): */
+f1 = fig1[round * n + origin];
+nout = bracha87Fig1Input(f1, type, from, &value, out);
 for each action in out:
   if ACCEPT:
     cv = bracha87Fig1Value(f1);
@@ -171,14 +254,22 @@ for each action in out:
       act = bracha87Fig4Round(fig4, nextRound, rcnt, rsnd, rval);
       ++nextRound;
       if act & BRACHA87_BROADCAST:
-        broadcast fig4->value for nextRound as INITIAL to all peers
+        bracha87Fig1Origin(fig1[nextRound * n + self], &fig4->value);
+        broadcast INITIAL(fig4->value) for nextRound, origin self
       if act & BRACHA87_DECIDE:
         deliver fig4->decision
       if act & BRACHA87_EXHAUSTED:
         consensus failed within operational limit
-  if ECHO_ALL or READY_ALL:
+  if INITIAL_ALL or ECHO_ALL or READY_ALL:
     cv = bracha87Fig1Value(f1);
-    send echo/ready(cv) for this round/origin to all peers
+    send the named action(cv) for this round/origin to all peers
+
+/* Pump tick (BPR): iterate every owned Fig 1 instance. */
+for each fig1 instance:
+  nout = bracha87Fig1Bpr(fig1, out);
+  for each action in out:
+    cv = bracha87Fig1Value(fig1);
+    send the named action(cv) for the corresponding (round, origin) to all peers
 ```
 
 ## Operational Limits
@@ -214,6 +305,10 @@ Issues discovered by reading the paper against the code. Most were missed by iso
 
 9. **Post-decide value preservation across sub-rounds.** During post-decide continuation (Note 1), `b->value` is preserved as the decision through every sub-round of subsequent phases. The .dtc-faithful Fig 4 dispatch zeroes the `setMajority` and `setDMajority` outputs when `have_decided = yes`, so adversarial inputs whose majority disagrees with the decision cannot drift the broadcast value away from it. Verified by `testFig4PostDecideAdversarial` (which would have failed against a pre-DTC version that overwrote `b->value` with majority/(d, majority) at sub-rounds 0 and 1 of post-decide phases).
 
+10. **BPR (ready, v) replay must NOT short-circuit on accepted.** An accepted peer owes its READY to peers still below the 2t+1 threshold; replay is the only mechanism Bracha provides for getting it there under loss. The "ACCEPTED → stop replay" optimisation strands slow peers — the very purpose of BPR is helping *other* peers' progress, not the local one. Regression check: `testFig1Bpr` post-accept assertions.
+
+11. **BPR (initial, v) replay must NOT short-circuit on echoed.** An originator that has locally echoed (via Rule 1 from loopback or via Rule 2 from echoes received from other peers) cannot stop replaying INITIAL. In the n = 3t+1 boundary regime the Rule 2 echo threshold (n+t)/2 + 1 equals the count of honest peers, so any honest peer that missed the bootstrap can leave the cascade one echo short forever — only the originator can break the deadlock. Symmetric with Note 10: both pitfalls reject local-state-as-saturation arguments. Regression check: `testBprByzantineSilent` (n=4 t=1 with one silent Byzantine peer; the original gap-4 design with the `!ECHOED` gate stalled at |SubSet|=1 over 50000+ pump sweeps; the corrected "always replay INITIAL while ORIGIN" rule converges in 1 sweep).
+
 ## Building
 
 ```bash
@@ -248,6 +343,12 @@ Compiler flags: `-std=c89 -pedantic -Wall -Wextra -Os -g`
 ## Deployment Notes
 
 This library is protocol-only. A working deployment needs a transport layer satisfying the three System Model assumptions above, plus identity, keys, a coin source, and a termination policy. The points below are load-bearing; do not "optimize" them away.
+
+### BPR replaces the application-layer ledger
+
+A previous deployment pattern wrapped this library in a per-record ledger: `peerHasPsk[]` / `peerOriginAck[]` / `peerRound[]` evidence tracking, `destMask` per-record bitmaps, a cursor over the record list, per-record `pumpNs` floors. With BPR, that machinery is no longer needed — the library's own `bkr94acsPump` (or `bracha87Fig1Bpr` at the bare-bracha87 layer) is the only mechanism that guarantees eventual delivery, and replay state is intrinsic to the protocol's own committed flags. The application loop is two operations: drain ingress, tick the pump (see the BPR section above for the loop sketch).
+
+Wire-level efficiencies like RSEC (Reed-Solomon erasure coding) and inter-shard delay are still useful as efficiency tuning under steady drop, but they are not reliability mechanisms; only BPR is. RSEC reduces the per-shard miss rate; BPR closes the residual gap.
 
 ### Post-decide continuation is mandatory
 

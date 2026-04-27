@@ -1,0 +1,213 @@
+Saltzer, Reed, Clark 1984 "End-to-End Arguments in System Design"
+ACM Transactions on Computer Systems 2(4), pages 277-288
+(Revised from Second International Conference on Distributed
+Computing Systems, Paris, April 1981, pages 509-512)
+
+Scope of this extract: the full paper is short (~10 pages) and
+load-bearing as a single principle. This summary distills the
+principle, the central case study (careful file transfer), the
+performance carve-out, and the auxiliary examples that map directly
+to BPR's design (duplicate suppression, delivery guarantees,
+identifying the ends). The historical-context and unrelated-domain
+examples (RISC, Lampson's open OS, magnetic-tape backup) are noted
+in passing only.
+
+
+The principle (paper p. 2)
+--------------------------
+
+  "The function in question can completely and correctly be
+   implemented only with the knowledge and help of the application
+   standing at the end points of the communication system.
+   Therefore, providing that questioned function as a feature of
+   the communication system itself is not possible. (Sometimes an
+   incomplete version of the function provided by the
+   communication system may be useful as a performance
+   enhancement.)"
+
+Two consequences:
+
+  E1 Correctness: a function whose correctness depends on
+     application-endpoint knowledge cannot be made correct by
+     placing it in a lower layer.
+
+  E2 Performance: a lower-layer implementation of such a function
+     is at best a performance enhancement; the application must
+     still implement the function regardless.
+
+The principle is presented as a guideline, not an absolute rule. It
+helps decide where in a layered system a given function belongs.
+
+
+Case study: careful file transfer (paper pp. 2-3)
+-------------------------------------------------
+
+The motivating example. File F is transferred from host A to host
+B over a network. Threats:
+
+  T1 Disk read at A returns wrong bits (hardware fault).
+  T2 Software in file system, transfer program, or comms makes a
+     buffering / copying mistake.
+  T3 CPU or memory transient error during buffering / copying.
+  T4 Network drops, corrupts, loses, or duplicates packets.
+  T5 Either host crashes mid-transaction.
+
+Suppose the network provides "guaranteed reliable data
+transmission" via per-packet checksums, sequence numbers, and
+internal retry. This eliminates T4 only. T1, T2, T3, T5 still
+require an end-to-end check by the file transfer application
+(read F back from B's disk, recompute checksum, compare against
+A's stored checksum, retry on mismatch).
+
+Therefore: the application MUST do an end-to-end check. The
+network's reliable-transmission feature is not load-bearing for
+correctness; it only changes the frequency of retries.
+
+
+Performance carve-out (paper pp. 4-5)
+-------------------------------------
+
+The end-to-end argument does NOT say lower layers should provide
+no reliability at all. If the network drops 1% of messages, the
+end-to-end check-and-retry will fail (and re-send the entire
+file) often enough that performance degrades exponentially with
+file size. Some lower-layer reliability is therefore an
+engineering tradeoff to bound retry frequency.
+
+Key qualifiers:
+
+  P1 Lower-layer reliability is a PERFORMANCE optimization, never
+     a correctness requirement.
+
+  P2 The "proper" amount of lower-layer reliability is the amount
+     that comes "with little cost and engineering effort," then
+     evaluate residual error rate against acceptable end-to-end
+     retry frequency.
+
+  P3 Two reasons low-level placement may cost MORE than high-
+     level: (a) shared subsystem pays cost for applications that
+     don't need it; (b) low layer has less information than the
+     application and may do the job less efficiently.
+
+P3(b) is the operative half for BPR: Bracha's flags are precisely
+the application information a generic link layer would lack.
+
+
+Other examples of the end-to-end argument
+-----------------------------------------
+
+Delivery acknowledgements (p. 5):
+  An IMP-level "Request For Next Message" tells the sender the
+  network delivered the bits but says nothing about whether the
+  target application acted on the message. The acknowledgement
+  the sender actually wants is end-to-end: "I did it" / "I
+  didn't." Lower-layer ack is incomplete.
+
+Encryption (p. 5):
+  Network-level encryption requires trusting the network with
+  keys, leaves data in clear at endpoints, and requires the
+  application to authenticate anyway. End-to-end encryption
+  satisfies the application's requirement; network-level
+  encryption is at best a complementary firewall against
+  misbehaving applications.
+
+Duplicate message suppression (p. 6):
+  Application failure/retry can generate duplicate REQUESTS that
+  look like distinct messages to the network and cannot be
+  suppressed there. Only the application can detect its own
+  duplicates. If the application must dedup anyway, that
+  mechanism also catches network-introduced duplicates, so the
+  network function is redundant.
+
+FIFO message delivery (p. 6):
+  A virtual circuit guarantees FIFO within itself but not across
+  parallel circuits or intermediate processes. If the application
+  needs cross-circuit ordering it must implement it itself, so
+  the lower-layer FIFO guarantee is incomplete for the use case
+  that motivated requesting it.
+
+Transaction management — SWALLOW (p. 7):
+  An end-to-end-argument-built distributed data storage system.
+  Underlying message comms does NOT suppress duplicates (object
+  ID + version makes write dedup application-trivial; read
+  duplicates are discarded by the originator). Underlying comms
+  also does NOT provide delivery acknowledgement (write
+  acknowledgement requires "data stored safely," only the high
+  layer can confirm; read response is itself the
+  acknowledgement). Result: half the message volume of a
+  conventional layered system.
+
+
+Identifying the ends (paper pp. 6-7)
+------------------------------------
+
+The argument depends on identifying WHICH endpoint is "the
+application." Two voice examples illustrate:
+
+  Real-time voice conversation — the endpoints are the two
+  speakers; the application tolerates packet loss (silence,
+  duplicate of previous, noise burst). Lower-layer retry
+  introduces delay that's worse than the loss it prevents.
+  Strong end-to-end argument: don't retry.
+
+  Voice mail — the endpoint is the storage system, not a live
+  listener. Reliability matters because the recipient cannot ask
+  for retransmission. Lower-layer retry is appropriate. Different
+  endpoint, different argument.
+
+Same data, same protocol stack, opposite conclusions because the
+endpoint is different.
+
+
+Conclusions (paper p. 9)
+------------------------
+
+  "End-to-end arguments are a kind of 'Occam's razor' when it
+   comes to choosing the functions to be provided in a
+   communication subsystem. Because the communication subsystem
+   is frequently specified before applications that use the
+   subsystem are known, the designer may be tempted to 'help' the
+   users by taking on more function than necessary. Awareness of
+   end-to-end arguments can help to reduce such temptations."
+
+The closing framing: end-to-end is a principle for assigning
+function to layers in a layered design. Layers remain valuable
+for modularity; the principle helps decide which functions go in
+which layer.
+
+
+Application to this codebase
+----------------------------
+
+The reliability function in question is "deliver Bracha INITIAL /
+ECHO / READY messages despite a fair-loss network." The end
+points are the Bracha state machines. Bracha's monotone flags
+ORIGIN, ECHOED, RDSENT (and BKR's per-origin BA-decided state)
+ARE the application-endpoint knowledge that determines whether a
+message is still owed:
+
+  - ORIGIN set => I owe INITIAL to peers who have not yet echoed.
+  - ECHOED set => I owe ECHO to peers below the echo threshold.
+  - RDSENT set => I owe READY to peers below the ready threshold,
+                  including peers who have not yet accepted.
+  - BKR BA-decided 0 for origin j => j is excluded from SubSet,
+                  so j's INITIAL / ECHO / READY are no longer
+                  owed (textbook external subsume signal).
+
+A lower link layer cannot know any of these without being told by
+the Bracha state machine — i.e., without folding the function
+back into the application endpoint. Per E1, that lower layer
+cannot complete the function correctly on its own. Per P3(b), it
+would also be less efficient because it lacks the information.
+
+BPR is therefore the end-to-end placement of the retransmission
+function. The interwoven design — Bracha's own flags driving
+re-emission on the application's pump tick — is the principle
+applied: function placed at the layer that holds the knowledge
+required to implement it correctly. No separate stubborn-link
+layer below; no application ledger above.
+
+A lower-layer optimization (e.g. transport-level RSEC, batching,
+inter-shard delay) is admissible per the performance carve-out
+(P1, P2) as a tunable that bounds retry frequency, not as a
+substitute for BPR's correctness obligation.

@@ -313,14 +313,28 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Bootstrap: each peer broadcasts INITIAL of their proposal           */
+  /*  Bootstrap: each peer Proposes their value                           */
+  /*                                                                      */
+  /*  bkr94acsPropose marks the local proposal Fig1 as the broadcast      */
+  /*  originator and emits one BKR94ACS_ACT_PROP_INITIAL action for the   */
+  /*  application to broadcast to all peers.  Replay thereafter is        */
+  /*  intrinsic to BPR (bkr94acsPump) -- no application ledger required.  */
   /*----------------------------------------------------------------------*/
 
-  for (i = 0; i < n; ++i)
+  for (i = 0; i < n; ++i) {
+    struct bkr94acsAct propAct;
+    unsigned int nProp;
+
+    nProp = bkr94acsPropose(peers[i],
+                            (const unsigned char *)proposals[i],
+                            &propAct);
+    if (nProp != 1)
+      continue;
     for (j = 0; j < n; ++j)
-      qPush(BKR94ACS_CLS_PROPOSAL, (unsigned char)i, 0, 0,
+      qPush(BKR94ACS_CLS_PROPOSAL, propAct.origin, 0, 0,
             BRACHA87_INITIAL, (unsigned char)i, (unsigned char)j,
             (const unsigned char *)proposals[i], vLen);
+  }
 
   if (shuffleSeed)
     qShuffle(&shuffleSeed);
