@@ -215,25 +215,18 @@ runAcs(
       unsigned int p;
 
       switch (acts[k].act) {
-      case BKR94ACS_ACT_PROP_ECHO:
-      case BKR94ACS_ACT_PROP_READY:
-        {
-          const unsigned char *pv;
-
-          pv = bkr94acsProposalValue(st, acts[k].origin);
-          if (!pv)
-            break;
-          for (p = 0; p < n; ++p)
-            qPush(BKR94ACS_CLS_PROPOSAL, acts[k].origin, 0, 0,
-                  (acts[k].act == BKR94ACS_ACT_PROP_ECHO)
-                    ? BRACHA87_ECHO : BRACHA87_READY,
-                  m->to, (unsigned char)p, pv, vLen);
-        }
+      case BKR94ACS_ACT_PROP_SEND:
+        if (!acts[k].value)
+          break;
+        for (p = 0; p < n; ++p)
+          qPush(BKR94ACS_CLS_PROPOSAL, acts[k].origin, 0, 0,
+                acts[k].type, m->to, (unsigned char)p,
+                acts[k].value, vLen);
         break;
       case BKR94ACS_ACT_CON_SEND:
         for (p = 0; p < n; ++p)
           qPush(BKR94ACS_CLS_CONSENSUS, acts[k].origin, acts[k].round,
-                acts[k].broadcaster, acts[k].conType,
+                acts[k].broadcaster, acts[k].type,
                 m->to, (unsigned char)p,
                 &acts[k].conValue, 1);
         break;
@@ -552,25 +545,18 @@ testValues(
       unsigned int p;
 
       switch (acts[k].act) {
-      case BKR94ACS_ACT_PROP_ECHO:
-      case BKR94ACS_ACT_PROP_READY:
-        {
-          const unsigned char *pv;
-
-          pv = bkr94acsProposalValue(st, acts[k].origin);
-          if (!pv)
-            break;
-          for (p = 0; p < n; ++p)
-            qPush(BKR94ACS_CLS_PROPOSAL, acts[k].origin, 0, 0,
-                  (acts[k].act == BKR94ACS_ACT_PROP_ECHO)
-                    ? BRACHA87_ECHO : BRACHA87_READY,
-                  m->to, (unsigned char)p, pv, vLen);
-        }
+      case BKR94ACS_ACT_PROP_SEND:
+        if (!acts[k].value)
+          break;
+        for (p = 0; p < n; ++p)
+          qPush(BKR94ACS_CLS_PROPOSAL, acts[k].origin, 0, 0,
+                acts[k].type, m->to, (unsigned char)p,
+                acts[k].value, vLen);
         break;
       case BKR94ACS_ACT_CON_SEND:
         for (p = 0; p < n; ++p)
           qPush(BKR94ACS_CLS_CONSENSUS, acts[k].origin, acts[k].round,
-                acts[k].broadcaster, acts[k].conType,
+                acts[k].broadcaster, acts[k].type,
                 m->to, (unsigned char)p,
                 &acts[k].conValue, 1);
         break;
@@ -805,7 +791,7 @@ testPostDecideContinuation(
   for (k = 0; k < nacts; ++k) {
     if (acts[k].act == BKR94ACS_ACT_CON_SEND
      && acts[k].origin == 0
-     && acts[k].conType == BRACHA87_ECHO)
+     && acts[k].type == BRACHA87_ECHO)
       ++nEcho;
   }
   check("post-decide input emits CON_SEND ECHO", nEcho >= 1);
@@ -984,8 +970,8 @@ testStepTwoTrigger(
 /*                                                                        */
 /*  White-box tests of bkr94acsPropose and bkr94acsPump:                  */
 /*    - Propose marks the local proposal Fig1 as origin and emits         */
-/*      PROP_INITIAL.                                                     */
-/*    - Pump replays PROP_INITIAL on every tick until ECHOED.             */
+/*      PROP_SEND/INITIAL.                                                     */
+/*    - Pump replays PROP_SEND/INITIAL on every tick until ECHOED.             */
 /*    - Pump returns 0 on idle (no committed state anywhere).             */
 /*    - Pump's per-origin gate skips proposal Fig1s for BAs decided 0     */
 /*      (post-Step 2 fanout, j excluded from SubSet).                     */
@@ -1016,35 +1002,38 @@ testBpr(
   n = bkr94acsPump(a, out);
   check("BPR pump virgin: 0 actions", n == 0);
 
-  /* Propose: marks origin, emits PROP_INITIAL once */
+  /* Propose: marks origin, emits PROP_SEND/INITIAL once */
   val[0] = 1;
   n = bkr94acsPropose(a, val, out);
   check("BPR propose: 1 action", n == 1);
-  check("BPR propose: PROP_INITIAL", n >= 1
-        && out[0].act == BKR94ACS_ACT_PROP_INITIAL);
+  check("BPR propose: PROP_SEND/INITIAL", n >= 1
+        && out[0].act == BKR94ACS_ACT_PROP_SEND
+        && out[0].type == BRACHA87_INITIAL);
   check("BPR propose: origin = self", n >= 1
         && out[0].origin == 0);
-  check("BPR propose: Value() returns the proposal",
-        bkr94acsProposalValue(a, 0)
-        && bkr94acsProposalValue(a, 0)[0] == 1);
+  check("BPR propose: act value pointer matches stored value",
+        n >= 1 && out[0].value
+        && out[0].value == bkr94acsProposalValue(a, 0)
+        && out[0].value[0] == 1);
 
-  /* Pump pre-loopback: replays PROP_INITIAL every tick.
+  /* Pump pre-loopback: replays PROP_SEND/INITIAL every tick.
    * The cursor must visit the self proposal in finite calls; since
    * other peers' proposal Fig1s are uncommitted, the cursor walks
    * past them returning 0 -- but our walker keeps walking until it
    * finds replays or wraps, so one Pump call must surface our
-   * PROP_INITIAL. */
+   * PROP_SEND/INITIAL. */
   for (i = 0; i < 5; ++i) {
     n = bkr94acsPump(a, out);
     check("BPR pump pre-loopback: emits", n >= 1);
-    check("BPR pump pre-loopback: PROP_INITIAL",
-          n >= 1 && out[0].act == BKR94ACS_ACT_PROP_INITIAL);
+    check("BPR pump pre-loopback: PROP_SEND/INITIAL",
+          n >= 1 && out[0].act == BKR94ACS_ACT_PROP_SEND
+          && out[0].type == BRACHA87_INITIAL);
     check("BPR pump pre-loopback: origin = self",
           n >= 1 && out[0].origin == 0);
   }
 
   /* Loopback our own INITIAL through ProposalInput -> Rule 1 fires,
-   * ECHOED is set on propF1(0), and PROP_INITIAL replay stops. */
+   * ECHOED is set on propF1(0), and PROP_SEND/INITIAL replay stops. */
   {
     struct bkr94acsAct iout[BKR94ACS_MAX_ACTS(4, 4)];
     bkr94acsProposalInput(a, 0, BRACHA87_INITIAL, 0, val, iout);
@@ -1069,17 +1058,19 @@ testBpr(
       if (!n)
         continue;
       for (j = 0; j < n; ++j) {
-        if (out[j].act == BKR94ACS_ACT_PROP_INITIAL && out[j].origin == 0)
+        if (out[j].act == BKR94ACS_ACT_PROP_SEND && out[j].origin == 0
+         && out[j].type == BRACHA87_INITIAL)
           seenInitial = 1;
-        if (out[j].act == BKR94ACS_ACT_PROP_ECHO && out[j].origin == 0)
+        if (out[j].act == BKR94ACS_ACT_PROP_SEND && out[j].origin == 0
+         && out[j].type == BRACHA87_ECHO)
           seenEcho = 1;
       }
       if (seenInitial && seenEcho)
         break;
     }
-    check("BPR pump post-loopback: PROP_INITIAL still replays",
+    check("BPR pump post-loopback: INITIAL still replays",
           seenInitial);
-    check("BPR pump post-loopback: PROP_ECHO replay also fires",
+    check("BPR pump post-loopback: ECHO replay also fires",
           seenEcho);
   }
 
@@ -1179,30 +1170,18 @@ testBpr(
 
         for (k = 0; k < nacts; ++k) {
           struct bkr94acsAct *act = &acts[k];
-          const unsigned char *pv;
 
           switch (act->act) {
-          case BKR94ACS_ACT_PROP_INITIAL:
-            pv = bkr94acsProposalValue(peers[m->to], act->origin);
-            if (!pv) break;
+          case BKR94ACS_ACT_PROP_SEND:
+            if (!act->value) break;
             for (q = 0; q < 4; ++q)
               qPush(BKR94ACS_CLS_PROPOSAL, act->origin, 0, 0,
-                    BRACHA87_INITIAL, m->to, (unsigned char)q, pv, 1);
-            break;
-          case BKR94ACS_ACT_PROP_ECHO:
-          case BKR94ACS_ACT_PROP_READY:
-            pv = bkr94acsProposalValue(peers[m->to], act->origin);
-            if (!pv) break;
-            for (q = 0; q < 4; ++q)
-              qPush(BKR94ACS_CLS_PROPOSAL, act->origin, 0, 0,
-                    (act->act == BKR94ACS_ACT_PROP_ECHO)
-                      ? BRACHA87_ECHO : BRACHA87_READY,
-                    m->to, (unsigned char)q, pv, 1);
+                    act->type, m->to, (unsigned char)q, act->value, 1);
             break;
           case BKR94ACS_ACT_CON_SEND:
             for (q = 0; q < 4; ++q)
               qPush(BKR94ACS_CLS_CONSENSUS, act->origin, act->round,
-                    act->broadcaster, act->conType, m->to,
+                    act->broadcaster, act->type, m->to,
                     (unsigned char)q, &act->conValue, 1);
             break;
           default:
@@ -1232,26 +1211,18 @@ testBpr(
         if (npact)
           progress = 1;
         for (k = 0; k < npact; ++k) {
-          const unsigned char *pv;
-
           switch (pact[k].act) {
-          case BKR94ACS_ACT_PROP_INITIAL:
-          case BKR94ACS_ACT_PROP_ECHO:
-          case BKR94ACS_ACT_PROP_READY:
-            pv = bkr94acsProposalValue(peers[p], pact[k].origin);
-            if (!pv) break;
+          case BKR94ACS_ACT_PROP_SEND:
+            if (!pact[k].value) break;
             for (q = 0; q < 4; ++q)
               qPush(BKR94ACS_CLS_PROPOSAL, pact[k].origin, 0, 0,
-                    (pact[k].act == BKR94ACS_ACT_PROP_INITIAL)
-                      ? BRACHA87_INITIAL
-                    : (pact[k].act == BKR94ACS_ACT_PROP_ECHO)
-                      ? BRACHA87_ECHO : BRACHA87_READY,
-                    (unsigned char)p, (unsigned char)q, pv, 1);
+                    pact[k].type, (unsigned char)p, (unsigned char)q,
+                    pact[k].value, 1);
             break;
           case BKR94ACS_ACT_CON_SEND:
             for (q = 0; q < 4; ++q)
               qPush(BKR94ACS_CLS_CONSENSUS, pact[k].origin, pact[k].round,
-                    pact[k].broadcaster, pact[k].conType,
+                    pact[k].broadcaster, pact[k].type,
                     (unsigned char)p, (unsigned char)q,
                     &pact[k].conValue, 1);
             break;
@@ -1321,7 +1292,7 @@ testBprCursorCoverage(
 
   /* Each peer Proposes; their proposal Fig1 (origin = self) becomes
    * ORIGIN+!ECHOED.  We sweep peer 0's pump and verify it eventually
-   * surfaces PROP_INITIAL for peer 0's own origin.  Then we feed
+   * surfaces PROP_SEND/INITIAL for peer 0's own origin.  Then we feed
    * peer 0 INITIALs from peers 1, 2, 3 (driving Rule 1 on their
    * proposal Fig1s on peer 0's instance), so peer 0's view of those
    * proposal Fig1s becomes ECHOED (committed to ECHO replay).
@@ -1354,11 +1325,8 @@ testBprCursorCoverage(
     n = bkr94acsPump(peers[0], out);
     if (!n)
       continue;
-    if (out[0].act == BKR94ACS_ACT_PROP_INITIAL
-     || out[0].act == BKR94ACS_ACT_PROP_ECHO
-     || out[0].act == BKR94ACS_ACT_PROP_READY) {
+    if (out[0].act == BKR94ACS_ACT_PROP_SEND)
       seen[out[0].origin] = 1;
-    }
 
     allSeen = 1;
     for (p = 0; p < 4; ++p)
@@ -1439,7 +1407,7 @@ testBprOriginGate(
 
   /* Force BA decision: origin 1 decided 0 (excluded), origin 0
    * undecided.  Pump should walk past origin 1 silently and surface
-   * PROP_ECHO for origin 0. */
+   * PROP_SEND/ECHO for origin 0. */
   testWriteDecision(a, 1, 0);
   /* Origin 0: leave as undecided (0xFF, default from Init) */
 
@@ -1452,9 +1420,7 @@ testBprOriginGate(
     n = bkr94acsPump(a, out);
     if (!n)
       continue;
-    if (out[0].act == BKR94ACS_ACT_PROP_INITIAL
-     || out[0].act == BKR94ACS_ACT_PROP_ECHO
-     || out[0].act == BKR94ACS_ACT_PROP_READY) {
+    if (out[0].act == BKR94ACS_ACT_PROP_SEND) {
       if (out[0].origin == 0)
         ++origin0Seen;
       if (out[0].origin == 1)
@@ -1482,9 +1448,7 @@ testBprOriginGate(
     n = bkr94acsPump(a, out);
     if (!n)
       continue;
-    if ((out[0].act == BKR94ACS_ACT_PROP_INITIAL
-      || out[0].act == BKR94ACS_ACT_PROP_ECHO
-      || out[0].act == BKR94ACS_ACT_PROP_READY)
+    if (out[0].act == BKR94ACS_ACT_PROP_SEND
      && out[0].origin == 1)
       ++origin1Seen;
     if (origin1Seen >= 1)
@@ -1587,26 +1551,18 @@ testBprByzantineSilent(
 
       for (k = 0; k < nacts; ++k) {
         struct bkr94acsAct *act = &acts[k];
-        const unsigned char *pv;
 
         switch (act->act) {
-        case BKR94ACS_ACT_PROP_INITIAL:
-        case BKR94ACS_ACT_PROP_ECHO:
-        case BKR94ACS_ACT_PROP_READY:
-          pv = bkr94acsProposalValue(peers[m->to], act->origin);
-          if (!pv) break;
+        case BKR94ACS_ACT_PROP_SEND:
+          if (!act->value) break;
           for (q = 0; q < 4; ++q)
             qPush(BKR94ACS_CLS_PROPOSAL, act->origin, 0, 0,
-                  (act->act == BKR94ACS_ACT_PROP_INITIAL)
-                    ? BRACHA87_INITIAL
-                  : (act->act == BKR94ACS_ACT_PROP_ECHO)
-                    ? BRACHA87_ECHO : BRACHA87_READY,
-                  m->to, (unsigned char)q, pv, 1);
+                  act->type, m->to, (unsigned char)q, act->value, 1);
           break;
         case BKR94ACS_ACT_CON_SEND:
           for (q = 0; q < 4; ++q)
             qPush(BKR94ACS_CLS_CONSENSUS, act->origin, act->round,
-                  act->broadcaster, act->conType, m->to,
+                  act->broadcaster, act->type, m->to,
                   (unsigned char)q, &act->conValue, 1);
           break;
         default:
@@ -1635,26 +1591,18 @@ testBprByzantineSilent(
       if (npact)
         progress = 1;
       for (k = 0; k < npact; ++k) {
-        const unsigned char *pv;
-
         switch (out[k].act) {
-        case BKR94ACS_ACT_PROP_INITIAL:
-        case BKR94ACS_ACT_PROP_ECHO:
-        case BKR94ACS_ACT_PROP_READY:
-          pv = bkr94acsProposalValue(peers[p], out[k].origin);
-          if (!pv) break;
+        case BKR94ACS_ACT_PROP_SEND:
+          if (!out[k].value) break;
           for (q = 0; q < 4; ++q)
             qPush(BKR94ACS_CLS_PROPOSAL, out[k].origin, 0, 0,
-                  (out[k].act == BKR94ACS_ACT_PROP_INITIAL)
-                    ? BRACHA87_INITIAL
-                  : (out[k].act == BKR94ACS_ACT_PROP_ECHO)
-                    ? BRACHA87_ECHO : BRACHA87_READY,
-                  (unsigned char)p, (unsigned char)q, pv, 1);
+                  out[k].type, (unsigned char)p, (unsigned char)q,
+                  out[k].value, 1);
           break;
         case BKR94ACS_ACT_CON_SEND:
           for (q = 0; q < 4; ++q)
             qPush(BKR94ACS_CLS_CONSENSUS, out[k].origin, out[k].round,
-                  out[k].broadcaster, out[k].conType,
+                  out[k].broadcaster, out[k].type,
                   (unsigned char)p, (unsigned char)q,
                   &out[k].conValue, 1);
           break;
@@ -1769,26 +1717,17 @@ runPumpOnlyE2e(
                   m->value[0], acts);
       for (k = 0; k < nacts; ++k) {
         struct bkr94acsAct *act = &acts[k];
-        const unsigned char *pv;
-
         switch (act->act) {
-        case BKR94ACS_ACT_PROP_INITIAL:
-        case BKR94ACS_ACT_PROP_ECHO:
-        case BKR94ACS_ACT_PROP_READY:
-          pv = bkr94acsProposalValue(peers[m->to], act->origin);
-          if (!pv) break;
+        case BKR94ACS_ACT_PROP_SEND:
+          if (!act->value) break;
           for (q = 0; q < 4; ++q)
             qPush(BKR94ACS_CLS_PROPOSAL, act->origin, 0, 0,
-                  (act->act == BKR94ACS_ACT_PROP_INITIAL)
-                    ? BRACHA87_INITIAL
-                  : (act->act == BKR94ACS_ACT_PROP_ECHO)
-                    ? BRACHA87_ECHO : BRACHA87_READY,
-                  m->to, (unsigned char)q, pv, 1);
+                  act->type, m->to, (unsigned char)q, act->value, 1);
           break;
         case BKR94ACS_ACT_CON_SEND:
           for (q = 0; q < 4; ++q)
             qPush(BKR94ACS_CLS_CONSENSUS, act->origin, act->round,
-                  act->broadcaster, act->conType, m->to,
+                  act->broadcaster, act->type, m->to,
                   (unsigned char)q, &act->conValue, 1);
           break;
         default:
@@ -1815,26 +1754,18 @@ runPumpOnlyE2e(
       if (npact)
         progress = 1;
       for (k = 0; k < npact; ++k) {
-        const unsigned char *pv;
-
         switch (out[k].act) {
-        case BKR94ACS_ACT_PROP_INITIAL:
-        case BKR94ACS_ACT_PROP_ECHO:
-        case BKR94ACS_ACT_PROP_READY:
-          pv = bkr94acsProposalValue(peers[p], out[k].origin);
-          if (!pv) break;
+        case BKR94ACS_ACT_PROP_SEND:
+          if (!out[k].value) break;
           for (q = 0; q < 4; ++q)
             qPush(BKR94ACS_CLS_PROPOSAL, out[k].origin, 0, 0,
-                  (out[k].act == BKR94ACS_ACT_PROP_INITIAL)
-                    ? BRACHA87_INITIAL
-                  : (out[k].act == BKR94ACS_ACT_PROP_ECHO)
-                    ? BRACHA87_ECHO : BRACHA87_READY,
-                  (unsigned char)p, (unsigned char)q, pv, 1);
+                  out[k].type, (unsigned char)p, (unsigned char)q,
+                  out[k].value, 1);
           break;
         case BKR94ACS_ACT_CON_SEND:
           for (q = 0; q < 4; ++q)
             qPush(BKR94ACS_CLS_CONSENSUS, out[k].origin, out[k].round,
-                  out[k].broadcaster, out[k].conType,
+                  out[k].broadcaster, out[k].type,
                   (unsigned char)p, (unsigned char)q,
                   &out[k].conValue, 1);
           break;

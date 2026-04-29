@@ -316,9 +316,10 @@ main(
   /*  Bootstrap: each peer Proposes their value                           */
   /*                                                                      */
   /*  bkr94acsPropose marks the local proposal Fig1 as the broadcast      */
-  /*  originator and emits one BKR94ACS_ACT_PROP_INITIAL action for the   */
-  /*  application to broadcast to all peers.  Replay thereafter is        */
-  /*  intrinsic to BPR (bkr94acsPump) -- no application ledger required.  */
+  /*  originator and emits one BKR94ACS_ACT_PROP_SEND action (.type =     */
+  /*  BRACHA87_INITIAL) for the application to broadcast to all peers.    */
+  /*  Replay thereafter is intrinsic to BPR (bkr94acsPump) -- no          */
+  /*  application ledger required.                                        */
   /*----------------------------------------------------------------------*/
 
   for (i = 0; i < n; ++i) {
@@ -392,37 +393,29 @@ main(
 
       switch (acts[k].act) {
 
-      case BKR94ACS_ACT_PROP_ECHO:
-      case BKR94ACS_ACT_PROP_READY:
-        {
-          const unsigned char *pv;
-
-          pv = bkr94acsProposalValue(st, acts[k].origin);
-          if (!pv)
-            break;
-          if (verbose)
-            printf("peer %u: -> PROP %s(origin=%u)\n",
-                   (unsigned)m->to,
-                   (acts[k].act == BKR94ACS_ACT_PROP_ECHO) ? "ECHO" : "READY",
-                   (unsigned)acts[k].origin);
-          for (p = 0; p < n; ++p)
-            qPush(BKR94ACS_CLS_PROPOSAL, acts[k].origin, 0, 0,
-                  (acts[k].act == BKR94ACS_ACT_PROP_ECHO)
-                    ? BRACHA87_ECHO : BRACHA87_READY,
-                  m->to, (unsigned char)p, pv, vLen);
-        }
+      case BKR94ACS_ACT_PROP_SEND:
+        if (!acts[k].value)
+          break;
+        if (verbose)
+          printf("peer %u: -> PROP %s(origin=%u)\n",
+                 (unsigned)m->to, typeName(acts[k].type),
+                 (unsigned)acts[k].origin);
+        for (p = 0; p < n; ++p)
+          qPush(BKR94ACS_CLS_PROPOSAL, acts[k].origin, 0, 0,
+                acts[k].type, m->to, (unsigned char)p,
+                acts[k].value, vLen);
         break;
 
       case BKR94ACS_ACT_CON_SEND:
         if (verbose)
           printf("peer %u: -> CON %s(origin=%u, round=%u, bcaster=%u, val=%u)\n",
-                 (unsigned)m->to, typeName(acts[k].conType),
+                 (unsigned)m->to, typeName(acts[k].type),
                  (unsigned)acts[k].origin, (unsigned)acts[k].round,
                  (unsigned)acts[k].broadcaster,
                  (unsigned)acts[k].conValue);
         for (p = 0; p < n; ++p)
           qPush(BKR94ACS_CLS_CONSENSUS, acts[k].origin, acts[k].round,
-                acts[k].broadcaster, acts[k].conType,
+                acts[k].broadcaster, acts[k].type,
                 m->to, (unsigned char)p,
                 &acts[k].conValue, 1);
         break;

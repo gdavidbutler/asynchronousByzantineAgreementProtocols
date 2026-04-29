@@ -89,25 +89,66 @@
 /*************************************************************************/
 /*  Output actions                                                       */
 /*                                                                       */
-/*  Returned in struct bkr94acsAct array from bkr94acsInput functions.   */
-/*  Caller sends the described messages on the network.                  */
+/*  Returned in struct bkr94acsAct array from bkr94acsInput / Pump /     */
+/*  Propose calls.  Caller sends the described messages on the network.  */
 /*************************************************************************/
 
-#define BKR94ACS_ACT_PROP_INITIAL 6  /* send proposal initial to all for .origin (BPR) */
-#define BKR94ACS_ACT_PROP_ECHO    1  /* send proposal echo to all for .origin */
-#define BKR94ACS_ACT_PROP_READY   2  /* send proposal ready to all for .origin */
-#define BKR94ACS_ACT_CON_SEND     3  /* send consensus msg: .origin .round .conType .conValue */
-#define BKR94ACS_ACT_BA_DECIDED   4  /* BA for .origin decided .conValue */
-#define BKR94ACS_ACT_COMPLETE     5  /* all N BAs decided; common subset final */
+#define BKR94ACS_ACT_PROP_SEND    1  /* send proposal Fig1 msg: .type, .value, .origin */
+#define BKR94ACS_ACT_CON_SEND     2  /* send consensus Fig1 msg: .type, .conValue, .origin, .round, .broadcaster */
+#define BKR94ACS_ACT_BA_DECIDED   3  /* BA for .origin decided .conValue */
+#define BKR94ACS_ACT_COMPLETE     4  /* all N BAs decided; common subset final */
 
+/*
+ * struct bkr94acsAct
+ *
+ * Field usage by act:
+ *   PROP_SEND   .origin, .type (BRACHA87_INITIAL/ECHO/READY), .value (vLen+1 bytes)
+ *   CON_SEND    .origin, .round, .broadcaster, .type, .conValue (binary)
+ *   BA_DECIDED  .origin, .conValue (0=excluded, 1=included)
+ *   COMPLETE    (no fields)
+ *
+ * .value is a borrowed pointer into library-owned storage (the
+ * Fig1's accepted-value slot).  Valid until the next call into
+ * the library on the same struct bkr94acs that mutates state.
+ * Caller must copy if persistence beyond that boundary is needed.
+ */
 struct bkr94acsAct {
+  const unsigned char *value; /* PROP_SEND: vLen+1 bytes; otherwise 0 */
   unsigned char act;          /* BKR94ACS_ACT_* */
   unsigned char origin;       /* which origin this relates to */
-  unsigned char round;        /* consensus round (BKR94ACS_ACT_CON_SEND only) */
-  unsigned char conType;      /* BRACHA87_INITIAL/ECHO/READY (CON_SEND only) */
-  unsigned char conValue;     /* binary value (CON_SEND, BA_DECIDED only) */
-  unsigned char broadcaster;  /* who originated this Fig1 broadcast (CON_SEND) */
+  unsigned char round;        /* consensus round (CON_SEND only) */
+  unsigned char type;         /* BRACHA87_INITIAL/ECHO/READY (PROP_SEND, CON_SEND) */
+  unsigned char conValue;     /* binary value (CON_SEND, BA_DECIDED) */
+  unsigned char broadcaster;  /* who initiated this Fig1 broadcast (CON_SEND) */
 };
+
+/*
+ * Wire-uniqueness identity for chanBlbChnRsec-style transports
+ * that key reassembly tables on a per-emission unique tag.
+ *
+ * Fills out[BKR94ACS_ACT_IDENTITY_LEN] with the protocol's
+ * emission identity tuple [act, origin, round, broadcaster,
+ * type] -- the minimal set of bytes that distinguishes one
+ * lawful library emission from another.  PROP_SEND zeros round
+ * and broadcaster (always 0 for proposals); CON_SEND fills all
+ * five.  Non-wire acts (BA_DECIDED, COMPLETE) return 0.
+ *
+ * Callers append their own sender / seq / class-tag bytes to
+ * disambiguate the same emission across sender peers and across
+ * concurrent ACS instances.  Total tag size is application-
+ * controlled; this helper produces only the library-owned slice.
+ *
+ * Returns BKR94ACS_ACT_IDENTITY_LEN on a wire-emitting act,
+ * 0 otherwise (including outCap < BKR94ACS_ACT_IDENTITY_LEN).
+ */
+#define BKR94ACS_ACT_IDENTITY_LEN 5
+
+unsigned int
+bkr94acsActIdentity(
+  const struct bkr94acsAct *
+ ,unsigned char *           /* out: receives identity bytes */
+ ,unsigned int              /* outCap: must be >= BKR94ACS_ACT_IDENTITY_LEN */
+);
 
 /*************************************************************************/
 /*  BKR94 ACS state                                                      */
@@ -195,8 +236,8 @@ bkr94acsInit(
  * Maximum output actions from a single input call.
  *
  * Proposal input (BKR94ACS_CLS_PROPOSAL):
- *   up to 2 (echo/ready) + 1 (vote-1 from BKR94 Step 1 on accept).
- *   Step 2's vote-0 fanout lives in consensus input, not here.
+ *   up to 2 PROP_SEND (echo/ready) + 1 CON_SEND (vote-1 from BKR94 Step 1
+ *   on accept).  Step 2's vote-0 fanout lives in consensus input, not here.
  *   Bound: 3.
  *
  * Consensus input (BKR94ACS_CLS_CONSENSUS):
@@ -224,10 +265,10 @@ bkr94acsInit(
  *
  * The cursor visits one Fig1 instance per pump call.  Per-Fig1
  * Bpr emits at most 3 actions (INITIAL_ALL + ECHO_ALL +
- * READY_ALL).  Pump tags each as a struct bkr94acsAct (proposal
- * or consensus, with origin / round / broadcaster /
- * conType filled by the cursor position), so the per-call
- * bound is 3.
+ * READY_ALL).  Pump tags each as a struct bkr94acsAct
+ * (PROP_SEND or CON_SEND, with origin / round / broadcaster /
+ * type filled by the cursor position), so the per-call bound
+ * is 3.
  */
 #define BKR94ACS_PUMP_MAX_ACTS  3
 
@@ -238,13 +279,15 @@ bkr94acsInit(
  * Returns number of actions written to out[].
  * Caller provides out[] with room for BKR94ACS_MAX_ACTS(n, maxPhases) entries.
  *
- * On BKR94ACS_ACT_PROP_ECHO / BKR94ACS_ACT_PROP_READY:
- *   Caller sends the proposal echo/ready to all peers.
- *   Value to send: bkr94acsProposalValue(acs, origin).
+ * On BKR94ACS_ACT_PROP_SEND:
+ *   Caller broadcasts a proposal Fig1 message of .type
+ *   (BRACHA87_INITIAL/ECHO/READY) for .origin.  Bytes to send:
+ *   .value (vLen+1 bytes, borrowed pointer into the library's
+ *   accepted-value slot).
  *
  * On BKR94ACS_ACT_CON_SEND:
- *   Caller sends a consensus message to all peers.
- *   Fields: .origin, .round, .conType, .conValue.
+ *   Caller broadcasts a consensus Fig1 message.
+ *   Fields: .origin, .round, .broadcaster, .type, .conValue.
  */
 unsigned int
 bkr94acsProposalInput(
@@ -324,13 +367,14 @@ bkr94acsProposalValue(
  *
  * Marks the local proposal Fig1 (origin = self) as the broadcast
  * originator and stores the value to be broadcast.  Returns one
- * action (BKR94ACS_ACT_PROP_INITIAL with origin = self) for the
- * caller to broadcast immediately.  Thereafter bkr94acsPump
- * replays BKR94ACS_ACT_PROP_INITIAL on every tick until the
- * originator's own loopback (or echo / ready cascade derived
- * from peers' messages) sets ECHOED on the proposal Fig1, after
- * which the proposal Fig1's own BPR carries the value via echo
- * / ready replays.
+ * action (BKR94ACS_ACT_PROP_SEND with .origin = self,
+ * .type = BRACHA87_INITIAL) for the caller to broadcast
+ * immediately.  Thereafter bkr94acsPump replays the same
+ * PROP_SEND/INITIAL on every tick until the originator's own
+ * loopback (or echo / ready cascade derived from peers'
+ * messages) sets ECHOED on the proposal Fig1, after which the
+ * proposal Fig1's own BPR carries the value via echo / ready
+ * replays.
  *
  * Caller reads the value back via bkr94acsProposalValue(self).
  *
@@ -373,10 +417,11 @@ bkr94acsPropose(
  * bkr94acs.dtc BPR section) are the entire replay state.
  *
  * Out actions:
- *   BKR94ACS_ACT_PROP_INITIAL/ECHO/READY for proposal Fig1
- *     replays (.origin = which proposal).
+ *   BKR94ACS_ACT_PROP_SEND for proposal Fig1 replays
+ *     (.origin = which proposal, .type = INITIAL/ECHO/READY,
+ *      .value = vLen+1 bytes).
  *   BKR94ACS_ACT_CON_SEND for consensus Fig1 replays
- *     (.origin = which BA, .round, .broadcaster, .conType =
+ *     (.origin = which BA, .round, .broadcaster, .type =
  *      INITIAL/ECHO/READY, .conValue read from Fig1Value).
  *
  * Caller provides out[] with room for BKR94ACS_PUMP_MAX_ACTS
@@ -386,6 +431,64 @@ unsigned int
 bkr94acsPump(
   struct bkr94acs *
  ,struct bkr94acsAct *     /* out: room for BKR94ACS_PUMP_MAX_ACTS */
+);
+
+/*************************************************************************/
+/*  Diagnostic accessors                                                 */
+/*                                                                       */
+/*  Read-only views into ACS state for monitoring, debugging, and        */
+/*  cadence tuning.  None affect protocol semantics.                     */
+/*************************************************************************/
+
+/*
+ * Decision state for a single BA (origin's binary consensus):
+ *   0xFF -> undecided
+ *   0    -> excluded from common subset
+ *   1    -> included in common subset
+ *
+ * Returns 0xFF on null state or out-of-range origin.
+ */
+unsigned char
+bkr94acsBaDecision(
+  const struct bkr94acs *
+ ,unsigned char            /* origin */
+);
+
+/*
+ * Number of Fig1 instances currently committed (any of F1_ORIGIN,
+ * F1_ECHOED, F1_RDSENT set).  Walks both the N proposal Fig1s
+ * and the per-origin consensus pipeline up to each origin's
+ * conNextRound (no committed state can exist past the active
+ * Fig4 round for that origin).
+ *
+ * Useful for sizing tick cadence: at one Fig1 advance per Pump
+ * call, the per-Fig1 replay rate is roughly tick / (count + 1).
+ *
+ * Returns 0 on null state.
+ */
+unsigned int
+bkr94acsCommittedFig1Count(
+  const struct bkr94acs *
+);
+
+/*
+ * Current pump cursor position.  Reads the four cursor fields
+ * (phase, origin, round, broadcaster).  Any out parameter may be
+ * 0 to skip that field.
+ *
+ *   phase: 0 = proposal Fig1s, 1 = consensus Fig1s
+ *   origin / round / broadcaster: position within phase
+ *
+ * Useful for monitoring sweep progress and diagnosing stalls.
+ * No-op on null state.
+ */
+void
+bkr94acsCursor(
+  const struct bkr94acs *
+ ,unsigned char *          /* phase: 0 to skip */
+ ,unsigned char *          /* origin: 0 to skip */
+ ,unsigned char *          /* round: 0 to skip */
+ ,unsigned char *          /* broadcaster: 0 to skip */
 );
 
 #endif /* BKR94ACS_H */

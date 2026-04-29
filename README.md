@@ -166,8 +166,9 @@ With BPR, the application loop is two operations: drain the network and tick the
 struct bkr94acsAct out[BKR94ACS_PUMP_MAX_ACTS];
 struct bkr94acsAct propAct;
 
-/* Self-initiation: mark the local proposal Fig 1 as origin and
- * emit one PROP_INITIAL action for the application to broadcast. */
+/* Self-initiation: mark the local proposal Fig 1 as origin and emit
+ * one PROP_SEND action (.type = BRACHA87_INITIAL) for the application
+ * to broadcast.  The act's .value points into library storage. */
 bkr94acsPropose(a, my_value, &propAct);
 broadcast_action(propAct);
 
@@ -187,6 +188,11 @@ while (!silenceQuorumExit) {
   sleep(tickMs);
 }
 ```
+
+`broadcast_action(act)` switches on `act.act` and sends:
+- `BKR94ACS_ACT_PROP_SEND` — broadcast a proposal Fig 1 message of `act.type` (INITIAL/ECHO/READY) for `act.origin`, with bytes `act.value` (vLen+1, borrowed pointer into library state — copy if persisting).
+- `BKR94ACS_ACT_CON_SEND` — broadcast a consensus Fig 1 message: `act.origin`, `act.round`, `act.broadcaster`, `act.type`, binary `act.conValue`.
+- `BKR94ACS_ACT_BA_DECIDED` / `BKR94ACS_ACT_COMPLETE` — observability signals; no wire emission.
 
 `silenceQuorumExit` is the application's termination policy — see Deployment Notes below.
 
@@ -217,13 +223,30 @@ while (!silenceQuorumExit) {
 |---|---|
 | `bkr94acsSz(n, vLen, maxPhases)` | Compute allocation size for a BKR94 ACS instance |
 | `bkr94acsInit(...)` | Initialize with peer index, coin function, and closure |
-| `bkr94acsPropose(acs, value, out)` | Mark local proposal Fig 1 as originator and emit one PROP_INITIAL action (BPR) |
+| `bkr94acsPropose(acs, value, out)` | Mark local proposal Fig 1 as originator and emit one PROP_SEND/INITIAL action (BPR) |
 | `bkr94acsProposalInput(acs, origin, type, from, value, out)` | Process a proposal broadcast message; returns action count |
 | `bkr94acsConsensusInput(acs, origin, round, broadcaster, type, from, value, out)` | Process a consensus message; returns action count |
 | `bkr94acsPump(acs, out)` | BPR pump tick; cursor walks one Fig 1 per call; returns action count (0-3); 0 = full-sweep idle |
 | `bkr94acsComplete(acs)` | Check if all N BAs have decided |
 | `bkr94acsSubset(acs, origins)` | Retrieve the decided common subset |
 | `bkr94acsProposalValue(acs, origin)` | Retrieve accepted proposal value for an origin |
+| `bkr94acsActIdentity(act, out, outCap)` | Fixed-length [act, origin, round, broadcaster, type] bytes for chanBlbChnRsec-style wire-tag uniqueness; returns BKR94ACS_ACT_IDENTITY_LEN (5) for SEND acts, 0 otherwise |
+| `bkr94acsBaDecision(acs, origin)` | BA decision for origin: 0xFF undecided / 0 excluded / 1 included |
+| `bkr94acsCommittedFig1Count(acs)` | Count of Fig1 instances with any committed flag (ORIGIN/ECHOED/RDSENT); useful for cadence sizing |
+| `bkr94acsCursor(acs, *phase, *origin, *round, *broadcaster)` | Read pump cursor position; pass 0 to skip a field |
+
+### Action Struct
+
+`struct bkr94acsAct` carries one library emission. Field usage by `act.act`:
+
+| act value | meaning | populated fields |
+|---|---|---|
+| `BKR94ACS_ACT_PROP_SEND` | broadcast a proposal Fig 1 message | `.origin`, `.type` (BRACHA87_INITIAL/ECHO/READY), `.value` (vLen+1 bytes, borrowed pointer) |
+| `BKR94ACS_ACT_CON_SEND` | broadcast a consensus Fig 1 message | `.origin`, `.round`, `.broadcaster`, `.type`, `.conValue` (binary) |
+| `BKR94ACS_ACT_BA_DECIDED` | a BA reached a decision | `.origin`, `.conValue` (0=excluded, 1=included) |
+| `BKR94ACS_ACT_COMPLETE` | all N BAs decided | (none) |
+
+`.value` is a borrowed pointer into the library's accepted-value slot; valid until the next library call that mutates state. Caller copies if persistence is needed past that boundary.
 
 ### Caller Composition Pattern
 

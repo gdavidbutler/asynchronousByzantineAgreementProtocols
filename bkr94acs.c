@@ -355,10 +355,11 @@ bkr94acsVote(
     bracha87Fig1Origin(conF1(a, origin, 0, a->self), &binary);
   }
 
+  out->value = 0;
   out->act = BKR94ACS_ACT_CON_SEND;
   out->origin = (unsigned char)origin;
   out->round = 0;
-  out->conType = BRACHA87_INITIAL;
+  out->type = BRACHA87_INITIAL;
   out->conValue = vote;
   out->broadcaster = a->self;
   return (1);
@@ -414,19 +415,15 @@ bkr94acsProposalInput(
   nact = 0;
 
   for (k = 0; k < nf1; ++k) {
-    if (f1out[k] == BRACHA87_ECHO_ALL) {
-      out[nact].act = BKR94ACS_ACT_PROP_ECHO;
+    if (f1out[k] == BRACHA87_ECHO_ALL || f1out[k] == BRACHA87_READY_ALL) {
+      out[nact].value = bracha87Fig1Value(f1);
+      out[nact].act = BKR94ACS_ACT_PROP_SEND;
       out[nact].origin = origin;
       out[nact].round = 0;
-      out[nact].conType = 0;
+      out[nact].type = (f1out[k] == BRACHA87_ECHO_ALL)
+                       ? BRACHA87_ECHO : BRACHA87_READY;
       out[nact].conValue = 0;
-      ++nact;
-    } else if (f1out[k] == BRACHA87_READY_ALL) {
-      out[nact].act = BKR94ACS_ACT_PROP_READY;
-      out[nact].origin = origin;
-      out[nact].round = 0;
-      out[nact].conType = 0;
-      out[nact].conValue = 0;
+      out[nact].broadcaster = 0;
       ++nact;
     } else if (f1out[k] == BRACHA87_ACCEPT) {
       /*
@@ -568,10 +565,11 @@ bkr94acsConsensusInput(
           /* BA-decided notification (always emitted; not part of
            * BKR94 rules, just an observability signal). */
           bkr94acsDecision(a)[origin] = f4->decision;
+          out[nact].value = 0;
           out[nact].act = BKR94ACS_ACT_BA_DECIDED;
           out[nact].origin = origin;
           out[nact].round = 0;
-          out[nact].conType = 0;
+          out[nact].type = 0;
           out[nact].conValue = f4->decision;
           out[nact].broadcaster = 0;
           ++nact;
@@ -614,10 +612,11 @@ bkr94acsConsensusInput(
           }
           if (doOutputSubset) {
             a->complete = 1;
+            out[nact].value = 0;
             out[nact].act = BKR94ACS_ACT_COMPLETE;
             out[nact].origin = 0;
             out[nact].round = 0;
-            out[nact].conType = 0;
+            out[nact].type = 0;
             out[nact].conValue = 0;
             out[nact].broadcaster = 0;
             ++nact;
@@ -644,10 +643,11 @@ bkr94acsConsensusInput(
                                &binary);
           }
 
+          out[nact].value = 0;
           out[nact].act = BKR94ACS_ACT_CON_SEND;
           out[nact].origin = origin;
           out[nact].round = *nextRound;
-          out[nact].conType = BRACHA87_INITIAL;
+          out[nact].type = BRACHA87_INITIAL;
           out[nact].conValue = f4->value;
           out[nact].broadcaster = a->self;
           ++nact;
@@ -664,10 +664,11 @@ bkr94acsConsensusInput(
       if (!cv)
         continue;
 
+      out[nact].value = 0;
       out[nact].act = BKR94ACS_ACT_CON_SEND;
       out[nact].origin = origin;
       out[nact].round = round;
-      out[nact].conType = (f1out[k] == BRACHA87_ECHO_ALL)
+      out[nact].type = (f1out[k] == BRACHA87_ECHO_ALL)
         ? BRACHA87_ECHO : BRACHA87_READY;
       out[nact].conValue = cv[0];
       out[nact].broadcaster = broadcaster;
@@ -750,10 +751,11 @@ bkr94acsPropose(
    */
   bracha87Fig1Origin(propF1(a, a->self), value);
 
-  out->act = BKR94ACS_ACT_PROP_INITIAL;
+  out->value = bracha87Fig1Value(propF1(a, a->self));
+  out->act = BKR94ACS_ACT_PROP_SEND;
   out->origin = a->self;
   out->round = 0;
-  out->conType = 0;
+  out->type = BRACHA87_INITIAL;
   out->conValue = 0;
   out->broadcaster = 0;
   return (1);
@@ -814,22 +816,32 @@ bkr94acsPumpEmitProposal(
  ,unsigned int origin
  ,struct bkr94acsAct *out
 ){
+  struct bracha87Fig1 *f1;
+  const unsigned char *cv;
   unsigned char f1out[3];
   unsigned int n;
   unsigned int k;
   unsigned int nact;
 
-  n = bracha87Fig1Bpr(propF1(a, origin), f1out);
+  f1 = propF1(a, origin);
+  n = bracha87Fig1Bpr(f1, f1out);
+  if (!n)
+    return (0);
+  cv = bracha87Fig1Value(f1);
+  if (!cv)
+    return (0);
+
   nact = 0;
   for (k = 0; k < n; ++k) {
-    out[nact].act = (f1out[k] == BRACHA87_INITIAL_ALL)
-                    ? BKR94ACS_ACT_PROP_INITIAL
-                  : (f1out[k] == BRACHA87_ECHO_ALL)
-                    ? BKR94ACS_ACT_PROP_ECHO
-                  :   BKR94ACS_ACT_PROP_READY;
+    out[nact].value = cv;
+    out[nact].act = BKR94ACS_ACT_PROP_SEND;
     out[nact].origin = (unsigned char)origin;
     out[nact].round = 0;
-    out[nact].conType = 0;
+    out[nact].type = (f1out[k] == BRACHA87_INITIAL_ALL)
+                     ? BRACHA87_INITIAL
+                   : (f1out[k] == BRACHA87_ECHO_ALL)
+                     ? BRACHA87_ECHO
+                   :   BRACHA87_READY;
     out[nact].conValue = 0;
     out[nact].broadcaster = 0;
     ++nact;
@@ -862,14 +874,15 @@ bkr94acsPumpEmitConsensus(
 
   nact = 0;
   for (k = 0; k < n; ++k) {
+    out[nact].value = 0;
     out[nact].act = BKR94ACS_ACT_CON_SEND;
     out[nact].origin = (unsigned char)origin;
     out[nact].round = (unsigned char)round;
-    out[nact].conType = (f1out[k] == BRACHA87_INITIAL_ALL)
-                       ? BRACHA87_INITIAL
-                     : (f1out[k] == BRACHA87_ECHO_ALL)
-                       ? BRACHA87_ECHO
-                     :   BRACHA87_READY;
+    out[nact].type = (f1out[k] == BRACHA87_INITIAL_ALL)
+                     ? BRACHA87_INITIAL
+                   : (f1out[k] == BRACHA87_ECHO_ALL)
+                     ? BRACHA87_ECHO
+                   :   BRACHA87_READY;
     out[nact].conValue = cv[0];
     out[nact].broadcaster = (unsigned char)broadcaster;
     ++nact;
@@ -944,4 +957,127 @@ bkr94acsPump(
       return (nact);
   }
   return (0);
+}
+
+/*------------------------------------------------------------------------*/
+/*  Diagnostic accessors                                                  */
+/*------------------------------------------------------------------------*/
+
+/*
+ * Identity bytes for chanBlbChnRsec-style transports.  See
+ * bkr94acs.h for the field-usage contract.
+ */
+unsigned int
+bkr94acsActIdentity(
+  const struct bkr94acsAct *act
+ ,unsigned char *out
+ ,unsigned int outCap
+){
+  if (!act || !out || outCap < BKR94ACS_ACT_IDENTITY_LEN)
+    return (0);
+  if (act->act != BKR94ACS_ACT_PROP_SEND
+   && act->act != BKR94ACS_ACT_CON_SEND)
+    return (0);
+  out[0] = act->act;
+  out[1] = act->origin;
+  out[2] = act->round;       /* 0 for PROP_SEND */
+  out[3] = act->broadcaster; /* 0 for PROP_SEND */
+  out[4] = act->type;
+  return (BKR94ACS_ACT_IDENTITY_LEN);
+}
+
+unsigned char
+bkr94acsBaDecision(
+  const struct bkr94acs *a
+ ,unsigned char origin
+){
+  if (!a || origin > a->n)
+    return (0xFF);
+  return (bkr94acsDecision(a)[origin]);
+}
+
+unsigned int
+bkr94acsCommittedFig1Count(
+  const struct bkr94acs *a
+){
+  unsigned int N;
+  unsigned int mr;
+  unsigned int origin;
+  unsigned int round;
+  unsigned int bcast;
+  unsigned int count;
+  unsigned char committedMask;
+  const unsigned char *nextRound;
+  const struct bracha87Fig1 *f1;
+
+  if (!a)
+    return (0);
+
+  /*
+   * Committed = any of F1_ORIGIN / F1_ECHOED / F1_RDSENT set.
+   * These are the flags that drive Bpr replay output; F1_ACCEPTED
+   * piggybacks on F1_RDSENT remaining set post-accept (pitfall 10),
+   * so it is implicitly counted.
+   */
+  committedMask = (unsigned char)(BRACHA87_F1_ECHOED
+                                | BRACHA87_F1_RDSENT
+                                | BRACHA87_F1_ORIGIN);
+
+  N = A_N(a);
+  mr = maxRounds(a);
+  nextRound = bkr94acsConNextRound(a);
+  count = 0;
+
+  for (origin = 0; origin < N; ++origin) {
+    f1 = propF1((struct bkr94acs *)a, (unsigned char)origin);
+    if (f1->flags & committedMask)
+      ++count;
+  }
+
+  /*
+   * Consensus Fig1s are committed only at rounds the BA has
+   * actually entered (round < conNextRound[origin]).  Past that,
+   * no Fig1Input has run; flags are zero by calloc.  Walking
+   * the full mr * N space is correct but wasteful; we cap on
+   * conNextRound to keep this O(active).
+   */
+  for (origin = 0; origin < N; ++origin) {
+    unsigned int activeRounds;
+
+    activeRounds = nextRound[origin];
+    if (activeRounds > mr)
+      activeRounds = mr;
+    for (round = 0; round < activeRounds; ++round) {
+      for (bcast = 0; bcast < N; ++bcast) {
+        f1 = conF1((struct bkr94acs *)a,
+                   (unsigned char)origin,
+                   (unsigned char)round,
+                   (unsigned char)bcast);
+        if (f1->flags & committedMask)
+          ++count;
+      }
+    }
+  }
+
+  return (count);
+}
+
+void
+bkr94acsCursor(
+  const struct bkr94acs *a
+ ,unsigned char *phase
+ ,unsigned char *origin
+ ,unsigned char *round
+ ,unsigned char *broadcaster
+){
+  if (!a)
+    return;
+  if (phase)
+    *phase = a->cursorPhase;
+  if (origin)
+    *origin = a->cursorOrigin;
+  if (round)
+    *round = a->cursorRound;
+  if (broadcaster)
+    *broadcaster = a->cursorBroadcaster;
 }
