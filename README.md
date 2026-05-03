@@ -373,8 +373,6 @@ This library is protocol-only. A working deployment needs a transport layer sati
 
 A previous deployment pattern wrapped this library in a per-record ledger: `peerHasPsk[]` / `peerOriginAck[]` / `peerRound[]` evidence tracking, `destMask` per-record bitmaps, a cursor over the record list, per-record `pumpNs` floors. With BPR, that machinery is no longer needed — the library's own `bkr94acsPump` (or `bracha87Fig1Bpr` at the bare-bracha87 layer) is the only mechanism that guarantees eventual delivery, and replay state is intrinsic to the protocol's own committed flags. The application loop is two operations: drain ingress, tick the pump (see the BPR section above for the loop sketch).
 
-Wire-level efficiencies like RSEC (Reed-Solomon erasure coding) and inter-shard delay are still useful as efficiency tuning under steady drop, but they are not reliability mechanisms; only BPR is. RSEC reduces the per-shard miss rate; BPR closes the residual gap.
-
 ### Termination policy
 
 A decided peer must keep broadcasting (Implementation Note 1) so others can reach consensus. Two obvious exit mechanisms are both wrong:

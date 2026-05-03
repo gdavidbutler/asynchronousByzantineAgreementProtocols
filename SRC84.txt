@@ -207,7 +207,7 @@ applied: function placed at the layer that holds the knowledge
 required to implement it correctly. No separate stubborn-link
 layer below; no application ledger above.
 
-A lower-layer optimization (e.g. transport-level RSEC, batching,
-inter-shard delay) is admissible per the performance carve-out
-(P1, P2) as a tunable that bounds retry frequency, not as a
-substitute for BPR's correctness obligation.
+A lower-layer optimization (e.g. batching, inter-shard delay)
+is admissible per the performance carve-out (P1, P2)
+as a tunable that bounds retry frequency,
+not as a substitute for BPR's correctness obligation.
