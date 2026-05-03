@@ -1,10 +1,10 @@
 # asynchronousByzantineAgreementProtocols
 
-A C library implementing all four figures of Gabriel Bracha's 1987 paper as composable pure state machines, plus the BKR94 Asynchronous Common Subset (ACS) protocol built from them.
+A C library implementing Gabriel Bracha's 1987 paper (Figures 1, 3, and 4 as composable pure state machines; Figure 2 captured for paper completeness and subsumed by Figure 3), plus the BKR94 Asynchronous Common Subset (ACS) protocol built from them.
 
 ## Overview
 
-This is the only known implementation of all four figures of Bracha 1987 as composable pure state machines. ANSI C89, zero dependencies. No I/O, no threads, no dynamic allocation -- the caller provides memory and executes output actions.
+This is the only known implementation of Bracha 1987 as composable pure state machines, with module boundaries that match the paper's figures. ANSI C89, zero dependencies. No I/O, no threads, no dynamic allocation -- the caller provides memory and executes output actions.
 
 Each module boundary matches the paper exactly, so the paper's proofs apply per-module: Lemmas 1-4 to Fig 1, Lemmas 5-7 to Fig 2/3, Lemmas 9-10 and Theorems 1-2 to Fig 4.
 
@@ -16,11 +16,51 @@ Gabriel Bracha, "Asynchronous Byzantine Agreement Protocols," *Information and C
 
 Michael Ben-Or, Boaz Kelmer, Tal Rabin, "Asynchronous Secure Computations with Optimal Resilience (Extended Abstract)," PODC '94, pages 183-192. Section 4 Figure 3 (Protocol Agreement[Q]) is implemented in `bkr94acs.[hc]`.
 
+J. H. Saltzer, D. P. Reed, D. D. Clark, "End-To-End Arguments in System Design," *ACM Transactions on Computer Systems* 2(4), 277-288 (1984). Cited as the design rationale for placing the BPR (Bracha Phase Re-emitter) pump at the protocol endpoint rather than in a lower transport layer.
+
 `Bracha87.txt` is a companion summary of the Bracha 1987 paper: figures, rules, VALID set definitions, all lemma/theorem statements, and a mapping from each lemma to the test that verifies it.
+
+**Paper typo:** Fig. 1 says "(n+t)/2 (echo,v) messages" but the Lemma 1 proof says "more than (n+t)/2." The proof requires strict `>` for the pigeonhole argument to work. The code follows the proof, not the figure.
 
 `BKR94ACS.txt` is the line-by-line extract of BKR94 Section 4 used as `bkr94acs.[hc]`'s reference.
 
-**Paper typo:** Fig. 1 says "(n+t)/2 (echo,v) messages" but the Lemma 1 proof says "more than (n+t)/2." The proof requires strict `>` for the pigeonhole argument to work. The code follows the proof, not the figure.
+`SRC84.txt` is the relevant extract of the End-to-End paper used as the design citation for BPR.
+
+## Design Rationale — Why These Three Papers
+
+This library exists because the alternatives we evaluated all required machinery we did not want to depend on. The three papers above were chosen as the smallest combination that satisfies our constraints — authenticated multi-value agreement under fair-loss asynchrony, no trusted setup, no pairing-based crypto, no DKG, embeddable in C89 with no dynamic allocation. The choice was load-bearing on each constraint; this section names the alternatives and the reason each was rejected.
+
+### Why Bracha 1987 for reliable broadcast
+
+The reliability primitive we needed is authenticated reliable broadcast (RBC) at `n > 3t`, signature-free, setup-free.
+
+Bracha's three-phase counting-threshold mechanism (initial / echo / ready) is the only RBC primitive we found that works at `n > 3t` with neither signatures nor a setup ceremony — authenticated point-to-point channels (HMAC over a pre-shared key, TLS, mutual SSH) are sufficient. Equally important, the paper's module boundary is a crisp algebraic interface (Fig 1 is reliable broadcast, Fig 3 is VALID-set validation, Fig 4 is consensus), so each lemma applies per-module and the audit chain shown later in this document is possible. A signature-based RBC bundles cryptographic verification into the protocol logic and forecloses that decomposition.
+
+### Why BKR94 for asynchronous common subset
+
+The agreement primitive we needed is multi-value agreement on a common subset of `n-t` proposals, asynchronous, Byzantine-resilient, with no leader and no view-change machinery.
+
+BKR94 alone is the smallest piece that does ACS with no setup, no leader, and no threshold cryptography — `n` Bracha Fig 1 instances feed `n` binary agreements, and the step-2 trigger ("`n-t` BAs decided 1, vote 0 in the rest") closes it out. We deliberately stopped at ACS: BKR94 itself continues to ASC (asynchronous secure computation, the MPC layer), but ASC has no caller in the stack we are building, and pulling it in would require a private-channels mesh that ACS itself cannot bootstrap.
+
+### Why Saltzer-Reed-Clark 1984 for BPR placement
+
+Bracha's correctness proofs presume reliable point-to-point channels between correct processes. Over fair-loss datagrams that assumption does not hold, and something must close the gap.
+
+The end-to-end argument (Saltzer/Reed/Clark 1984) is exactly the principle that resolves this: the reliability function should live at the layer that has the complete information needed to perform it correctly. For our reliability function — "deliver INITIAL/ECHO/READY despite a fair-loss network until the protocol no longer owes them" — the complete information lives in the Bracha state machine itself (`F1_ORIGIN`, `F1_ECHOED`, `F1_RDSENT`, plus the BKR per-origin BA-decided byte). BPR is the smallest re-emitter that runs over exactly that state, with no parallel data structure and no timing predicate. Lower-layer wire optimizations (RSEC, batching, inter-shard delay) remain admissible under SRC84's performance carve-outs (P1, P2) — they tune retry frequency without taking on the correctness obligation.
+
+### What we deliberately did not build
+
+For comparison shoppers: the following are absent by design, not by oversight.
+
+- **No DKG, no trusted setup, no threshold signatures, no pairing-based crypto, no verifiable random beacon.** Setup is one symmetric authentication credential per peer pair.
+- **No bundled coin source.** The library is coin-agnostic — both `bracha87Fig4Init` and `bkr94acsInit` take a `bracha87CoinFn` callback that the caller supplies. The bundled examples use a deterministic alternating coin (demo only); adversarial deployments are expected to supply their own. See "Coin choice — caller responsibility" in Deployment Notes.
+- **No transaction layer, no atomic broadcast wrapper, no application semantics.** BKR94 ACS produces a sorted subset of `n-t` arbitrary byte strings; what those bytes mean is the caller's choice.
+- **No partial-synchrony assumption.** Correctness (safety and termination) holds under arbitrary asynchrony.
+- **No leader, no view change, no pacemaker.** All peers are symmetric.
+- **No async MPC (ASC).** BKR94's continuation past ACS is not implemented because no caller in our stack needs it.
+- **No dynamic allocation, no I/O, no threads.** The library is a pure state machine; the caller provides memory and a transport.
+
+---
 
 ## System Model — What the Caller Must Provide
 
@@ -38,33 +78,7 @@ These assumptions are not optional — they are load-bearing requirements of eve
 
 The protocol's correctness (both safety and termination) does not depend on any timing assumption — that is the asynchronous-BFT model. Pump cadence, silence-quorum exit windows, and any other timing parameters in a deployment are operator-tuning, not protocol invariants.
 
-## Paper-Faithful Dispatch via DTC
-
-Each module's per-call decision logic is captured in a CSV decision table written in the paper's vocabulary (`bracha87Fig{1,3,4}.dtc`, `bkr94acs.dtc`). A small bridge per module (`*ToC.dtc`) maps domain names and values to C identifiers and constants. The decisionTableCompiler (`../decisionTableCompiler/dtc`) co-compiles each pair to an optimal-depth pseudocode dispatch, which a local `psu.awk` translates to a C snippet the entry-point function `#include`s.
-
-| Source | Bridge | Generated snippet | Entry point | Depth |
-|--------|--------|-------------------|-------------|-------|
-| `bracha87Fig1.dtc` | `bracha87Fig1ToC.dtc` | `bracha87Fig1.c` | `bracha87Fig1Input` | 7 |
-| `bracha87Fig2.dtc` | (none — Fig 3 subsumes) | — | — | — |
-| `bracha87Fig3.dtc` | `bracha87Fig3ToC.dtc` | `bracha87Fig3.c` | `bracha87Fig3Accept` | 4 |
-| `bracha87Fig4.dtc` | `bracha87Fig4ToC.dtc` | `bracha87Fig4.c` | `bracha87Fig4Round` | 6 |
-| `bkr94acs.dtc` | `bkr94acsToC.dtc` | `bkr94acsRules.c` | both bkr94acs entry points (one snippet, two `#include`s) | 7 |
-
-dtc enforces exhaustiveness and exclusivity of the rules at compile time. Depths are full-optimum (the `-q` heuristic flag is not used; full search confirms each is depth-minimal for its boundary-input set). The C wrapper computes boundary inputs, `#include`s the dispatch, and applies the boolean outputs as side effects in an order that is the API contract (e.g. for Fig 1: `echo` before `ready` before `accept`). See `decisionTableCompiler/README.md` for the bridge mechanism.
-
-**Audit chain:**
-
-```
-paper rules            <-> .dtc files                human, rule-by-rule comments
-.dtc files              -> compiled dispatch         dtc, exhaustive/exclusive
-C wrapper boundary I/O                               human inspection
-fig3IsValid, fig4Nfn, Fig 3 cascade                  test/test_predicates.c —
-                                                     exhaustive enumeration vs
-                                                     paper-direct reference at
-                                                     n=4, t=1
-```
-
-`fig3IsValid` is paper-correct **given a caller's N that exposes the existential subset quantifier via `rc > 0`**. The Fig 3 dispatch invokes N once on the full validated set; N's responsibility is to answer "could some n-t subset legitimately produce this value?" If a caller supplies an N whose permissive return is suppressed, `fig3IsValid` correctly rejects values the paper definition would admit via a strict subset. `fig4Nfn` is the canonical N for Fig 4 and exposes the existential analytically; its correspondence test (all 960 bounded inputs across the three sub-rounds) anchors that delegation.
+The System Model deliberately does **not** require: a distributed key generation (DKG), a trusted setup, threshold signatures, pairing-based crypto, or a verifiable random beacon. Authenticated point-to-point channels (assumption 3 above) suffice — provisioned by whatever mechanism the deployment prefers (HMAC over a pre-shared key, TLS, mutual SSH, Noise, etc.). Setup cost is one symmetric authentication credential per peer pair.
 
 ## Architecture
 
@@ -84,7 +98,7 @@ N proposals -> N Fig1(n,t,vLen) -> accept -> vote 1 in BA
 
 ### Figure 1 -- Reliable Broadcast Primitive
 
-One instance per (sender, round) pair. Implements the six rules from the paper's table: incoming initial/echo/ready messages trigger echo, ready, and accept actions based on counting thresholds. Per-peer echo/ready values are stored (not just counts) so `echo_count[v]` is computed correctly for any v. Requires n > 3t.
+The canonical Bracha reliable broadcast (RBC) — three-phase initial/echo/ready with `n > 3t`, no signatures, no setup. One instance per (sender, round) pair. Implements the six rules from the paper's table: incoming initial/echo/ready messages trigger echo, ready, and accept actions based on counting thresholds. Per-peer echo/ready values are stored (not just counts) so `echo_count[v]` is computed correctly for any v.
 
 ### Figure 2 -- Abstract Protocol Round
 
@@ -104,11 +118,11 @@ Three rounds per phase. Embeds a Fig 3 instance internally. Parameterized by a c
 - Step 2: Broadcast value. If >n/2 agree on v, mark as decision candidate (d,v).
 - Step 3: Broadcast value. If >2t decision candidates for v, decide v. Else if >t, adopt v. Else take coin.
 
-Decided processes continue participating so others can reach consensus. The protocol decides in expected O(1) phases with a random coin.
+Decided processes continue participating so others can reach consensus. Bracha's Theorem 2 bounds the expected number of phases at O(1) under a common-coin assumption; the actual termination behavior depends on the coin function the caller supplies via `bracha87CoinFn` — see "Coin choice — caller responsibility" under Deployment Notes.
 
 ### bkr94acs -- BKR94 Asynchronous Common Subset
 
-Composes Bracha87 Fig 1 and Fig 4 into multi-value agreement, implementing Ben-Or/Kelmer/Rabin 1994 Section 4 Figure 3 (Protocol Agreement[Q]). See `BKR94ACS.txt` for the line-by-line extract used as the implementation's reference.
+Composes Bracha87 Fig 1 and Fig 4 into multi-value agreement, implementing Ben-Or/Kelmer/Rabin 1994 Section 4 Figure 3 (Protocol Agreement[Q]). BKR94 ACS is the consensus core of HoneyBadgerBFT-family asynchronous BFT systems; this implementation provides it as a standalone primitive without bundling a transaction layer or a transport. See `BKR94ACS.txt` for the line-by-line extract used as the implementation's reference.
 
 Each of N peers proposes an arbitrary value (up to vLen+1 bytes). N Bracha87 Fig 1 instances reliably broadcast the proposals. N Bracha87 Fig 4 instances run binary consensus on "include this origin?" When a peer accepts origin j's proposal via Fig 1, it votes 1 in BA_j. When n-t BAs have *decided 1*, it votes 0 for every BA in which it has not yet voted. The common subset is {j : BA_j decided 1}, guaranteed to contain at least n-t origins.
 
@@ -252,9 +266,9 @@ Read `acs->complete` directly to check if all N BAs have decided. Read `acs->cur
 
 ### Caller Composition Pattern
 
-For multi-value agreement, use `bkr94acs` and the application loop shown in the **Bracha Phase Re-emitter (BPR)** section above — it manages all Fig 1 instances internally and provides `bkr94acsPump` for BPR replays.
+For multi-value agreement, use `bkr94acs` and the application loop shown in the **Bracha Phase Re-emitter (BPR)** section above — it manages all Fig 1 instances internally and provides `bkr94acsPump` for BPR replays. See `example/bkr94acs.c` for a runnable version of this pattern.
 
-For raw binary consensus (Fig 1 + Fig 3 + Fig 4 directly), the caller manages the Fig 1 instances per (origin, round). On every tick, the application iterates its Fig 1 array and calls `bracha87Fig1Bpr` per entry.
+For raw binary consensus (Fig 1 + Fig 3 + Fig 4 directly), the caller manages the Fig 1 instances per (origin, round). On every tick, the application iterates its Fig 1 array and calls `bracha87Fig1Bpr` per entry. See `example/bracha87.c` for a runnable version of this pattern.
 
 ```c
 /* Per process: */
@@ -308,32 +322,6 @@ for each fig1 instance:
 
 Round indices range from 0 to 3 * maxPhases - 1 (max 254).
 
-## Implementation Notes
-
-Issues discovered by reading the paper against the code. Most were missed by isolation testing and only caught through composed simulation.
-
-1. **Post-decide continuation.** The paper says "Go to round 1 of phase i+1" after all three step 3 cases. A decided process must continue broadcasting so others can reach consensus. `BRACHA87_DECIDE | BRACHA87_BROADCAST` is returned exactly once; subsequent rounds return `BRACHA87_BROADCAST` only.
-
-2. **D_FLAG leak.** After deciding, step 2 may set the D_FLAG on the value. Step 3's decided path restores the plain decision value to prevent D_FLAG from leaking into step 1 broadcasts of the next phase.
-
-3. **N function existential quantifier.** The paper defines VALID^k with "there exist n-t messages..." Passing only the first n-t to N rejects messages that a correct process produced from a different subset. Fix: pass all validated messages; N returns permissive when subsets could disagree.
-
-4. **Dead cascade after INITIAL.** The cascade after INITIAL could never fire -- if any threshold were met, `echoed` would already be set via Rule 2/3. Removed; comment explains the proof.
-
-5. **Committed value memcpy.** The memcpy on Rules 4/5/6 appears redundant but is essential. A Byzantine initial can cause commitment to the wrong value; the memcpy corrects it when the threshold-reaching value differs from the committed value.
-
-6. **Subset-majority reachability threshold (step 1).** Under N's tie-break-to-0, value 0 is reachable in some n-t subset iff `cnt[0] >= (nt+1)/2` (unified formula: equals `nt/2` for even n-t, `nt/2+1` for odd); value 1 is reachable iff `cnt[1] >= nt/2+1` (strict majority). Permissive iff both reachable. Using the symmetric `>= nt/2+1` test on both sides wrongly rejects honest tie-subset 0s when n-t is even. Verified by exhaustive enumeration for n=4..16.
-
-7. **Forward cascade fires on every growth past n-t, not only first crossing.** `VALID^r_p` is existential over n-t subsets of `VALID^{r-1}_p` and monotone in it (paper definition + Lemma 6), so new validated messages at round k unlock stored unvalidated messages at k+1 even after round k first reached n-t. Gating the forward re-check on "first crossing only" strands honest round-(k+1) messages when validation of them depended on subsets that only exist after k grew.
-
-8. **Permissive D_FLAG permission conveyed via `*result`.** On permissive return from Fig 4's N function (`rc > 0`), `*result & BRACHA87_D_FLAG` is set only when some n-t subset legitimately produces a decision candidate. Fig 3 rejects incoming D_FLAG when that bit is clear, preventing Byzantine d-injection in the no-majority windows of step 3 cases 1 and 2.
-
-9. **Post-decide value preservation across sub-rounds.** During post-decide continuation (Note 1), `b->value` is preserved as the decision through every sub-round of subsequent phases. The .dtc-faithful Fig 4 dispatch zeroes the `setMajority` and `setDMajority` outputs when `have_decided = yes`, so adversarial inputs whose majority disagrees with the decision cannot drift the broadcast value away from it. Verified by `testFig4PostDecideAdversarial` (which would have failed against a pre-DTC version that overwrote `b->value` with majority/(d, majority) at sub-rounds 0 and 1 of post-decide phases).
-
-10. **BPR (ready, v) replay must NOT short-circuit on accepted.** An accepted peer owes its READY to peers still below the 2t+1 threshold; replay is the only mechanism Bracha provides for getting it there under loss. The "ACCEPTED → stop replay" optimisation strands slow peers — the very purpose of BPR is helping *other* peers' progress, not the local one. Regression check: `testFig1Bpr` post-accept assertions.
-
-11. **BPR (initial, v) replay must NOT short-circuit on echoed.** An originator that has locally echoed (via Rule 1 from loopback or via Rule 2 from echoes received from other peers) cannot stop replaying INITIAL. In the n = 3t+1 boundary regime the Rule 2 echo threshold (n+t)/2 + 1 equals the count of honest peers, so any honest peer that missed the bootstrap can leave the cascade one echo short forever — only the originator can break the deadlock. Symmetric with Note 10: both pitfalls reject local-state-as-saturation arguments. Regression check: `testBprByzantineSilent` (n=4 t=1 with one silent Byzantine peer; the original gap-4 design with the `!ECHOED` gate stalled at |SubSet|=1 over 50000+ pump sweeps; the corrected "always replay INITIAL while ORIGIN" rule converges in 1 sweep).
-
 ## Building
 
 ```bash
@@ -345,25 +333,29 @@ make clobber    # remove DTC generated .c files
 
 Building requires `../decisionTableCompiler/dtc` and `awk` to compile the `.dtc` rule tables to dispatch C snippets; the Makefile invokes both automatically. The generated `.psu` and `*Fig{1,3,4}.c` / `bkr94acsRules.c` files are reproducible artifacts (`make clobber` removes them, the next `make` regenerates).
 
-The bracha87 example demonstrates binary consensus (Fig1+Fig3+Fig4):
+Compiler flags: `-std=c89 -pedantic -Wall -Wextra -Os -g`
+
+## Examples
+
+Two runnable examples sit in `example/` — these are the canonical worked versions of the API patterns shown in **Caller Composition Pattern** above. Both run in a single process with a synchronous in-memory queue (no loss, no reordering, no asynchrony) — they exercise the protocol state machines and the BPR pump but do **not** exercise the deployment-time termination policies (silence-quorum + K-sweep gate, abandonment) needed under real asynchronous transport.
+
+`example/bracha87.c` — binary consensus (Fig 1 + Fig 3 + Fig 4 directly):
 
 ```bash
 ./example_bracha87 4 1                          # 4 peers, 1 Byzantine fault
 ./example_bracha87 -s 42 7 2                    # shuffled delivery
 ./example_bracha87 -b 3 7 2                     # Byzantine peer 0 equivocates
-./example_bracha87 -v 4 1 0 0 1 1              # verbose trace, split initial values
+./example_bracha87 -v 4 1 0 0 1 1               # verbose trace, split initial values
 ```
 
-The bkr94acs example demonstrates multi-value agreement on arbitrary strings:
+`example/bkr94acs.c` — multi-value agreement on arbitrary strings:
 
 ```bash
-./example_bkr94acs 4 1 joe sam sally tim      # 4 peers propose strings
+./example_bkr94acs 4 1 joe sam sally tim        # 4 peers propose strings
 ./example_bkr94acs -s 42 4 1 joe sam sally tim  # shuffled delivery (different subset)
-./example_bkr94acs 4 0 joe sam sally tim      # t=0: all proposals included
+./example_bkr94acs 4 0 joe sam sally tim        # t=0: all proposals included
 ./example_bkr94acs -v 7 2 alpha bravo charlie delta echo foxtrot golf
 ```
-
-Compiler flags: `-std=c89 -pedantic -Wall -Wextra -Os -g`
 
 ## Deployment Notes
 
@@ -412,21 +404,104 @@ Track silence by state-advancing inputs (an Input call returning `nacts > 0`, or
 
 A peer that satisfies `silence quorum AND K sweeps AND !done AND !exhausted` is **abandoned**: no honest quorum is reachable for this epoch. The application must surface abandonment as a distinct outcome from `BKR94ACS_ACT_COMPLETE` and from `BKR94ACS_ACT_BA_EXHAUSTED`, and **must not commit any unilateral decision** — any substitute could disagree with another peer's actual decision (Lemma 2 Part C). The decision membership for the local epoch is empty; the application falls back to a higher-level recovery (next epoch, membership reconfiguration, etc.).
 
-### Coin choice
+### Coin choice — caller responsibility
 
-Fig 4 step 3 case (iii) — when neither decision-count rule fires — requires a coin. Options:
+**The library is coin-agnostic.** Both `bracha87Fig4Init` and `bkr94acsInit` take a `bracha87CoinFn` callback plus closure; the caller supplies the coin and owns the consequences of that choice. The bundled examples (`example/bracha87.c`, `example/bkr94acs.c`) use a **deterministic alternating coin** chosen for reproducible demo runs — the example source explicitly notes this is for demonstration only. This section is reference material to inform the caller's choice.
 
-- **Common coin** (same value across all peers per phase): requires a shared randomness source such as a verifiable random beacon or a distributed coin protocol.
-- **Local coin** (each peer flips independently): e.g. `arc4random_buf` per peer.
-- **Deterministic coin** (e.g. `phase & 1`): effectively a cheap common coin under a non-adversarial scheduler. Useful for deterministic tests, not recommended for adversarial threat models.
+Fig 4 step 3 case (iii) — when neither decision-count rule fires — calls the coin. The coin is how Bracha escapes FLP impossibility: deterministic asynchronous consensus is impossible, and randomization buys probabilistic termination. Bracha's own Theorem 2 bounds the expected number of phases at O(1) under a **common-coin** assumption; under other coin choices the theoretical bound depend on the choice. (This is the same FLP-escape mechanism as other randomized async BFT protocols; partial-synchrony designs like PBFT/Tendermint/HotStuff escape FLP through timing assumptions instead.) Options the caller may supply via `bracha87CoinFn`:
 
-Mostéfaoui, Perrin, and Weibel (PODC 2024, *"Randomized Consensus: Common Coins Are Not the Holy Grail!"*) prove common coin is optimal **only when `t > n/3`**; in Bracha's `t < n/3` regime local coin actually outperforms. The naïve "all honest peers must flip identically" lower bound ignores Fig 4's convergence dynamics: most phases terminate via step 3 case (i) (`>2t` agreement, no coin used) or case (ii) (`>t` agreement, adopt and amplify); case (iii) is the tie-breaker. At practical `n` values within `maxPhases = 85`, local coin works well.
+- **Local coin** (each peer flips independently): e.g. `arc4random_buf` per peer. The simplest adversarial-safe option; no shared-randomness infrastructure required. **only when `t ≪ √n`** (otherwise potentially exponential in `n`).
+- **Common coin** (same value across all peers per phase): a verifiable random beacon, a distributed coin protocol, or a threshold-signature-based scheme. Brings additional setup (DKG, threshold keys, etc.) that the library does not require for any other reason.
+- **Deterministic coin** (e.g. `phase & 1`): zero entropy under an adversarial scheduler. Useful for reproducible tests and for non-adversarial deployments — used by the bundled examples for demo reproducibility, not safe under an adaptive adversary.
 
-Guidance: **for `t < n/3`, use a local coin.** Reach for a common coin only when pushing beyond `t = n/3` (which Bracha itself does not cover).
+A slow-converging coin drives Fig 4 step 3 case (iii) ties round after round, advancing the phase counter toward the encoding-imposed `maxPhases=85` ceiling (Operational Limits). Hitting that ceiling raises `BRACHA87_EXHAUSTED`, which is fatal at the BKR94 layer — Lemma 2 Part C admits no unilateral substitute, so the local epoch must abort (Implementation Note 12).
 
 ### No timing in the protocol
 
 The protocol's correctness — both safety and eventual termination — depends on no timing assumption; this is the asynchronous-BFT model. Any timing parameters in a deployment (retransmit cadence, silence thresholds, pump tick) govern the transport wrapper and termination policy, not the state machines in this library. Correctness holds under arbitrary asynchrony; termination speed depends on the operator's tuning.
+
+---
+
+## Correctness Audit
+
+The audit story is a four-link chain from paper to running code, with one human inspection step (boundary I/O wiring) and one exhaustive test step (the algorithmic predicates).
+
+```
+paper rules            <-> .dtc files                human, rule-by-rule comments
+.dtc files              -> compiled dispatch         dtc, exhaustive/exclusive
+C wrapper boundary I/O                               human inspection
+fig3IsValid, fig4Nfn, Fig 3 cascade                  test/test_predicates.c —
+                                                     exhaustive enumeration vs
+                                                     paper-direct reference at
+                                                     n=4, t=1
+```
+
+The decision-table layer (`*.dtc`) is paper vocabulary, rule-by-rule commented with the paper's rule numbers. `dtc` enforces exhaustiveness and exclusivity at compile time and emits depth-optimal dispatch. The C wrapper sits below the dispatch and is one line per boundary input/output — each line is either a flag/count/bit-test mapping or a boolean-to-side-effect; small enough to read.
+
+The two algorithmic predicates that the dispatch delegates to — `fig3IsValid` (recursive existential), `fig4Nfn` (case analysis with permissive D_FLAG encoding) — and the Fig 3 cascade (iterative re-validation) are the only places where search/recursion/iteration sits below the bridge. They are anchored by `test_predicates.c`: 960 `fig4Nfn` inputs, 165 `fig3IsValid` evaluations, 4 cascade delivery permutations, all at n=4 t=1, against a paper-direct subset-enumeration reference. All agree.
+
+`fig3IsValid` is paper-correct **given a caller's N that exposes the existential subset quantifier via `rc > 0`**. The Fig 3 dispatch invokes N once on the full validated set; N's responsibility is to answer "could some n-t subset legitimately produce this value?" If a caller supplies an N whose permissive return is suppressed, `fig3IsValid` correctly rejects values the paper definition would admit via a strict subset. `fig4Nfn` is the canonical N for Fig 4 and exposes the existential analytically; the 960-input correspondence test against paper-direct subset enumeration anchors that delegation. The two predicates verify each other transitively: `fig4Nfn` ↔ paper at all bounded inputs, and `fig3IsValid` ↔ paper *given* that delegation.
+
+## Implementation Notes
+
+Each item below is a paper-vs-code divergence that any from-scratch implementation will encounter. We caught them by reading the paper rule-by-rule against composed-simulation runs and against fair-loss replay; isolation testing missed almost all of them, because the divergences only manifest under multi-figure interaction or under network conditions that simulated reliable channels never produce. They are the cost of building this from the papers — listed here so a porter does not pay it twice, and so a reader evaluating "should I trust this implementation?" can see what was actually verified and what regression test catches each one.
+
+1. **Post-decide continuation.** The paper says "Go to round 1 of phase i+1" after all three step 3 cases. A decided process must continue broadcasting so others can reach consensus. `BRACHA87_DECIDE | BRACHA87_BROADCAST` is returned exactly once; subsequent rounds return `BRACHA87_BROADCAST` only.
+
+2. **D_FLAG leak.** After deciding, step 2 may set the D_FLAG on the value. Step 3's decided path restores the plain decision value to prevent D_FLAG from leaking into step 1 broadcasts of the next phase.
+
+3. **N function existential quantifier.** The paper defines VALID^k with "there exist n-t messages..." Passing only the first n-t to N rejects messages that a correct process produced from a different subset. Fix: pass all validated messages; N returns permissive when subsets could disagree.
+
+4. **Dead cascade after INITIAL.** The cascade after INITIAL could never fire -- if any threshold were met, `echoed` would already be set via Rule 2/3. Removed; comment explains the proof.
+
+5. **Committed value memcpy.** The memcpy on Rules 4/5/6 appears redundant but is essential. A Byzantine initial can cause commitment to the wrong value; the memcpy corrects it when the threshold-reaching value differs from the committed value.
+
+6. **Subset-majority reachability threshold (step 1).** Under N's tie-break-to-0, value 0 is reachable in some n-t subset iff `cnt[0] >= (nt+1)/2` (unified formula: equals `nt/2` for even n-t, `nt/2+1` for odd); value 1 is reachable iff `cnt[1] >= nt/2+1` (strict majority). Permissive iff both reachable. Using the symmetric `>= nt/2+1` test on both sides wrongly rejects honest tie-subset 0s when n-t is even. Verified by exhaustive enumeration for n=4..16.
+
+7. **Forward cascade fires on every growth past n-t, not only first crossing.** `VALID^r_p` is existential over n-t subsets of `VALID^{r-1}_p` and monotone in it (paper definition + Lemma 6), so new validated messages at round k unlock stored unvalidated messages at k+1 even after round k first reached n-t. Gating the forward re-check on "first crossing only" strands honest round-(k+1) messages when validation of them depended on subsets that only exist after k grew.
+
+8. **Permissive D_FLAG permission conveyed via `*result`.** On permissive return from Fig 4's N function (`rc > 0`), `*result & BRACHA87_D_FLAG` is set only when some n-t subset legitimately produces a decision candidate. Fig 3 rejects incoming D_FLAG when that bit is clear, preventing Byzantine d-injection in the no-majority windows of step 3 cases 1 and 2.
+
+9. **Post-decide value preservation across sub-rounds.** During post-decide continuation (Note 1), `b->value` is preserved as the decision through every sub-round of subsequent phases. The .dtc-faithful Fig 4 dispatch zeroes the `setMajority` and `setDMajority` outputs when `have_decided = yes`, so adversarial inputs whose majority disagrees with the decision cannot drift the broadcast value away from it. Verified by `testFig4PostDecideAdversarial` (which would have failed against a pre-DTC version that overwrote `b->value` with majority/(d, majority) at sub-rounds 0 and 1 of post-decide phases).
+
+10. **BPR (ready, v) replay must NOT short-circuit on accepted.** An accepted peer owes its READY to peers still below the 2t+1 threshold; replay is the only mechanism Bracha provides for getting it there under loss. The "ACCEPTED → stop replay" optimisation strands slow peers — the very purpose of BPR is helping *other* peers' progress, not the local one. Regression check: `testFig1Bpr` post-accept assertions.
+
+11. **BPR (initial, v) replay must NOT short-circuit on echoed.** An originator that has locally echoed (via Rule 1 from loopback or via Rule 2 from echoes received from other peers) cannot stop replaying INITIAL. In the n = 3t+1 boundary regime the Rule 2 echo threshold (n+t)/2 + 1 equals the count of honest peers, so any honest peer that missed the bootstrap can leave the cascade one echo short forever — only the originator can break the deadlock. Symmetric with Note 10: both pitfalls reject local-state-as-saturation arguments. Regression check: `testBprByzantineSilent` (n=4 t=1 with one silent Byzantine peer; the original gap-4 design with the `!ECHOED` gate stalled at |SubSet|=1 over 50000+ pump sweeps; the corrected "always replay INITIAL while ORIGIN" rule converges in 1 sweep).
+
+12. **Fig 4 EXHAUSTED is fatal at the BKR94 layer; no unilateral substitute.** When `bracha87Fig4Round` returns `BRACHA87_EXHAUSTED` (probabilistic termination did not converge within the unsigned-char round encoding's 85-phase ceiling), the local BA has no decision. BKR94 Lemma 2 Part B's "all BAs terminate" assumption is violated, and Part C (SubSet agreement) is unrecoverable locally — any unilateral substitute (decide 0 or 1) could disagree with another peer's actual decision (different local-coin sequence or message ordering). The library surfaces `BKR94ACS_ACT_BA_EXHAUSTED`, sets `bkr94acsBaDecision[origin] = 0xFE`, and does NOT increment `nDecided` or `nDecidedOne` (no decision was made); `acs->complete` stays 0. The application must abort the local epoch and surface this as a distinct outcome (see Abandonment under Deployment Notes). BPR continues pumping replays for that origin so other peers may still benefit from earlier-round echoes/readys. EXHAUSTED is mutually exclusive with DECIDE per Fig 4 semantics, so single emission is structural — no dedup guard needed. Regression check: `testExhausted`.
+
+---
+
+## Re-Implementing in Another Language
+
+A port that wants to preserve this library's correctness story has two pieces of machinery to either reproduce or replace:
+
+1. The **decision-table compilation pipeline** (described below), which lifts paper rules into depth-optimal dispatch.
+2. The **trap list and predicate corpus** for cross-checking the result. Implementation Notes #1–#12 above are paper-vs-code traps; `test/test_predicates.c` is the exhaustive paper-direct reference for the algorithmic predicates that sit below the dispatch.
+
+### Paper-Faithful Dispatch via DTC
+
+Each module's per-call decision logic is captured in a CSV decision table written in the paper's vocabulary (`bracha87Fig{1,3,4}.dtc`, `bkr94acs.dtc`). A small bridge per module (`*ToC.dtc`) maps domain names and values to C identifiers and constants. The decisionTableCompiler (`../decisionTableCompiler/dtc`) co-compiles each pair to an optimal-depth pseudocode dispatch, which a local `psu.awk` translates to a C snippet the entry-point function `#include`s.
+
+| Source | Bridge | Generated snippet | Entry point | Depth |
+|--------|--------|-------------------|-------------|-------|
+| `bracha87Fig1.dtc` | `bracha87Fig1ToC.dtc` | `bracha87Fig1.c` | `bracha87Fig1Input` | 7 |
+| `bracha87Fig2.dtc` | (none — Fig 3 subsumes) | — | — | — |
+| `bracha87Fig3.dtc` | `bracha87Fig3ToC.dtc` | `bracha87Fig3.c` | `bracha87Fig3Accept` | 4 |
+| `bracha87Fig4.dtc` | `bracha87Fig4ToC.dtc` | `bracha87Fig4.c` | `bracha87Fig4Round` | 6 |
+| `bkr94acs.dtc` | `bkr94acsToC.dtc` | `bkr94acsRules.c` | both bkr94acs entry points (one snippet, two `#include`s) | 7 |
+
+`dtc` enforces exhaustiveness and exclusivity of the rules at compile time. Depths are full-optimum; full search confirms each is depth-minimal for its boundary-input set). The C wrapper computes boundary inputs, `#include`s the dispatch, and applies the boolean outputs as side effects in an order that is the API contract (e.g. for Fig 1: `echo` before `ready` before `accept`). See `decisionTableCompiler/README.md` for the bridge mechanism.
+
+A re-implementation that does not want a DTC dependency can transcribe the dispatch by hand from each `.dtc`'s rule table — the `.dtc` files are the readable source of record, and the generated `.c` snippets are large nested `if`/`switch` ladders that a competent developer can read directly. The constraint is that the transcription must preserve exhaustiveness and exclusivity (every input combination has exactly one matching rule), which `dtc` proves at compile time and a hand-port must prove by inspection.
+
+### Where to start
+
+- **`Bracha87.txt`** and **`BKR94ACS.txt`** are the paper extracts. Start here.
+- **`bracha87Fig{1,3,4}.dtc`** and **`bkr94acs.dtc`** are the paper-vocabulary decision tables, rule-by-rule commented to the paper. These are the API contract for the dispatch.
+- **`test/test_predicates.c`** is the paper-direct reference for `fig3IsValid`, `fig4Nfn`, and the Fig 3 cascade — exhaustive enumeration at n=4, t=1. A port should pass this corpus.
+- **`test/test_bracha87.c`** and **`test/test_bkr94acs.c`** are the integration-test corpus, including the regression checks named in Implementation Notes #9–#12.
+- **Implementation Notes #1–#12 above** are the traps. Each one names a specific paper-vs-code divergence and (where applicable) the regression test that catches it.
 
 ## License
 

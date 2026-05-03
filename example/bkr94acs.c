@@ -159,8 +159,6 @@ qShuffle(
 
 /*------------------------------------------------------------------------*/
 /*  Coin — deterministic alternating, adequate for demonstration only.    */
-/*  Adversarial deployments should pass a local random source             */
-/*  (e.g. arc4random).                                                    */
 /*------------------------------------------------------------------------*/
 
 static unsigned char

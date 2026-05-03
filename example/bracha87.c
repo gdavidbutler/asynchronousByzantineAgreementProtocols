@@ -33,6 +33,15 @@
  * Messages are queued in a simulated all-to-all network. Optional
  * Fisher-Yates shuffling demonstrates asynchrony tolerance.
  *
+ * Scope: this demo runs in a single process with a synchronous
+ * deterministic in-memory queue — every input is delivered, no
+ * loss, no reordering. It exercises the protocol state machines
+ * but does NOT exercise BPR replay under loss or the
+ * deployment-time termination policies (silence-quorum + K-sweep
+ * gate) needed under real asynchronous transport. See README.md
+ * "Architecture", "Caller Composition Pattern", and "Termination
+ * policy" for the design.
+ *
  * Build:
  *   (from project root) make example_bracha87
  *
@@ -140,7 +149,7 @@ qShuffle(
 }
 
 /*------------------------------------------------------------------------*/
-/*  Coin function — deterministic alternating for demonstration           */
+/*  Coin — deterministic alternating, adequate for demonstration only.    */
 /*------------------------------------------------------------------------*/
 
 static unsigned char
