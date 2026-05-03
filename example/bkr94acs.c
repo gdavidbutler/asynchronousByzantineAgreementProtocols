@@ -431,6 +431,20 @@ main(
         if (verbose)
           printf("peer %u: BKR94 ACS COMPLETE\n", (unsigned)m->to);
         break;
+
+      case BKR94ACS_ACT_BA_EXHAUSTED:
+        /*
+         * Not verbose-gated: BA_EXHAUSTED is a fatal protocol-level
+         * event (BKR94 Lemma 2 Part B's BA-termination assumption
+         * was violated for this instance), not informational like
+         * BA_DECIDED / COMPLETE.  An application's silence on this
+         * action would teach the wrong pattern.
+         */
+        printf("peer %u: BA[%u] EXHAUSTED -- ACS cannot complete "
+               "(no decision in %u phases)\n",
+               (unsigned)m->to, (unsigned)acts[k].origin,
+               (unsigned)MAX_PHASES);
+        break;
       }
     }
 
@@ -447,10 +461,12 @@ main(
   {
     /* Verify all honest peers agree on the same subset and ordering */
     int allAgree;
+    int haveBaseline;
     unsigned char firstSubset[MAX_PEERS];
     unsigned int firstCnt;
 
     allAgree = 1;
+    haveBaseline = 0;
     firstCnt = 0;
 
     for (i = 0; i < n; ++i) {
@@ -459,7 +475,29 @@ main(
       const char *sorted[MAX_PEERS];
 
       if (!peers[i]->complete) {
-        printf("Peer %u: BKR94 ACS did not complete\n", i);
+        /*
+         * Distinguish exhaustion from other incompleteness causes:
+         * the library exposes 0xFE in bkr94acsBaDecision for BAs
+         * that hit BRACHA87_EXHAUSTED.  Listing them tells the
+         * operator exactly which BA(s) failed; a generic "did not
+         * complete" message would conflate this with a queue-drain
+         * race or other deployment-level cause.
+         */
+        unsigned int exhaustedCnt;
+
+        printf("Peer %u: BKR94 ACS did not complete", i);
+        exhaustedCnt = 0;
+        for (j = 0; j < n; ++j) {
+          if (bkr94acsBaDecision(peers[i], (unsigned char)j) == 0xFE) {
+            printf("%s BA[%u]",
+                   exhaustedCnt ? "," : " (exhausted:",
+                   j);
+            ++exhaustedCnt;
+          }
+        }
+        if (exhaustedCnt)
+          printf(")");
+        printf("\n");
         exitCode = 1;
         continue;
       }
@@ -481,14 +519,19 @@ main(
       for (j = 0; j < cnt; ++j)
         printf("  %s\n", sorted[j]);
 
-      /* Check agreement with first peer */
-      if (i == 0) {
+      /*
+       * Track the baseline by first-completion, not peer index.
+       * If peer 0 fails to complete (e.g. exhausted BA), comparing
+       * subsequent peers' subsets against an unset firstCnt would
+       * spuriously flag disagreement.
+       */
+      if (!haveBaseline) {
         firstCnt = cnt;
         memcpy(firstSubset, subset, cnt);
+        haveBaseline = 1;
       } else {
-        if (cnt != firstCnt)
-          allAgree = 0;
-        else if (memcmp(subset, firstSubset, cnt))
+        if (cnt != firstCnt
+         || memcmp(subset, firstSubset, cnt))
           allAgree = 0;
       }
     }

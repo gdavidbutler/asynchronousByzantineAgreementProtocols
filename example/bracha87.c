@@ -200,6 +200,14 @@ main(
   /* Per-process state */
   struct peerState peers[MAX_PEERS];
   unsigned char decisions[MAX_PEERS];
+  /*
+   * Per-peer exhaustion flag.  Bracha87 Fig4 has no built-in sentinel
+   * for "exhausted" -- the application observes BRACHA87_EXHAUSTED in
+   * the action stream and tracks it itself.  This is the pattern users
+   * copying the example should learn.
+   */
+  unsigned char exhausted[MAX_PEERS];
+  unsigned int  exhaustedCount;
 
   /* Derived */
   unsigned int maxRounds;
@@ -282,6 +290,8 @@ main(
 
   memset(peers, 0, sizeof (peers));
   memset(decisions, 0xFF, sizeof (decisions));
+  memset(exhausted, 0, sizeof (exhausted));
+  exhaustedCount = 0;
 
   for (i = 0; i < n; ++i) {
     /* Byzantine peer 0 when byzSplit is set: skip state allocation */
@@ -459,9 +469,22 @@ main(
           }
 
           if (act & BRACHA87_EXHAUSTED) {
-            if (verbose)
-              printf("peer %u: EXHAUSTED (no decision in %u phases)\n",
-                     (unsigned)m->to, (unsigned)MAX_PHASES);
+            /*
+             * Not verbose-gated: BRACHA87_EXHAUSTED is a fatal
+             * protocol-level event (Bracha87 Fig4's probabilistic
+             * termination did not converge within MAX_PHASES), not
+             * informational like BROADCAST.  Track it so the
+             * post-simulation summary can distinguish "exhausted"
+             * from "no decision yet."  Mutually exclusive with
+             * DECIDE / BROADCAST per Fig4Round semantics, so emitted
+             * at most once per peer.
+             */
+            if (!exhausted[m->to])
+              ++exhaustedCount;
+            exhausted[m->to] = 1;
+            printf("peer %u: EXHAUSTED -- "
+                   "no decision in %u phases\n",
+                   (unsigned)m->to, (unsigned)MAX_PHASES);
           }
         }
         continue;
@@ -588,7 +611,19 @@ main(
     if (byzSplit && i == 0) {
       printf("Peer %u: Byzantine (equivocating, split=%u)\n", i, byzSplit);
     } else if (decisions[i] == 0xFF) {
-      printf("Peer %u: no decision\n", i);
+      /*
+       * Distinguish exhaustion (Fig4 ran to BRACHA87_MAX_PHASES with
+       * no decision -- protocol failure) from no-decision-yet (Fig4
+       * still in progress when the queue drained -- simulator
+       * artifact, shouldn't happen here since the queue drains
+       * deterministically).  Conflating them would teach users to
+       * miss real protocol failures.
+       */
+      if (exhausted[i])
+        printf("Peer %u: EXHAUSTED (no decision in %u phases)\n",
+               i, (unsigned)MAX_PHASES);
+      else
+        printf("Peer %u: no decision\n", i);
     } else {
       printf("Peer %u: decided %u\n", i, (unsigned)decisions[i]);
     }
@@ -599,8 +634,11 @@ main(
          (decided > 1) ? (thm2ok ? "ok" : "FAIL")
                        : "n/a (fewer than 2 decisions)");
   printf("Step 1 no D_FLAG: %s\n", step1ok ? "ok" : "FAIL");
+  if (exhaustedCount)
+    printf("Exhaustion: %u honest peer(s) failed to terminate\n",
+           exhaustedCount);
 
-  if (!lemma1ok || !lemma2ok || !thm2ok || !step1ok)
+  if (!lemma1ok || !lemma2ok || !thm2ok || !step1ok || exhaustedCount)
     exitCode = 1;
 
   /*----------------------------------------------------------------------*/

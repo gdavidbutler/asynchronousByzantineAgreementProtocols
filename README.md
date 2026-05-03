@@ -193,6 +193,7 @@ while (!silenceQuorumExit) {
 - `BKR94ACS_ACT_PROP_SEND` — broadcast a proposal Fig 1 message of `act.type` (INITIAL/ECHO/READY) for `act.origin`, with bytes `act.value` (vLen+1, borrowed pointer into library state — copy if persisting).
 - `BKR94ACS_ACT_CON_SEND` — broadcast a consensus Fig 1 message: `act.origin`, `act.round`, `act.broadcaster`, `act.type`, binary `act.conValue`.
 - `BKR94ACS_ACT_BA_DECIDED` / `BKR94ACS_ACT_COMPLETE` — observability signals; no wire emission.
+- `BKR94ACS_ACT_BA_EXHAUSTED` — fatal protocol-level event for `act.origin` (no decision within `maxPhases`); the local ACS instance cannot complete. Application aborts; treat as "did not complete" plus a specific cause.
 
 `silenceQuorumExit` is the application's termination policy — see Deployment Notes below.
 
@@ -230,7 +231,7 @@ while (!silenceQuorumExit) {
 | `bkr94acsSubset(acs, origins)` | Retrieve the decided common subset |
 | `bkr94acsProposalValue(acs, origin)` | Retrieve accepted proposal value for an origin |
 | `bkr94acsActIdentity(act, out, outCap)` | Fixed-length [act, origin, round, broadcaster, type] bytes for chanBlbChnRsec-style wire-tag uniqueness; returns BKR94ACS_ACT_IDENTITY_LEN (5) for SEND acts, 0 otherwise |
-| `bkr94acsBaDecision(acs, origin)` | BA decision for origin: 0xFF undecided / 0 excluded / 1 included |
+| `bkr94acsBaDecision(acs, origin)` | BA decision for origin: 0xFF undecided / 0xFE exhausted / 0 excluded / 1 included |
 | `bkr94acsCommittedFig1Count(acs)` | Count of Fig1 instances with any committed flag (ORIGIN/ECHOED/RDSENT); useful for cadence sizing |
 
 Read `acs->complete` directly to check if all N BAs have decided. Read `acs->cursorPhase` / `cursorOrigin` / `cursorRound` / `cursorBroadcaster` directly to inspect the pump cursor position.
@@ -245,6 +246,7 @@ Read `acs->complete` directly to check if all N BAs have decided. Read `acs->cur
 | `BKR94ACS_ACT_CON_SEND` | broadcast a consensus Fig 1 message | `.origin`, `.round`, `.broadcaster`, `.type`, `.conValue` (binary) |
 | `BKR94ACS_ACT_BA_DECIDED` | a BA reached a decision | `.origin`, `.conValue` (0=excluded, 1=included) |
 | `BKR94ACS_ACT_COMPLETE` | all N BAs decided | (none) |
+| `BKR94ACS_ACT_BA_EXHAUSTED` | a BA's Fig 4 reached `maxPhases` with no decision; the local ACS instance cannot complete (BKR94 Lemma 2 Part B's BA-termination assumption violated). No safe in-protocol recovery — substituting a unilateral decision could disagree with another peer's actual decision and break SubSet agreement. Application must abort and (optionally) restart with fresh state. The library marks `bkr94acsBaDecision[origin] = 0xFE` and continues pumping replays for this origin (other peers may still benefit from earlier-round echoes / readys). Emitted exactly once per BA per ACS instance. | `.origin` |
 
 `.value` is a borrowed pointer into the library's accepted-value slot; valid until the next library call that mutates state. Caller copies if persistence is needed past that boundary.
 

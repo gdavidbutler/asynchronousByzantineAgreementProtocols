@@ -47,7 +47,7 @@
  * Pointer alignment for carving Fig1/Fig4 instances out of a single
  * buffer.  bracha87Fig4 begins with function-pointer fields, and
  * bracha87Fig1 begins with 2-byte shorts; rounding up to pointer
- * alignment subsumes both.  struct bkr94acs.pad[7] pairs with this
+ * alignment subsumes both.  struct bkr94acs.pad[3] pairs with this
  * to place a->data at a pointer-aligned offset from a.
  */
 #define BKR94ACS_ALIGN_P  ((unsigned long)sizeof (void *))
@@ -537,14 +537,18 @@ bkr94acsConsensusInput(
   for (k = 0; k < nf1; ++k) {
     if (f1out[k] == BRACHA87_ACCEPT) {
       const unsigned char *cv;
-      unsigned int vc;
 
       cv = bracha87Fig1Value(f1);
       if (!cv)
         continue;
 
-      /* Fig3 sender is the broadcaster (whose broadcast was accepted) */
-      bracha87Fig3Accept(f3, round, broadcaster, cv[0], &vc);
+      /*
+       * Fig3 sender is the broadcaster (whose broadcast was accepted).
+       * validCount-out parameter is 0: the cascade work it would gate
+       * is internal to bracha87Fig3Accept; bracha87Fig3RoundComplete
+       * below is the predicate this loop actually consults.
+       */
+      bracha87Fig3Accept(f3, round, broadcaster, cv[0], 0);
 
       /*
        * Check for completed rounds (including cascades).
@@ -652,11 +656,61 @@ bkr94acsConsensusInput(
           out[nact].broadcaster = a->self;
           ++nact;
         }
+
+        if (act & BRACHA87_EXHAUSTED) {
+          /*
+           * Fig4 reached maxPhases with no decision -- a violation
+           * of BKR94 Lemma 2 Part B's "all BAs terminate" assumption.
+           * Bracha87 Fig4 has probabilistic termination; the
+           * BRACHA87_MAX_PHASES (85) ceiling is an unsigned-char
+           * round-encoding artifact, not a paper limit, but it caps
+           * the in-protocol attempts.
+           *
+           * Mutually exclusive with BRACHA87_DECIDE (decideV requires
+           * !haveDecided, EXHAUSTED requires sub=2 of last phase with
+           * !haveDecided && !decideV), so Step 2 / Step 3 dispatch
+           * above did not fire.  We do NOT increment nDecided /
+           * nDecidedOne (no decision was made), do NOT enter the
+           * rules dispatch (no BA-output event to feed it), do NOT
+           * substitute a value into bkr94acsDecision[origin] -- any
+           * unilateral substitute could disagree with another peer's
+           * actual decision and break SubSet agreement (Lemma 2
+           * Part C).
+           *
+           * baDecision[origin] = 0xFE marks the BA as exhausted so
+           * bkr94acsBaDecision can report the state and the
+           * origin-pump-gate (which only skips decided-0) keeps
+           * pumping replays for this origin -- other peers may
+           * still benefit from our continued echoes / readys on
+           * earlier rounds.
+           *
+           * After ++*nextRound the while loop exits naturally:
+           * *nextRound now equals mr, so the next iteration's
+           * "*nextRound < mr" guard fails.  Single emission per
+           * BA per ACS instance is therefore structural; no
+           * additional dedup guard required.
+           */
+          bkr94acsDecision(a)[origin] = 0xFE;
+          out[nact].value = 0;
+          out[nact].act = BKR94ACS_ACT_BA_EXHAUSTED;
+          out[nact].origin = origin;
+          out[nact].round = 0;
+          out[nact].type = 0;
+          out[nact].conValue = 0;
+          out[nact].broadcaster = 0;
+          ++nact;
+        }
       }
       continue;
     }
 
-    /* ECHO_ALL or READY_ALL for the consensus Fig1 */
+    /*
+     * Non-ACCEPT: must be ECHO_ALL or READY_ALL.  bracha87Fig1Input
+     * never emits BRACHA87_INITIAL_ALL (that's a Bpr-only output);
+     * the assert documents the contract so the type-mapping ternary
+     * below isn't reading a stale assumption.
+     */
+    assert(f1out[k] == BRACHA87_ECHO_ALL || f1out[k] == BRACHA87_READY_ALL);
     {
       const unsigned char *cv;
 

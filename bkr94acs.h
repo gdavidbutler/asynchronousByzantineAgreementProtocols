@@ -97,15 +97,26 @@
 #define BKR94ACS_ACT_CON_SEND     2  /* send consensus Fig1 msg: .type, .conValue, .origin, .round, .broadcaster */
 #define BKR94ACS_ACT_BA_DECIDED   3  /* BA for .origin decided .conValue */
 #define BKR94ACS_ACT_COMPLETE     4  /* all N BAs decided; common subset final */
+#define BKR94ACS_ACT_BA_EXHAUSTED 5  /* BA for .origin reached maxPhases with no decision; this ACS instance cannot complete */
 
 /*
  * struct bkr94acsAct
  *
  * Field usage by act:
- *   PROP_SEND   .origin, .type (BRACHA87_INITIAL/ECHO/READY), .value (vLen+1 bytes)
- *   CON_SEND    .origin, .round, .broadcaster, .type, .conValue (binary)
- *   BA_DECIDED  .origin, .conValue (0=excluded, 1=included)
- *   COMPLETE    (no fields)
+ *   PROP_SEND     .origin, .type (BRACHA87_INITIAL/ECHO/READY), .value (vLen+1 bytes)
+ *   CON_SEND      .origin, .round, .broadcaster, .type, .conValue (binary)
+ *   BA_DECIDED    .origin, .conValue (0=excluded, 1=included)
+ *   COMPLETE      (no fields)
+ *   BA_EXHAUSTED  .origin (BA's Fig4 returned BRACHA87_EXHAUSTED;
+ *                 BKR94 Lemma 2 Part B's "all BAs terminate"
+ *                 assumption is violated for this instance, so
+ *                 the local peer cannot reach BKR94ACS_ACT_COMPLETE.
+ *                 No safe in-protocol recovery: any unilateral
+ *                 substitute decision could disagree with a remote
+ *                 peer's actual decision, breaking SubSet agreement
+ *                 (Part C).  Application must abort and (optionally)
+ *                 restart with fresh state.  Emitted exactly once per
+ *                 BA per ACS instance.)
  *
  * .value is a borrowed pointer into library-owned storage (the
  * Fig1's accepted-value slot).  Valid until the next call into
@@ -426,6 +437,8 @@ bkr94acsPump(
 /*
  * Decision state for a single BA (origin's binary consensus):
  *   0xFF -> undecided
+ *   0xFE -> exhausted (Fig4 reached maxPhases with no decision;
+ *           see BKR94ACS_ACT_BA_EXHAUSTED)
  *   0    -> excluded from common subset
  *   1    -> included in common subset
  *

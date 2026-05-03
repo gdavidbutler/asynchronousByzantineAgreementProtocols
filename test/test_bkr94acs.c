@@ -1822,6 +1822,137 @@ testBprHighDrop(
          rc == 0 ? "converged" : "FAILED", sweeps);
 }
 
+/*------------------------------------------------------------------------*/
+/*  EXHAUSTED handling: drive one BA's Fig4 to BRACHA87_EXHAUSTED and     */
+/*  verify the BKR94 layer surfaces it correctly.                         */
+/*                                                                        */
+/*  Setup: n=4, t=1, maxPhases=1, vLen=0, self=0.  We drive only one BA  */
+/*  (origin=0) directly via bkr94acsConsensusInput, bypassing the        */
+/*  proposal layer.                                                       */
+/*                                                                        */
+/*  Per round, each of the 4 broadcasters' Fig1 is driven to ACCEPT at   */
+/*  peer 0 by feeding INITIAL + 3 distinct READYs (>= 2t+1=3 readys =>   */
+/*  Bracha Rule 6 fires).  After the 3rd Fig1 ACCEPTs in a round,        */
+/*  Fig3RoundComplete fires and Fig4Round runs.  The 4th ACCEPT adds a   */
+/*  4th validation so that the next round's fig3IsValid call sees N(k-1) */
+/*  permissive (cnt[0]=cnt[1]=2 in a 4-element set, both reachable in    */
+/*  some n-t=3 subset), letting the next round's split values validate.  */
+/*                                                                        */
+/*  Values per round: (0, 0, 1, 1) across broadcasters (0,1,2,3).         */
+/*    sub=0 (k=0): N case 0 with n_msgs=3 (cnt 0,0,1) => exact 0.        */
+/*                 b->value := majority = 0.                             */
+/*    sub=1 (k=1): N case 1 with n_msgs=3 (cnt 0,0,1) => no strict       */
+/*                 majority => no D_FLAG, *result=0 permissive.          */
+/*                 b->value unchanged (still 0).                         */
+/*    sub=2 (k=2): n_msgs=3, dc[0]=dc[1]=0 (no D_FLAG flagged messages   */
+/*                 because no peer set d in sub=1) => gt2T=gtT=0,        */
+/*                 n2Half=0 => coin path.  b->value := coin(0).          */
+/*                 !decideV && !haveDecided && ph+1=1 >= maxPhases=1     */
+/*                 => return BRACHA87_EXHAUSTED.                         */
+/*                                                                        */
+/*  Expectation: BKR94ACS_ACT_BA_EXHAUSTED for origin=0 fires exactly    */
+/*  once; baDecision[0] becomes 0xFE; complete stays 0; subsequent       */
+/*  inputs do not re-emit EXHAUSTED.                                     */
+/*------------------------------------------------------------------------*/
+
+static unsigned int
+feedFig1Accept(
+  struct bkr94acs *a
+ ,unsigned char origin
+ ,unsigned char round
+ ,unsigned char broadcaster
+ ,unsigned char value
+ ,struct bkr94acsAct *out
+ ,unsigned int *exhaustedSeen
+){
+  unsigned int total;
+  unsigned int n;
+  unsigned int k;
+  unsigned char sender;
+
+  total = 0;
+  /* INITIAL from broadcaster: peer 0 echoes (Rule 1) */
+  n = bkr94acsConsensusInput(a, origin, round, broadcaster,
+                             BRACHA87_INITIAL, broadcaster, value, out);
+  for (k = 0; k < n; ++k)
+    if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED && out[k].origin == origin)
+      ++*exhaustedSeen;
+  total += n;
+
+  /*
+   * Three distinct READYs.  rdCnt sequence: 1, 2, 3.
+   *   sender=1: rdCnt=1, no rule fires.
+   *   sender=2: rdCnt=2, Rule 5 fires (echoed && !rdsent && rd>=t+1=2).
+   *   sender=3: rdCnt=3, Rule 6 fires (rd>=2t+1=3) => ACCEPT, cascade.
+   */
+  for (sender = 1; sender <= 3; ++sender) {
+    n = bkr94acsConsensusInput(a, origin, round, broadcaster,
+                               BRACHA87_READY, sender, value, out);
+    for (k = 0; k < n; ++k)
+      if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED && out[k].origin == origin)
+        ++*exhaustedSeen;
+    total += n;
+  }
+  return (total);
+}
+
+static void
+testExhausted(
+  void
+){
+  unsigned long sz;
+  struct bkr94acs *a;
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PEERS, 1)];
+  unsigned int round;
+  unsigned int b;
+  unsigned int exhaustedSeen;
+  unsigned int n;
+  unsigned int k;
+
+  printf("\n  EXHAUSTED handling:\n");
+
+  sz = bkr94acsSz(3, 0, 1);  /* n=4 (encoded 3), vLen=1 (encoded 0), maxPhases=1 */
+  a = (struct bkr94acs *)calloc(1, sz);
+  if (!a) {
+    check("testExhausted alloc", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
+
+  exhaustedSeen = 0;
+  for (round = 0; round < 3; ++round)
+    for (b = 0; b < 4; ++b)
+      feedFig1Accept(a, 0, (unsigned char)round, (unsigned char)b,
+                     (b < 2) ? 0 : 1, out, &exhaustedSeen);
+
+  check("EXHAUSTED action emitted exactly once",
+        exhaustedSeen == 1);
+  check("baDecision[0] == 0xFE (exhausted sentinel)",
+        bkr94acsBaDecision(a, 0) == 0xFE);
+  check("a->complete remains 0 after EXHAUSTED",
+        a->complete == 0);
+
+  /*
+   * After EXHAUSTED, the per-origin pump gate keeps pumping
+   * (0xFE != 0), and additional consensus inputs for this origin
+   * must not re-emit EXHAUSTED.  Drive any further input and check.
+   */
+  n = bkr94acsConsensusInput(a, 0, 0, 0, BRACHA87_READY, 0, 0, out);
+  for (k = 0; k < n; ++k)
+    if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
+      ++exhaustedSeen;
+  check("no duplicate EXHAUSTED on subsequent input",
+        exhaustedSeen == 1);
+
+  printf("    EXHAUSTED at single-phase BA: emitted %u time(s); "
+         "baDecision=0x%02X; complete=%u\n",
+         exhaustedSeen,
+         (unsigned)bkr94acsBaDecision(a, 0),
+         (unsigned)a->complete);
+
+  free(a);
+}
+
 int
 main(
   void
@@ -1848,6 +1979,7 @@ main(
   testBprOriginGate();
   testBprByzantineSilent();
   testBprHighDrop();
+  testExhausted();
 
   free(MsgQ);
 
