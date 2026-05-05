@@ -176,30 +176,12 @@ struct bkr94acs {
   unsigned char threshold;  /* 1 iff BKR94 Step 2 has fired (vote-0 fanout done) */
   unsigned char complete;   /* 1 iff all N BAs decided (Step 3 complete) */
   /*
-   * BPR pump cursor.  bkr94acsPump walks (cursorPhase,
-   * cursorOrigin, cursorRound, cursorBroadcaster) forward across
-   * calls, emitting one Fig1 instance worth of replays per call
-   * (or 0 if a full sweep finds nothing committed -- the
-   * application's "idle" signal).  Cursor advances until it
-   * either finds replays to emit or wraps back to where it
-   * started.
-   *
-   *   cursorPhase: 0 = proposal Fig1s, 1 = consensus Fig1s
-   *   cursorOrigin / cursorRound / cursorBroadcaster:
-   *     position within the current phase's instance space
-   */
-  unsigned char cursorPhase;
-  unsigned char cursorOrigin;
-  unsigned char cursorRound;
-  unsigned char cursorBroadcaster;
-  /*
    * Pad data[] to a pointer-aligned offset so Fig4 instances carved
    * out of data[] are correctly aligned for their function-pointer
-   * fields.  Header is now 13 bytes; pad 3 bytes to reach offset 16,
-   * a multiple of sizeof (void *) on all common 32- and 64-bit
-   * ABIs.
+   * fields.  Header is 9 bytes; pad 7 bytes to reach offset 16, a
+   * multiple of sizeof (void *) on all common 32- and 64-bit ABIs.
    */
-  unsigned char pad[3];
+  unsigned char pad[7];
   unsigned char data[1];    /* variable: see bkr94acsSz */
 };
 
@@ -309,7 +291,7 @@ bkr94acsProposalInput(
  * Caller provides out[] with room for BKR94ACS_MAX_ACTS(n, maxPhases) entries.
  *
  * The consensus for each origin is a full Fig1+Fig3+Fig4 pipeline
- * (same structure as example/bracha87.c), deciding 0 or 1.
+ * (same structure as example/bracha87Fig4.c), deciding 0 or 1.
  *
  * On BKR94ACS_ACT_CON_SEND:
  *   Caller sends a consensus message to all peers.
@@ -391,18 +373,17 @@ bkr94acsPropose(
  * this layer's per-origin BA-decided state, all of which live
  * at the BKR endpoint.
  *
- * The application calls bkr94acsPump on its own cadence (no
- * wall-clock predicate inside; the call IS the event).  Pump
- * advances an internal cursor through the (origin, [round,
- * broadcaster]) Fig1 instance space, finds the next instance
- * with replay output, and emits that instance's actions tagged
- * as struct bkr94acsAct.  Returns the number of actions
- * written to out[] (0..BKR94ACS_PUMP_MAX_ACTS).
+ * Same one-call-per-tick semantic as bracha87Fig1PumpStep — see
+ * the network flood warning in bracha87.h.  The cursor (struct
+ * bracha87Pump) lives in caller storage, initialized with
+ * bracha87PumpInit; it walks the (proposal, then consensus by
+ * origin × round × broadcaster) Fig1 instance space, finds the
+ * next committed instance, and emits its actions as struct
+ * bkr94acsAct entries.
  *
- * Returns 0 only when a full sweep of the cursor finds no
- * committed instance with anything to replay -- the
- * application's idle signal at the ACS layer.  The application
- * uses 0-returns to gate its silence-quorum exit.
+ * Returns 0 only when a full sweep finds no committed instance —
+ * pre-broadcast / shutdown state, not a per-tick termination
+ * signal.  Use silence-quorum + K-sweep for termination.
  *
  * Replaces the application-layer ledger entirely.  Per-record
  * destination masks, per-peer evidence tracking, and pump
@@ -424,6 +405,7 @@ bkr94acsPropose(
 unsigned int
 bkr94acsPump(
   struct bkr94acs *
+ ,struct bracha87Pump *    /* cursor */
  ,struct bkr94acsAct *     /* out: room for BKR94ACS_PUMP_MAX_ACTS */
 );
 

@@ -215,13 +215,17 @@ while (!silenceQuorumExit) {
 
 ### bracha87 Entry Points
 
+bracha87 exposes two parallel API layers.  The **low-level** entries are paper-vocabulary state-machine operations (one rule cluster each).  The **high-level** entries — added so that Fig 1 / Fig 3 / Fig 4 callers get the same Input + Pump ergonomics as bkr94acs — wrap the cascade and surface rich Act structs tagged with (origin, round, type, value).  Either layer is usable; mixing them on the same instance is permitted but rarely useful.
+
+#### Low-level (paper-faithful state machine)
+
 | Function | Purpose |
 |---|---|
 | `bracha87Fig1Sz(n, vLen)` | Compute allocation size for a Fig 1 instance |
 | `bracha87Fig1Init(...)` | Initialize a Fig 1 instance |
 | `bracha87Fig1Origin(f1, value)` | Mark this instance as broadcast originator and store the value (BPR — enables INITIAL replay) |
 | `bracha87Fig1Input(f1, type, from, value, out)` | Process one incoming message; returns action count (0-3) |
-| `bracha87Fig1Bpr(f1, out)` | Emit committed-action replays (BPR pump tick); returns action count (0-3); 0 = idle |
+| `bracha87Fig1Bpr(f1, out)` | Emit committed-action replays for one Fig 1 instance; returns action count (0-3); 0 = idle |
 | `bracha87Fig1Value(f1)` | Retrieve committed value (returns non-null when ORIGIN or ECHOED) |
 | `bracha87Fig3Sz(n, maxRounds)` | Compute allocation size for a Fig 3 instance |
 | `bracha87Fig3Init(...)` | Initialize with N function and closure |
@@ -232,6 +236,30 @@ while (!silenceQuorumExit) {
 | `bracha87Fig4Init(...)` | Initialize with initial value, coin function, and closure |
 | `bracha87Fig4Round(f4, round, n_msgs, senders, values)` | Process a completed round; returns action bitmask |
 
+#### High-level (Input + Pump, mirrors bkr94acs ergonomics)
+
+All Pump entry points share one cursor type, `struct bracha87Pump`, initialized with `bracha87PumpInit`.  Caller owns the Fig 1 instance array, indexed by `round * (n+1) + origin` for the Fig 3 / Fig 4 layers.
+
+| Function | Purpose |
+|---|---|
+| `bracha87PumpInit(p)` | Initialize a shared Pump cursor |
+| `bracha87Fig1PumpStep(instances, count, p, out, outCap)` | Walk a caller-owned Fig 1 array; one instance's BPR actions per call; returns 0 on full-sweep idle |
+| `bracha87Fig1CommittedCount(instances, count)` | Count of instances with any committed flag (ORIGIN/ECHOED/RDSENT); for K-sweep cadence |
+| `bracha87Fig3Origin(f3, fig1Array, round, origin, value, out, outCap)` | Self-initiate a Fig 1 broadcast for (round, origin); emits one INITIAL_ALL act |
+| `bracha87Fig3Input(f3, fig1Array, round, origin, type, from, value, out, outCap)` | One inbound message → Fig 1 ladder + Fig 3 cascade + ROUND_COMPLETE acts |
+| `bracha87Fig3Pump(f3, fig1Array, p, out, outCap)` | BPR pump; tags Fig 1 actions with (origin, round); 0 on idle |
+| `bracha87Fig3CommittedFig1Count(f3, fig1Array)` | Same as Fig1 version, scoped to maxRounds × (n+1) |
+| `bracha87Fig4Start(f4, fig1Array, self, out, outCap)` | Self-initiate the round-0 broadcast; emits one INITIAL_ALL act using initialValue |
+| `bracha87Fig4Input(f4, fig1Array, self, round, origin, type, from, value, out, outCap)` | One inbound message → Fig 1 + Fig 3 + Fig 4 cascade + next-round origination |
+| `bracha87Fig4Pump(f4, fig1Array, p, out, outCap)` | BPR pump; tags actions with (origin, round) |
+| `bracha87Fig4CommittedFig1Count(f4, fig1Array)` | Sweep-cadence accessor |
+
+Act structs carry the layer's natural identity:
+
+* `struct bracha87Fig1Act` — `act` (INITIAL_ALL / ECHO_ALL / READY_ALL), `idx` (array index), `value` (borrowed)
+* `struct bracha87Fig3Act` — `act` (above + ROUND_COMPLETE), `origin`, `round`, `type`, `value`
+* `struct bracha87Fig4Act` — `act` (above + DECIDE / EXHAUSTED), `origin`, `round`, `type`, `value`, `decision`
+
 ### bkr94acs Entry Points
 
 | Function | Purpose |
@@ -241,14 +269,14 @@ while (!silenceQuorumExit) {
 | `bkr94acsPropose(acs, value, out)` | Mark local proposal Fig 1 as originator and emit one PROP_SEND/INITIAL action (BPR) |
 | `bkr94acsProposalInput(acs, origin, type, from, value, out)` | Process a proposal broadcast message; returns action count |
 | `bkr94acsConsensusInput(acs, origin, round, broadcaster, type, from, value, out)` | Process a consensus message; returns action count |
-| `bkr94acsPump(acs, out)` | BPR pump tick; cursor walks one Fig 1 per call; returns action count (0-3); 0 = full-sweep idle |
+| `bkr94acsPump(acs, p, out)` | BPR pump tick using shared `struct bracha87Pump` cursor; one Fig 1 per call; returns action count (0-3); 0 = full-sweep no-commit (one-call-per-tick — see flood warning) |
 | `bkr94acsSubset(acs, origins)` | Retrieve the decided common subset |
 | `bkr94acsProposalValue(acs, origin)` | Retrieve accepted proposal value for an origin |
 | `bkr94acsActIdentity(act, out, outCap)` | Fixed-length [act, origin, round, broadcaster, type] identity tuple for use as a wire correlator on transports that need a uniqueness key; returns BKR94ACS_ACT_IDENTITY_LEN (5) for SEND acts, 0 otherwise |
 | `bkr94acsBaDecision(acs, origin)` | BA decision for origin: 0xFF undecided / 0xFE exhausted / 0 excluded / 1 included |
 | `bkr94acsCommittedFig1Count(acs)` | Count of Fig1 instances with any committed flag (ORIGIN/ECHOED/RDSENT); useful for cadence sizing |
 
-Read `acs->complete` directly to check if all N BAs have decided. Read `acs->cursorPhase` / `cursorOrigin` / `cursorRound` / `cursorBroadcaster` directly to inspect the pump cursor position.
+Read `acs->complete` directly to check if all N BAs have decided.  Pump cursor lives in caller storage (`struct bracha87Pump`); the application owns the cursor lifetime, the same way every other Pump entry point in this library works.
 
 ### Action Struct
 
@@ -268,48 +296,51 @@ Read `acs->complete` directly to check if all N BAs have decided. Read `acs->cur
 
 For multi-value agreement, use `bkr94acs` and the application loop shown in the **Bracha Phase Re-emitter (BPR)** section above — it manages all Fig 1 instances internally and provides `bkr94acsPump` for BPR replays. See `example/bkr94acs.c` for a runnable version of this pattern.
 
-For raw binary consensus (Fig 1 + Fig 3 + Fig 4 directly), the caller manages the Fig 1 instances per (origin, round). On every tick, the application iterates its Fig 1 array and calls `bracha87Fig1Bpr` per entry. See `example/bracha87.c` for a runnable version of this pattern.
+For raw binary consensus (Fig 1 + Fig 3 + Fig 4 directly), the high-level Fig 4 entry points collapse the cascade into a single Input call.  The caller owns the Fig 1 array indexed by `round * (n+1) + origin`.  See `example/bracha87Fig4.c` for a runnable version.
 
 ```c
 /* Per process: */
 struct bracha87Fig1 *fig1[maxRounds * n];  /* one per (origin, round) */
 struct bracha87Fig4 *fig4;                 /* embeds Fig3 as fig4->fig3 */
-struct bracha87Fig3 *fig3 = &fig4->fig3;
-unsigned char nextRound = 0;
+struct bracha87Pump pump;
+bracha87PumpInit(&pump);
 
-/* Self-initiation: mark our own (origin=self, round=0) Fig 1 as originator. */
-bracha87Fig1Origin(fig1[0 * n + self], &my_initial_value);
-broadcast INITIAL(my_initial_value) for round 0, origin self, to all peers
+/* Self-initiation: emit the round-0 INITIAL using initialValue. */
+struct bracha87Fig4Act sact;
+bracha87Fig4Start(fig4, fig1, self, &sact, 1);
+broadcast INITIAL(sact.value) for round=0, origin=self, to all peers
 
 /* On incoming message (round, type, from, origin, value): */
-f1 = fig1[round * n + origin];
-nout = bracha87Fig1Input(f1, type, from, &value, out);
-for each action in out:
-  if ACCEPT:
-    cv = bracha87Fig1Value(f1);
-    bracha87Fig3Accept(fig3, round, origin, cv[0], &vc);
-    while nextRound < max && bracha87Fig3RoundComplete(fig3, nextRound):
-      rcnt = bracha87Fig3GetValid(fig3, nextRound, rsnd, rval);
-      act = bracha87Fig4Round(fig4, nextRound, rcnt, rsnd, rval);
-      ++nextRound;
-      if act & BRACHA87_BROADCAST:
-        bracha87Fig1Origin(fig1[nextRound * n + self], &fig4->value);
-        broadcast INITIAL(fig4->value) for nextRound, origin self
-      if act & BRACHA87_DECIDE:
-        deliver fig4->decision
-      if act & BRACHA87_EXHAUSTED:
-        consensus failed within operational limit
-  if INITIAL_ALL or ECHO_ALL or READY_ALL:
-    cv = bracha87Fig1Value(f1);
-    send the named action(cv) for this round/origin to all peers
+struct bracha87Fig4Act acts[BRACHA87_FIG4_MAX_ACTS];
+unsigned int n_acts = bracha87Fig4Input(fig4, fig1, self,
+                                        round, origin, type, from, value,
+                                        acts, BRACHA87_FIG4_MAX_ACTS);
+for each act in acts[0..n_acts):
+  switch act.act:
+    case INITIAL_ALL / ECHO_ALL / READY_ALL:
+      broadcast the named message with (act.round, act.origin, act.value)
+    case BRACHA87_FIG4_DECIDE:
+      deliver act.decision
+    case BRACHA87_FIG4_EXHAUSTED:
+      consensus failed within operational limit (abort epoch)
 
-/* Pump tick (BPR): iterate every owned Fig 1 instance. */
-for each fig1 instance:
-  nout = bracha87Fig1Bpr(fig1, out);
-  for each action in out:
-    cv = bracha87Fig1Value(fig1);
-    send the named action(cv) for the corresponding (round, origin) to all peers
+/* Pump tick (BPR): ONE call per tick, paced by the application's    */
+/* sleep(tickMs).  Do NOT loop — see the network flood warning in    */
+/* bracha87.h.  Same pattern at every layer: bracha87Fig1PumpStep,   */
+/* bracha87Fig3Pump, bracha87Fig4Pump, and bkr94acsPump all take a   */
+/* caller-owned struct bracha87Pump cursor.                          */
+struct bracha87Fig4Act pacts[BRACHA87_FIG1_PUMP_MAX_ACTS];
+unsigned int n_pacts;
+n_pacts = bracha87Fig4Pump(fig4, fig1, &pump, pacts,
+                           BRACHA87_FIG1_PUMP_MAX_ACTS);
+for each act in pacts[0..n_pacts):
+  broadcast the named message with (act.round, act.origin, act.value)
+/* Termination is the application's silence-quorum + K-sweep gate     */
+/* — see "Termination policy" below.  One sweep counted across ticks  */
+/* = bracha87Fig*CommittedFig1Count Pump calls.                       */
 ```
+
+The same Input + Pump shape applies at Fig 3 (`bracha87Fig3Origin` / `bracha87Fig3Input` / `bracha87Fig3Pump`, with caller-supplied N driving round transitions) and at Fig 1 directly (`bracha87Fig1PumpStep` over a caller-owned array of any shape).
 
 ## Operational Limits
 
@@ -337,15 +368,33 @@ Compiler flags: `-std=c89 -pedantic -Wall -Wextra -Os -g`
 
 ## Examples
 
-Two runnable examples sit in `example/` — these are the canonical worked versions of the API patterns shown in **Caller Composition Pattern** above. Both run in a single process with a synchronous in-memory queue (no loss, no reordering, no asynchrony) — they exercise the protocol state machines and the BPR pump but do **not** exercise the deployment-time termination policies (silence-quorum + K-sweep gate, abandonment) needed under real asynchronous transport.
+Four runnable examples sit in `example/`, one per independently-usable API surface. Each runs in a single process with a synchronous in-memory queue (no loss, no reordering, no asynchrony) — they exercise the protocol state machines and (where applicable) the BPR pump but do **not** exercise the deployment-time termination policies (silence-quorum + K-sweep gate, abandonment) needed under real asynchronous transport.
 
-`example/bracha87.c` — binary consensus (Fig 1 + Fig 3 + Fig 4 directly):
+`example/bracha87Fig1.c` — reliable broadcast (Theorem 1). One designated origin broadcasts a multi-byte value; all correct peers either accept the same value or none accept (Lemmas 3 and 4):
 
 ```bash
-./example_bracha87 4 1                          # 4 peers, 1 Byzantine fault
-./example_bracha87 -s 42 7 2                    # shuffled delivery
-./example_bracha87 -b 3 7 2                     # Byzantine peer 0 equivocates
-./example_bracha87 -v 4 1 0 0 1 1               # verbose trace, split initial values
+./example_bracha87Fig1 4 1 hello                # 4 peers, 1 Byzantine fault, broadcast "hello"
+./example_bracha87Fig1 -s 42 7 2 transactionXYZ # shuffled delivery
+./example_bracha87Fig1 -b 2 4 1 hello           # Byzantine origin equivocates (split=2 stalls; split=1 or 3 converges)
+./example_bracha87Fig1 -v -o 1 4 1 ping         # verbose trace, peer 1 is origin
+```
+
+`example/bracha87Fig3.c` — VALID-set framework (Lemmas 5/6/7). Demonstrates the model reduction from Byzantine to crash: a Byzantine peer's only options at the validation layer are conform-to-N or look-silent:
+
+```bash
+./example_bracha87Fig3 4 1                      # honest baseline
+./example_bracha87Fig3 -byz bogus 4 1           # peer 0 injects out-of-range / non-conforming values; rejected
+./example_bracha87Fig3 -byz silent 4 1          # peer 0 silent; n-t still reached via honest majority
+./example_bracha87Fig3 -v -byz bogus 4 1        # verbose: see every Accept call resolved
+```
+
+`example/bracha87Fig4.c` — binary Byzantine agreement (Theorem 2), Fig 1 + Fig 3 + Fig 4 composed:
+
+```bash
+./example_bracha87Fig4 4 1                      # 4 peers, 1 Byzantine fault
+./example_bracha87Fig4 -s 42 7 2                # shuffled delivery
+./example_bracha87Fig4 -b 3 7 2                 # Byzantine peer 0 equivocates
+./example_bracha87Fig4 -v 4 1 0 0 1 1           # verbose trace, split initial values
 ```
 
 `example/bkr94acs.c` — multi-value agreement on arbitrary strings:
@@ -406,7 +455,7 @@ A peer that satisfies `silence quorum AND K sweeps AND !done AND !exhausted` is 
 
 ### Coin choice — caller responsibility
 
-**The library is coin-agnostic.** Both `bracha87Fig4Init` and `bkr94acsInit` take a `bracha87CoinFn` callback plus closure; the caller supplies the coin and owns the consequences of that choice. The bundled examples (`example/bracha87.c`, `example/bkr94acs.c`) use a **deterministic alternating coin** chosen for reproducible demo runs — the example source explicitly notes this is for demonstration only. This section is reference material to inform the caller's choice.
+**The library is coin-agnostic.** Both `bracha87Fig4Init` and `bkr94acsInit` take a `bracha87CoinFn` callback plus closure; the caller supplies the coin and owns the consequences of that choice. The bundled examples (`example/bracha87Fig4.c`, `example/bkr94acs.c`) use a **deterministic alternating coin** chosen for reproducible demo runs — the example source explicitly notes this is for demonstration only. This section is reference material to inform the caller's choice.
 
 Fig 4 step 3 case (iii) — when neither decision-count rule fires — calls the coin. The coin is how Bracha escapes FLP impossibility: deterministic asynchronous consensus is impossible, and randomization buys probabilistic termination. Bracha's own Theorem 2 bounds the expected number of phases at O(1) under a **common-coin** assumption; under other coin choices the theoretical bound depend on the choice. (This is the same FLP-escape mechanism as other randomized async BFT protocols; partial-synchrony designs like PBFT/Tendermint/HotStuff escape FLP through timing assumptions instead.) Options the caller may supply via `bracha87CoinFn`:
 

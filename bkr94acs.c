@@ -552,7 +552,7 @@ bkr94acsConsensusInput(
 
       /*
        * Check for completed rounds (including cascades).
-       * Same pattern as example/bracha87.c.
+       * Same pattern as example/bracha87Fig4.c.
        */
       while (*nextRound < mr
           && bracha87Fig3RoundComplete(f3, *nextRound)) {
@@ -938,70 +938,65 @@ bkr94acsPumpEmitConsensus(
 unsigned int
 bkr94acsPump(
   struct bkr94acs *a
+ ,struct bracha87Pump *p
  ,struct bkr94acsAct *out
 ){
   unsigned int N;
   unsigned int mr;
-  unsigned int swept;
   unsigned int total;
+  unsigned int idx;
   unsigned int nact;
 
-  if (!a || !out)
+  if (!a || !p || !out)
     return (0);
 
   N = A_N(a);
   mr = maxRounds(a);
   /*
-   * Cursor space size: N proposals + N origins * mr rounds *
-   * N broadcasters consensus Fig1s.  swept counts cursor
-   * advances; total bounds the maximum walk before declaring
-   * idle (one full cycle through the entire space).
+   * Linear cursor space: pos in [0, N) = proposal Fig1 for origin = pos.
+   * pos in [N, N + N*mr*N) = consensus Fig1, decoded as
+   *   rel = pos - N
+   *   origin      = rel / (mr * N)
+   *   round       = (rel / N) % mr
+   *   broadcaster = rel % N
+   * Same shape as bracha87Fig1PumpStep: walk forward, return first
+   * instance with actions; on wrap with no actions return 0.
    */
   total = N + N * mr * N;
-  swept = 0;
 
-  while (swept < total) {
-    nact = 0;
-
-    if (a->cursorPhase == 0) {
-      /* Proposal Fig1 cursor */
-      if (bkr94acsPumpOriginGate(a, a->cursorOrigin))
-        nact = bkr94acsPumpEmitProposal(a, a->cursorOrigin, out);
-
-      /* Advance: next origin; on wrap, switch to consensus phase */
-      ++a->cursorOrigin;
-      if (a->cursorOrigin >= N) {
-        a->cursorOrigin = 0;
-        a->cursorPhase = 1;
-        a->cursorRound = 0;
-        a->cursorBroadcaster = 0;
-      }
-    } else {
-      /* Consensus Fig1 cursor: (origin, round, broadcaster) */
-      nact = bkr94acsPumpEmitConsensus(a, a->cursorOrigin,
-        a->cursorRound, a->cursorBroadcaster, out);
-
-      /* Advance broadcaster, then round, then origin */
-      ++a->cursorBroadcaster;
-      if (a->cursorBroadcaster >= N) {
-        a->cursorBroadcaster = 0;
-        ++a->cursorRound;
-        if (a->cursorRound >= mr) {
-          a->cursorRound = 0;
-          ++a->cursorOrigin;
-          if (a->cursorOrigin >= N) {
-            a->cursorOrigin = 0;
-            a->cursorPhase = 0;
-          }
-        }
-      }
+  for (;;) {
+    if (p->pos >= total) {
+      p->pos = 0;
+      if (p->sweepActs == 0)
+        return (0);
+      p->sweepActs = 0;
     }
+    idx = p->pos++;
+    nact = 0;
+    if (idx < N) {
+      unsigned char origin;
 
-    ++swept;
-    if (nact)
+      origin = (unsigned char)idx;
+      if (bkr94acsPumpOriginGate(a, origin))
+        nact = bkr94acsPumpEmitProposal(a, origin, out);
+    } else {
+      unsigned int rel;
+      unsigned char origin;
+      unsigned char round;
+      unsigned char broadcaster;
+
+      rel = idx - N;
+      origin = (unsigned char)(rel / (mr * N));
+      round = (unsigned char)((rel / N) % mr);
+      broadcaster = (unsigned char)(rel % N);
+      nact = bkr94acsPumpEmitConsensus(a, origin, round,
+                                       broadcaster, out);
+    }
+    if (nact) {
+      p->sweepActs += nact;
       return (nact);
+    }
   }
-  return (0);
 }
 
 /*------------------------------------------------------------------------*/

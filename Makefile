@@ -2,7 +2,7 @@ CFLAGS = -I. -Os -g
 DTC = ../decisionTableCompiler/dtc
 AWK = awk
 
-all: example_bracha87 example_bkr94acs
+all: example_bracha87Fig1 example_bracha87Fig3 example_bracha87Fig4 example_bkr94acs
 
 bracha87.o: bracha87.c bracha87.h bracha87Fig1.c bracha87Fig3.c bracha87Fig4.c
 	$(CC) $(CFLAGS) -c -o $@ bracha87.c
@@ -43,8 +43,14 @@ test_bkr94acs: test/test_bkr94acs.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
 test_predicates: test/test_predicates.c bracha87.c bracha87.h bracha87Fig1.c bracha87Fig3.c bracha87Fig4.c
 	$(CC) $(CFLAGS) -I. -o $@ test/test_predicates.c
 
-example_bracha87: example/bracha87.c bracha87.o bracha87.h
-	$(CC) $(CFLAGS) -I. -o $@ example/bracha87.c bracha87.o
+example_bracha87Fig1: example/bracha87Fig1.c bracha87.o bracha87.h
+	$(CC) $(CFLAGS) -I. -o $@ example/bracha87Fig1.c bracha87.o
+
+example_bracha87Fig3: example/bracha87Fig3.c bracha87.o bracha87.h
+	$(CC) $(CFLAGS) -I. -o $@ example/bracha87Fig3.c bracha87.o
+
+example_bracha87Fig4: example/bracha87Fig4.c bracha87.o bracha87.h
+	$(CC) $(CFLAGS) -I. -o $@ example/bracha87Fig4.c bracha87.o
 
 example_bkr94acs: example/bkr94acs.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) -I. -o $@ example/bkr94acs.c bkr94acs.o bracha87.o
@@ -57,7 +63,7 @@ check: test_bracha87 test_bkr94acs test_predicates
 clean:
 	rm -f bracha87Fig1.psu bracha87Fig3.psu bracha87Fig4.psu bkr94acs.psu
 	rm -f bracha87.o bkr94acs.o
-	rm -f example_bracha87 example_bkr94acs
+	rm -f example_bracha87Fig1 example_bracha87Fig3 example_bracha87Fig4 example_bkr94acs
 	rm -f test_bracha87 test_bkr94acs test_predicates
 
 clobber: clean

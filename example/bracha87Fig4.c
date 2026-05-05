@@ -1,5 +1,5 @@
 /*
- * asynchronousByzantineAgreementProtocols - Example Bracha87 program
+ * asynchronousByzantineAgreementProtocols - Example Bracha87 Fig 4 program
  * Copyright (C) 2026 G. David Butler <gdb@dbSystems.com>
  *
  * This file is part of asynchronousByzantineAgreementProtocols
@@ -19,34 +19,50 @@
  */
 
 /*
- * bracha87.c — Standalone demonstration of Bracha's asynchronous
- * Byzantine agreement protocol (Bracha87 Figures 1, 3, and 4 composed).
+ * bracha87Fig4.c — Standalone demonstration of Bracha 1987 Figure 4:
+ * Binary Byzantine agreement (Theorem 2).
  *
- * Composition pipeline:
+ * What Figure 4 brings to the table: given Fig 3's validated round
+ * messages, all correct peers decide on the same bit despite up to t
+ * Byzantine peers and arbitrary asynchrony.  Decision is binary by
+ * construction (initialValue is 0 or 1; the coin breaks ties at step
+ * 3 case (iii)).  Multi-byte agreement is the bkr94acs layer.
+ *
+ * The Fig 4 round messages are reliably broadcast via Fig 1 — that
+ * is the composition the paper specifies, and the Fig 1 layer is
+ * present here as the natural delivery primitive, not as an add-on:
+ *
  *   message -> Fig1(n,t) -> accept -> Fig3(N) -> round complete
  *           -> Fig4(coin) -> decision
  *
- * Each process maintains:
- *   - One Fig1 instance per (origin, round) for reliable broadcast
- *   - One Fig4 instance (which embeds Fig3) for consensus
+ * The high-level bracha87Fig4Input entry point drives this entire
+ * cascade in a single call: Fig 1 Input + Fig 3 Accept on ACCEPT +
+ * round-completion scan + Fig 4 Round on each completion +
+ * origination of the next round's Fig 1 broadcast.  Acts surfaced
+ * to the application are (origin, round, type, value) for
+ * broadcast actions plus DECIDE / EXHAUSTED for terminal events.
  *
- * Messages are queued in a simulated all-to-all network. Optional
+ * Each process maintains:
+ *   - One Fig 1 instance per (origin, round) for reliable broadcast
+ *   - One Fig 4 instance (which embeds Fig 3) for consensus
+ *
+ * Messages are queued in a simulated all-to-all network.  Optional
  * Fisher-Yates shuffling demonstrates asynchrony tolerance.
  *
  * Scope: this demo runs in a single process with a synchronous
  * deterministic in-memory queue — every input is delivered, no
- * loss, no reordering. It exercises the protocol state machines
+ * loss, no reordering.  It exercises the protocol state machines
  * but does NOT exercise BPR replay under loss or the
  * deployment-time termination policies (silence-quorum + K-sweep
- * gate) needed under real asynchronous transport. See README.md
+ * gate) needed under real asynchronous transport.  See README.md
  * "Architecture", "Caller Composition Pattern", and "Termination
  * policy" for the design.
  *
  * Build:
- *   (from project root) make example_bracha87
+ *   (from project root) make example_bracha87Fig4
  *
  * Usage:
- *   ./example_bracha87 [-v] [-s seed] [-b split] n t [init_values...]
+ *   ./example_bracha87Fig4 [-v] [-s seed] [-b split] n t [init_values...]
  */
 
 #include <stdio.h>
@@ -340,26 +356,35 @@ main(
   /*  from n origins to n peers). Budget 4*n^2 per round for headroom.   */
   /*----------------------------------------------------------------------*/
 
-  if (qAlloc(4u * n * n * maxRounds)) {
+  if (qAlloc(16u * n * n * maxRounds)) {
     fprintf(stderr, "queue allocation failed\n");
     exitCode = 1;
     goto cleanup;
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Bootstrap: each process broadcasts INITIAL for round 0              */
+  /*  Bootstrap: each correct peer self-initiates round 0 via Fig4Start.  */
+  /*  Byzantine peer 0 (when -b is set) bypasses the library and pushes   */
+  /*  equivocating INITIALs directly.                                     */
   /*----------------------------------------------------------------------*/
   for (i = 0; i < n; ++i) {
-    for (j = 0; j < n; ++j) {
-      unsigned char v;
+    struct bracha87Fig4Act sact;
+    unsigned int ns;
 
+    if (byzSplit && i == 0) {
       /* Byzantine equivocation: peer 0 sends different values */
-      if (byzSplit && i == 0)
-        v = (j < byzSplit) ? 0 : 1;
-      else
-        v = initVals[i];
-      qPush(0, BRACHA87_INITIAL, (unsigned char)i,
-            (unsigned char)j, (unsigned char)i, v);
+      for (j = 0; j < n; ++j)
+        qPush(0, BRACHA87_INITIAL, 0, (unsigned char)j, 0,
+              (j < byzSplit) ? 0 : 1);
+      continue;
+    }
+
+    ns = bracha87Fig4Start(peers[i].fig4, peers[i].fig1,
+                           (unsigned char)i, &sact, 1);
+    if (ns == 1) {
+      for (j = 0; j < n; ++j)
+        qPush(sact.round, sact.type, (unsigned char)i,
+              (unsigned char)j, sact.origin, sact.value);
     }
   }
   if (shuffleSeed)
@@ -367,19 +392,21 @@ main(
 
   /*----------------------------------------------------------------------*/
   /*  Process message queue                                               */
+  /*                                                                      */
+  /*  bracha87Fig4Input drives Fig 1 ladder + Fig 3 validation cascade +  */
+  /*  Fig 4 round-completion + next-round origination in a single call.   */
+  /*  The application's job is to broadcast the emitted *_ALL acts and    */
+  /*  record DECIDE / EXHAUSTED outcomes.                                 */
   /*----------------------------------------------------------------------*/
 
   step1ok = 1;
 
   while (Qhead < Qtail) {
     struct msg *m;
-    struct peerState *st;
-    struct bracha87Fig1 *f1;
-    unsigned char out[3];
-    unsigned int nout;
+    struct bracha87Fig4Act acts[BRACHA87_FIG4_MAX_ACTS];
+    unsigned int nacts;
     unsigned int k;
     unsigned int oldTail;
-    const unsigned char *cv;
 
     m = &MsgQ[Qhead++];
 
@@ -389,8 +416,6 @@ main(
     if (m->round >= maxRounds || m->origin >= n || m->from >= n)
       continue;
 
-    st = &peers[m->to];
-    f1 = st->fig1[(unsigned int)m->round * n + m->origin];
     oldTail = Qtail;
 
     if (verbose)
@@ -399,130 +424,106 @@ main(
              (unsigned)m->round, (unsigned)m->origin,
              (unsigned)(m->value & 1), (unsigned)m->from);
 
-    nout = bracha87Fig1Input(f1, m->type, m->from, &m->value, out);
+    nacts = bracha87Fig4Input(peers[m->to].fig4, peers[m->to].fig1,
+                              m->to, m->round, m->origin,
+                              m->type, m->from, m->value,
+                              acts, BRACHA87_FIG4_MAX_ACTS);
 
-    for (k = 0; k < nout; ++k) {
-      if (out[k] == BRACHA87_ACCEPT) {
-        /*
-         * Fig1 accepted a value for (origin, round).
-         * Feed it into Fig3 for VALID set tracking.
-         */
-        unsigned int vc;
+    for (k = 0; k < nacts; ++k) {
+      switch (acts[k].act) {
+      case BRACHA87_INITIAL_ALL:
+      case BRACHA87_ECHO_ALL:
+      case BRACHA87_READY_ALL:
+        /* Verify step 1 broadcasts (sub-round 0 of any phase) never
+         * carry D_FLAG — a Byzantine peer flagging a step-1 INITIAL
+         * would corrupt the value distinction the protocol relies on. */
+        if (acts[k].act == BRACHA87_INITIAL_ALL
+         && acts[k].round % 3 == 0
+         && (acts[k].value & BRACHA87_D_FLAG))
+          step1ok = 0;
 
-        cv = bracha87Fig1Value(f1);
-        if (!cv)
-          continue;
-
-        if (verbose)
-          printf("peer %u: ACCEPT(round=%u, origin=%u, value=%u)\n",
-                 (unsigned)m->to, (unsigned)m->round,
-                 (unsigned)m->origin, (unsigned)(cv[0] & 1));
-
-        bracha87Fig3Accept(st->fig3, m->round, m->origin, cv[0], &vc);
-
-        if (verbose && vc >= n - t)
-          printf("peer %u: VALID round %u: %u/%u validated\n",
-                 (unsigned)m->to, (unsigned)m->round,
-                 vc, n - t);
-
-        /*
-         * Check for completed rounds (including cascades).
-         * Each completed round feeds Fig4 which may trigger
-         * a new broadcast for the next round.
-         */
-        while (st->nextRound < maxRounds
-            && bracha87Fig3RoundComplete(st->fig3, st->nextRound)) {
-          unsigned char rsnd[MAX_PEERS];
-          unsigned char rval[MAX_PEERS];
-          unsigned int rcnt;
-          unsigned int act;
-
-          rcnt = bracha87Fig3GetValid(st->fig3, st->nextRound,
-                                      rsnd, rval);
-          act = bracha87Fig4Round(st->fig4, st->nextRound,
-                                  rcnt, rsnd, rval);
-          ++st->nextRound;
-
-          if (act & BRACHA87_DECIDE) {
-            decisions[m->to] = st->fig4->decision;
-            if (verbose)
-              printf("peer %u: Fig4 round %u -> DECIDE value=%u\n",
-                     (unsigned)m->to,
-                     (unsigned)(st->nextRound - 1),
-                     (unsigned)st->fig4->decision);
-          }
-
-          if ((act & BRACHA87_BROADCAST)
-           && st->nextRound < maxRounds) {
-            unsigned int p;
-
-            /* Verify step 1 broadcasts never carry D_FLAG */
-            if (st->nextRound % 3 == 0
-             && (st->fig4->value & BRACHA87_D_FLAG))
-              step1ok = 0;
-
-            if (verbose)
-              printf("peer %u: Fig4 round %u -> BROADCAST"
-                     "(round=%u, value=%u)\n",
-                     (unsigned)m->to,
-                     (unsigned)(st->nextRound - 1),
-                     (unsigned)st->nextRound,
-                     (unsigned)(st->fig4->value & 1));
-
-            /* Broadcast INITIAL for the new round to all peers */
-            for (p = 0; p < n; ++p)
-              qPush((unsigned char)st->nextRound,
-                    BRACHA87_INITIAL,
-                    m->to, (unsigned char)p,
-                    m->to, st->fig4->value);
-          }
-
-          if (act & BRACHA87_EXHAUSTED) {
-            /*
-             * Not verbose-gated: BRACHA87_EXHAUSTED is a fatal
-             * protocol-level event (Bracha87 Fig4's probabilistic
-             * termination did not converge within MAX_PHASES), not
-             * informational like BROADCAST.  Track it so the
-             * post-simulation summary can distinguish "exhausted"
-             * from "no decision yet."  Mutually exclusive with
-             * DECIDE / BROADCAST per Fig4Round semantics, so emitted
-             * at most once per peer.
-             */
-            if (!exhausted[m->to])
-              ++exhaustedCount;
-            exhausted[m->to] = 1;
-            printf("peer %u: EXHAUSTED -- "
-                   "no decision in %u phases\n",
-                   (unsigned)m->to, (unsigned)MAX_PHASES);
-          }
+        if (verbose) {
+          const char *name;
+          name = (acts[k].act == BRACHA87_INITIAL_ALL) ? "INITIAL_ALL"
+               : (acts[k].act == BRACHA87_ECHO_ALL)    ? "ECHO_ALL"
+               :                                          "READY_ALL";
+          printf("peer %u: -> %s(round=%u, origin=%u, value=%u)\n",
+                 (unsigned)m->to, name,
+                 (unsigned)acts[k].round, (unsigned)acts[k].origin,
+                 (unsigned)(acts[k].value & 1));
         }
-        continue;
+
+        for (j = 0; j < n; ++j)
+          qPush(acts[k].round, acts[k].type, m->to,
+                (unsigned char)j, acts[k].origin, acts[k].value);
+        break;
+
+      case BRACHA87_FIG4_DECIDE:
+        decisions[m->to] = acts[k].decision;
+        if (verbose)
+          printf("peer %u: Fig4 round %u -> DECIDE value=%u\n",
+                 (unsigned)m->to, (unsigned)acts[k].round,
+                 (unsigned)acts[k].decision);
+        break;
+
+      case BRACHA87_FIG4_EXHAUSTED:
+        /* Not verbose-gated: fatal protocol event. */
+        if (!exhausted[m->to])
+          ++exhaustedCount;
+        exhausted[m->to] = 1;
+        printf("peer %u: EXHAUSTED -- no decision in %u phases\n",
+               (unsigned)m->to, (unsigned)MAX_PHASES);
+        break;
       }
-
-      /*
-       * ECHO_ALL or READY_ALL: relay the committed value
-       * for this (origin, round) to all peers.
-       */
-      cv = bracha87Fig1Value(f1);
-      if (!cv)
-        continue;
-
-      if (verbose)
-        printf("peer %u: -> %s(round=%u, origin=%u, value=%u)\n",
-               (unsigned)m->to,
-               (out[k] == BRACHA87_ECHO_ALL) ? "ECHO_ALL" : "READY_ALL",
-               (unsigned)m->round, (unsigned)m->origin,
-               (unsigned)(cv[0] & 1));
-
-      for (j = 0; j < n; ++j)
-        qPush(m->round,
-              (out[k] == BRACHA87_ECHO_ALL)
-                ? BRACHA87_ECHO : BRACHA87_READY,
-              m->to, (unsigned char)j, m->origin, cv[0]);
     }
 
     if (shuffleSeed && Qtail > oldTail)
       qShuffle(&shuffleSeed);
+  }
+
+  /*----------------------------------------------------------------------*/
+  /*  Pump tick                                                           */
+  /*                                                                      */
+  /*  In a real deployment, the BPR pump is called once per tick.         */
+  /*  Looping until idle would flood the network — see bracha87.h's       */
+  /*  flood warning.  The call is shown here as a representative tick.    */
+  /*----------------------------------------------------------------------*/
+
+  for (i = 0; i < n; ++i) {
+    struct bracha87Pump pump;
+    struct bracha87Fig4Act pacts[BRACHA87_FIG4_MAX_ACTS];
+    unsigned int n_pacts;
+    unsigned int p;
+
+    if (byzSplit && i == 0) continue;
+    bracha87PumpInit(&pump);
+    n_pacts = bracha87Fig4Pump(peers[i].fig4, peers[i].fig1,
+                               &pump, pacts, BRACHA87_FIG4_MAX_ACTS);
+    for (p = 0; p < n_pacts; ++p)
+      for (j = 0; j < n; ++j)
+        qPush(pacts[p].round, pacts[p].type, (unsigned char)i,
+              (unsigned char)j, pacts[p].origin, pacts[p].value);
+  }
+
+  /*----------------------------------------------------------------------*/
+  /*  Drain the post-pump replay queue.  Receivers dedup at Fig1Input,    */
+  /*  so under perfect delivery these replays produce no new state.       */
+  /*----------------------------------------------------------------------*/
+
+  while (Qhead < Qtail) {
+    struct msg *m;
+    struct bracha87Fig4Act dacts[BRACHA87_FIG4_MAX_ACTS];
+
+    m = &MsgQ[Qhead++];
+    if (byzSplit && m->to == 0) continue;
+    if (m->round >= maxRounds || m->origin >= n || m->from >= n) continue;
+    bracha87Fig4Input(peers[m->to].fig4, peers[m->to].fig1,
+                      m->to, m->round, m->origin,
+                      m->type, m->from, m->value,
+                      dacts, BRACHA87_FIG4_MAX_ACTS);
+    /* Replay-induced acts are duplicates that dedup at Fig1Input;
+     * the caller already received them via the main loop.  Discarded
+     * here. */
   }
 
   /*----------------------------------------------------------------------*/
@@ -669,7 +670,7 @@ cleanup:
 
 usage:
   fprintf(stderr,
-    "usage: example_bracha87 [-v] [-s seed] [-b split] n t [init_values...]\n"
+    "usage: example_bracha87Fig4 [-v] [-s seed] [-b split] n t [init_values...]\n"
     "  n          total peers (1-%d)\n"
     "  t          max Byzantine faults\n"
     "  init_values  per-peer initial values (0 or 1), defaults to all 0\n"

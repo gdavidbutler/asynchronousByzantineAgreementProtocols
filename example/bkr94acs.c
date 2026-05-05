@@ -461,6 +461,67 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
+  /*  Pump tick                                                           */
+  /*                                                                      */
+  /*  In a real deployment, the BPR pump is called once per tick.         */
+  /*  Looping until idle would flood the network — see bracha87.h's       */
+  /*  flood warning.  The call is shown here as a representative tick.    */
+  /*----------------------------------------------------------------------*/
+
+  for (i = 0; i < n; ++i) {
+    struct bracha87Pump pump;
+    struct bkr94acsAct pacts[BKR94ACS_PUMP_MAX_ACTS];
+    unsigned int n_pacts;
+    unsigned int k;
+    unsigned int p;
+
+    bracha87PumpInit(&pump);
+    n_pacts = bkr94acsPump(peers[i], &pump, pacts);
+    for (k = 0; k < n_pacts; ++k) {
+      switch (pacts[k].act) {
+      case BKR94ACS_ACT_PROP_SEND:
+        if (!pacts[k].value) break;
+        for (p = 0; p < n; ++p)
+          qPush(BKR94ACS_CLS_PROPOSAL, pacts[k].origin, 0, 0,
+                pacts[k].type, (unsigned char)i, (unsigned char)p,
+                pacts[k].value, vLen);
+        break;
+      case BKR94ACS_ACT_CON_SEND:
+        for (p = 0; p < n; ++p)
+          qPush(BKR94ACS_CLS_CONSENSUS, pacts[k].origin, pacts[k].round,
+                pacts[k].broadcaster, pacts[k].type,
+                (unsigned char)i, (unsigned char)p,
+                &pacts[k].conValue, 1);
+        break;
+      default:
+        /* BA_DECIDED / COMPLETE / BA_EXHAUSTED don't appear in pump
+         * output (no replay component); ignore. */
+        break;
+      }
+    }
+  }
+
+  /*----------------------------------------------------------------------*/
+  /*  Drain the post-pump replay queue.  Receivers dedup at Fig1Input,    */
+  /*  so under perfect delivery these replays produce no new state.       */
+  /*----------------------------------------------------------------------*/
+
+  while (Qhead < Qtail) {
+    struct msg *m;
+    struct bkr94acsAct dacts[BKR94ACS_MAX_ACTS(MAX_PEERS, MAX_PHASES)];
+
+    m = &MsgQ[Qhead++];
+    if (m->cls == BKR94ACS_CLS_PROPOSAL)
+      bkr94acsProposalInput(peers[m->to], m->origin, m->type, m->from,
+                            m->value, dacts);
+    else
+      bkr94acsConsensusInput(peers[m->to], m->origin, m->round,
+                             m->broadcaster, m->type,
+                             m->from, m->value[0], dacts);
+    /* Replay-induced acts are duplicates; discarded. */
+  }
+
+  /*----------------------------------------------------------------------*/
   /*  Output: each peer's agreed common subset in sorted order            */
   /*----------------------------------------------------------------------*/
 

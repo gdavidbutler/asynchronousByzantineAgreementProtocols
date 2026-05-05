@@ -3960,6 +3960,672 @@ testFig1EvenNplusT(
 
 
 /*************************************************************************/
+/*  High-level entry-point tests                                         */
+/*                                                                       */
+/*  Cover bracha87PumpInit, bracha87Fig1PumpStep,                        */
+/*  bracha87Fig1CommittedCount, bracha87Fig3Origin / Input / Pump /      */
+/*  CommittedFig1Count, bracha87Fig4Start / Input / Pump /               */
+/*  CommittedFig1Count.  The low-level state machines beneath these      */
+/*  entries are exhaustively covered by the existing tests; these        */
+/*  cases pin the wrapper behaviour: act tagging, cursor walk over a     */
+/*  caller-supplied array, ROUND_COMPLETE / DECIDE surfacing, and        */
+/*  end-to-end consensus via the high-level path only.                   */
+/*************************************************************************/
+
+static void
+testFig1HighLevelPump(
+  void
+){
+  struct bracha87Pump pump;
+  struct bracha87Fig1 *inst[5];
+  struct bracha87Fig1 *array[5];
+  struct bracha87Fig1Act out[BRACHA87_FIG1_PUMP_MAX_ACTS];
+  unsigned long sz;
+  unsigned int n;
+  unsigned int i;
+  unsigned int seenOrigin;
+  unsigned int seenEchoed;
+  unsigned int sweep;
+  unsigned char val[VLEN];
+  unsigned char tmpOut[3];
+
+  printf("\n  Fig1 high-level Pump tests:\n");
+
+  memcpy(val, "PUMP", VLEN);
+  sz = bracha87Fig1Sz(3, VLEN - 1);
+
+  /*
+   * PumpInit defensiveness: NULL is a no-op; a real cursor is zeroed.
+   */
+  bracha87PumpInit(0);
+  bracha87PumpInit(&pump);
+  check("Fig1Pump: init pos=0", pump.pos == 0);
+  check("Fig1Pump: init sweepActs=0", pump.sweepActs == 0);
+
+  /*
+   * Defensive: NULL array, count=0, NULL out, undersized outCap all
+   * return 0 actions without crashing.
+   */
+  for (i = 0; i < 5; ++i)
+    array[i] = 0;
+  n = bracha87Fig1PumpStep(0, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
+  check("Fig1Pump: NULL instances -> 0", n == 0);
+  n = bracha87Fig1PumpStep(array, 0, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
+  check("Fig1Pump: count=0 -> 0", n == 0);
+  n = bracha87Fig1PumpStep(array, 5, 0, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
+  check("Fig1Pump: NULL pump -> 0", n == 0);
+  n = bracha87Fig1PumpStep(array, 5, &pump, 0, BRACHA87_FIG1_PUMP_MAX_ACTS);
+  check("Fig1Pump: NULL out -> 0", n == 0);
+  n = bracha87Fig1PumpStep(array, 5, &pump, out, 1);
+  check("Fig1Pump: undersized outCap -> 0", n == 0);
+
+  check("Fig1Pump: NULL array CommittedCount=0",
+        bracha87Fig1CommittedCount(0, 5) == 0);
+
+  /*
+   * Allocate 5 fresh instances; nothing committed.  Full sweep emits
+   * 0 — pre-broadcast / fully-shutdown signal, NOT a per-tick exit
+   * marker.
+   */
+  for (i = 0; i < 5; ++i) {
+    inst[i] = (struct bracha87Fig1 *)calloc(1, sz);
+    bracha87Fig1Init(inst[i], 3, 1, VLEN - 1);
+    array[i] = inst[i];
+  }
+  check("Fig1Pump: fresh array CommittedCount=0",
+        bracha87Fig1CommittedCount(array, 5) == 0);
+  bracha87PumpInit(&pump);
+  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
+  check("Fig1Pump: idle sweep returns 0", n == 0);
+
+  /*
+   * Mark inst[2] as origin: one committed instance.  Pump finds it,
+   * tags idx=2, action INITIAL_ALL, value pointer matches.
+   */
+  bracha87Fig1Origin(inst[2], val);
+  check("Fig1Pump: 1 committed",
+        bracha87Fig1CommittedCount(array, 5) == 1);
+
+  bracha87PumpInit(&pump);
+  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
+  check("Fig1Pump: origin -> 1 act", n == 1);
+  check("Fig1Pump: act INITIAL_ALL",
+        n >= 1 && out[0].act == BRACHA87_INITIAL_ALL);
+  check("Fig1Pump: idx=2",
+        n >= 1 && out[0].idx == 2);
+  check("Fig1Pump: value pointer set + matches",
+        n >= 1 && out[0].value
+         && memcmp(out[0].value, val, VLEN) == 0);
+
+  /*
+   * Repeat call wraps and re-finds inst[2].  Cursor is monotone within
+   * a sweep; a fresh sweep starts when pos exhausts count.
+   */
+  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
+  check("Fig1Pump: wrap revisits inst[2]",
+        n == 1 && out[0].idx == 2);
+
+  /*
+   * Drive inst[1] through Rule 1 (INITIAL -> ECHOED).  CommittedCount
+   * climbs to 2; a fresh-cursor sweep visits inst[1] before inst[2]
+   * (pos walks forward in array order).
+   */
+  bracha87Fig1Input(inst[1], BRACHA87_INITIAL, 0, val, tmpOut);
+  check("Fig1Pump: 2 committed",
+        bracha87Fig1CommittedCount(array, 5) == 2);
+
+  bracha87PumpInit(&pump);
+  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
+  check("Fig1Pump: visits inst[1] first (ECHOED)",
+        n == 1 && out[0].idx == 1
+         && out[0].act == BRACHA87_ECHO_ALL);
+  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
+  check("Fig1Pump: visits inst[2] next (ORIGIN)",
+        n == 1 && out[0].idx == 2
+         && out[0].act == BRACHA87_INITIAL_ALL);
+
+  /*
+   * Sparse array: a NULL slot is silently skipped.  Replace inst[3]
+   * with NULL; sweep still finds the 2 committed instances, still 2
+   * by CommittedCount (NULL not counted).
+   */
+  array[3] = 0;
+  check("Fig1Pump sparse: CommittedCount unchanged",
+        bracha87Fig1CommittedCount(array, 5) == 2);
+  bracha87PumpInit(&pump);
+  seenOrigin = 0;
+  seenEchoed = 0;
+  for (sweep = 0; sweep < 5; ++sweep) {
+    n = bracha87Fig1PumpStep(array, 5, &pump, out,
+                             BRACHA87_FIG1_PUMP_MAX_ACTS);
+    if (!n)
+      break;
+    if (out[0].idx == 1)
+      ++seenEchoed;
+    else if (out[0].idx == 2)
+      ++seenOrigin;
+  }
+  check("Fig1Pump sparse: visits inst[1] (ECHOED)", seenEchoed >= 1);
+  check("Fig1Pump sparse: visits inst[2] (ORIGIN)", seenOrigin >= 1);
+  array[3] = inst[3];
+
+  /*
+   * Drive inst[0] to RDSENT (Rule 5 via 2 readys after Rule 1):
+   * sweep visits inst[0] first, returns 2 actions (ECHO_ALL, READY_ALL)
+   * in a single PumpStep call.  Confirms outCap >= 3 paths through
+   * fan-out logic.
+   */
+  bracha87Fig1Input(inst[0], BRACHA87_INITIAL, 0, val, tmpOut);
+  bracha87Fig1Input(inst[0], BRACHA87_READY, 1, val, tmpOut);
+  bracha87Fig1Input(inst[0], BRACHA87_READY, 2, val, tmpOut);
+  check("Fig1Pump rdSent setup: RDSENT",
+        (inst[0]->flags & BRACHA87_F1_RDSENT));
+
+  bracha87PumpInit(&pump);
+  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
+  check("Fig1Pump rdSent: 2 acts at inst[0]",
+        n == 2 && out[0].idx == 0 && out[1].idx == 0);
+  check("Fig1Pump rdSent: ECHO_ALL first",
+        n >= 1 && out[0].act == BRACHA87_ECHO_ALL);
+  check("Fig1Pump rdSent: READY_ALL second",
+        n >= 2 && out[1].act == BRACHA87_READY_ALL);
+  check("Fig1Pump rdSent: shared value pointer",
+        n >= 2 && out[0].value == out[1].value);
+
+  for (i = 0; i < 5; ++i)
+    free(inst[i]);
+  printf("    idle / origin / cascade / sparse / rdSent: ok\n");
+}
+
+/*
+ * Fig 3 high-level entry-point coverage.  Drives a single Fig 1
+ * instance at (round=0, origin=0) through the full ladder via
+ * bracha87Fig3Input, exercising Rule 1 / Rule 5 / accept paths and
+ * verifying tagged Acts.  The Fig 3 cascade and ROUND_COMPLETE
+ * surfacing are exercised by feeding n-t accepts at round 0 and
+ * watching nextRound advance.
+ */
+static void
+testFig3HighLevel(
+  void
+){
+  unsigned char encodedN;
+  unsigned char actualN;
+  unsigned char t;
+  unsigned char maxRounds;
+  unsigned long f1sz;
+  unsigned long f3sz;
+  struct bracha87Fig3 *f3;
+  struct bracha87Fig1 *array[12];  /* maxRounds * actualN = 3 * 4 */
+  struct bracha87Fig3Act out[BRACHA87_FIG3_MAX_ACTS];
+  struct bracha87Pump pump;
+  unsigned int n;
+  unsigned int i;
+  unsigned int j;
+  unsigned char v;
+  unsigned int rcInitial;
+  unsigned int rcEcho;
+  unsigned int rcReady;
+
+  printf("\n  Fig3 high-level entry points:\n");
+
+  encodedN = 3;       /* actualN = 4 */
+  actualN  = 4;
+  t        = 1;
+  maxRounds = 3;
+  f1sz = bracha87Fig1Sz(encodedN, 0);
+  f3sz = bracha87Fig3Sz(encodedN, maxRounds);
+
+  f3 = (struct bracha87Fig3 *)calloc(1, f3sz);
+  bracha87Fig3Init(f3, encodedN, t, maxRounds, testNfn, 0);
+  for (i = 0; i < (unsigned int)maxRounds * actualN; ++i) {
+    array[i] = (struct bracha87Fig1 *)calloc(1, f1sz);
+    bracha87Fig1Init(array[i], encodedN, t, 0);
+  }
+
+  /*
+   * Defensive: NULL / out-of-range / outCap arguments return 0 acts
+   * and do not mutate state.
+   */
+  v = 0;
+  n = bracha87Fig3Origin(0, array, 0, 0, &v, out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Origin: NULL f3 -> 0", n == 0);
+  n = bracha87Fig3Origin(f3, 0, 0, 0, &v, out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Origin: NULL array -> 0", n == 0);
+  n = bracha87Fig3Origin(f3, array, 0, 0, 0, out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Origin: NULL value -> 0", n == 0);
+  n = bracha87Fig3Origin(f3, array, 0, 0, &v, 0, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Origin: NULL out -> 0", n == 0);
+  n = bracha87Fig3Origin(f3, array, 0, 0, &v, out, 0);
+  check("Fig3Origin: outCap=0 -> 0", n == 0);
+  n = bracha87Fig3Origin(f3, array, maxRounds, 0, &v, out,
+                         BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Origin: round out of range -> 0", n == 0);
+  n = bracha87Fig3Origin(f3, array, 0, (unsigned char)(actualN), &v,
+                         out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Origin: origin > encoded n -> 0", n == 0);
+  check("Fig3Origin defensive: array[0] still pristine",
+        !(array[0]->flags & BRACHA87_F1_ORIGIN));
+
+  /*
+   * Real Origin(round=0, origin=0, value=0): emits 1 INITIAL_ALL act
+   * tagged with (origin=0, round=0, type=INITIAL); marks
+   * array[0]->flags ORIGIN; value pointer is non-null and reads 0.
+   */
+  v = 0;
+  n = bracha87Fig3Origin(f3, array, 0, 0, &v, out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Origin: 1 act", n == 1);
+  check("Fig3Origin: act INITIAL_ALL",
+        n >= 1 && out[0].act == BRACHA87_INITIAL_ALL);
+  check("Fig3Origin: round=0", n >= 1 && out[0].round == 0);
+  check("Fig3Origin: origin=0", n >= 1 && out[0].origin == 0);
+  check("Fig3Origin: type=INITIAL",
+        n >= 1 && out[0].type == BRACHA87_INITIAL);
+  check("Fig3Origin: value pointer set",
+        n >= 1 && out[0].value && out[0].value[0] == 0);
+  check("Fig3Origin: ORIGIN flag set on array[0]",
+        (array[0]->flags & BRACHA87_F1_ORIGIN));
+
+  /*
+   * Fig3Input on a fresh slot: defensive guards.  NULL value, NULL
+   * out, undersized outCap, out-of-range identifiers all return 0.
+   */
+  n = bracha87Fig3Input(0, array, 0, 0, BRACHA87_INITIAL, 0, &v, out,
+                        BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Input: NULL f3 -> 0", n == 0);
+  n = bracha87Fig3Input(f3, array, 0, 0, BRACHA87_INITIAL, 0, &v, out, 1);
+  check("Fig3Input: undersized outCap -> 0", n == 0);
+  n = bracha87Fig3Input(f3, array, maxRounds, 0, BRACHA87_INITIAL, 0,
+                        &v, out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Input: round out of range -> 0", n == 0);
+
+  /*
+   * Drive (round=0, origin=0) through the Fig 1 ladder via Input.
+   * Per-receipt action counts:
+   *   INITIAL from origin (loopback): Rule 1 fires -> ECHO_ALL (1 act)
+   *   1st READY: 0 acts (rdCnt=1 < t+1=2)
+   *   2nd READY: Rule 5 fires -> READY_ALL (1 act)
+   *   3rd READY: Rule 6 fires -> ACCEPT (no broadcast, fed to Fig 3)
+   *
+   * Each act surfaces with type derived from act, value pointer
+   * borrowed from the Fig 1 instance's committed slot.
+   */
+  v = 0;
+  rcInitial = bracha87Fig3Input(f3, array, 0, 0, BRACHA87_INITIAL, 0,
+                                &v, out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Input: INITIAL -> 1 act", rcInitial == 1);
+  check("Fig3Input: act ECHO_ALL",
+        rcInitial >= 1 && out[0].act == BRACHA87_ECHO_ALL);
+  check("Fig3Input: type ECHO",
+        rcInitial >= 1 && out[0].type == BRACHA87_ECHO);
+  check("Fig3Input: tagged origin=0",
+        rcInitial >= 1 && out[0].origin == 0);
+  check("Fig3Input: tagged round=0",
+        rcInitial >= 1 && out[0].round == 0);
+  check("Fig3Input: value pointer borrowed",
+        rcInitial >= 1 && out[0].value && out[0].value[0] == 0);
+
+  rcReady = bracha87Fig3Input(f3, array, 0, 0, BRACHA87_READY, 1, &v,
+                              out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Input: 1st READY -> 0 acts", rcReady == 0);
+
+  rcReady = bracha87Fig3Input(f3, array, 0, 0, BRACHA87_READY, 2, &v,
+                              out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Input: 2nd READY -> 1 act (Rule 5)", rcReady == 1);
+  check("Fig3Input: act READY_ALL",
+        rcReady >= 1 && out[0].act == BRACHA87_READY_ALL);
+  check("Fig3Input: type READY",
+        rcReady >= 1 && out[0].type == BRACHA87_READY);
+
+  rcReady = bracha87Fig3Input(f3, array, 0, 0, BRACHA87_READY, 3, &v,
+                              out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Input: 3rd READY -> ACCEPT, 0 surfaced acts",
+        rcReady == 0);
+  check("Fig3Input: ACCEPTED set",
+        (array[0]->flags & BRACHA87_F1_ACCEPTED));
+
+  /*
+   * One accept fed: Fig 3 has 1 validated message at round 0; n-t=3,
+   * so no ROUND_COMPLETE yet.  bracha87Fig3CommittedFig1Count counts
+   * only the one committed slot.
+   */
+  check("Fig3CommittedFig1Count: 1",
+        bracha87Fig3CommittedFig1Count(f3, array) == 1);
+  check("Fig3CommittedFig1Count: NULL guard",
+        bracha87Fig3CommittedFig1Count(f3, 0) == 0);
+
+  /*
+   * Drive enough other-origin slots through accept on round 0 to
+   * reach n-t=3 validated messages -> ROUND_COMPLETE surfaces via
+   * Fig3Input (the call that pushes Fig 3 into completion).
+   *
+   * For each remaining origin oo in {1,2,3}: feed INITIAL+3 READYs
+   * to the (round=0, origin=oo) Fig 1 instance.  After the third
+   * accept, Fig 3 has 3 validated round-0 messages.  testNfn returns
+   * majority -> 0 (all values 0).  ROUND_COMPLETE for round 0 is
+   * surfaced as one Fig 3 act.
+   */
+  {
+    unsigned int sawComplete;
+    unsigned int k;
+
+    sawComplete = 0;
+    for (j = 1; j < actualN; ++j) {
+      bracha87Fig3Input(f3, array, 0, (unsigned char)j,
+                        BRACHA87_INITIAL, (unsigned char)j, &v, out,
+                        BRACHA87_FIG3_MAX_ACTS);
+      bracha87Fig3Input(f3, array, 0, (unsigned char)j,
+                        BRACHA87_READY, 0, &v, out,
+                        BRACHA87_FIG3_MAX_ACTS);
+      bracha87Fig3Input(f3, array, 0, (unsigned char)j,
+                        BRACHA87_READY, 1, &v, out,
+                        BRACHA87_FIG3_MAX_ACTS);
+      /*
+       * Third READY drives ACCEPT.  The ACCEPT on origin j feeds
+       * Fig 3.  After the n-t'th distinct origin accepts at round 0,
+       * Fig3Input emits a ROUND_COMPLETE for round 0.  At n=4 t=1
+       * with origin 0 already accepted, the n-t=3rd accept occurs at
+       * j=2 — that's where we expect the surface.
+       */
+      n = bracha87Fig3Input(f3, array, 0, (unsigned char)j,
+                            BRACHA87_READY, 2, &v, out,
+                            BRACHA87_FIG3_MAX_ACTS);
+      for (k = 0; k < n; ++k)
+        if (out[k].act == BRACHA87_FIG3_ROUND_COMPLETE
+         && out[k].round == 0)
+          sawComplete = 1;
+    }
+    check("Fig3Input: ROUND_COMPLETE surfaces at n-t accepts",
+          sawComplete);
+  }
+
+  /*
+   * Fig3Pump tags BPR replays with (origin, round) derived from the
+   * caller's array layout.  After all 4 origins ACCEPTed, every
+   * (round=0, origin=*) slot replays INITIAL?+ECHO+READY.  Origin=0
+   * has ORIGIN+ECHOED+RDSENT, so 3 acts; origins 1..3 have
+   * ECHOED+RDSENT (no ORIGIN), so 2 acts.
+   */
+  bracha87PumpInit(&pump);
+  n = bracha87Fig3Pump(f3, array, &pump, out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Pump: origin=0 returns 3 acts",
+        n == 3 && out[0].origin == 0 && out[0].round == 0);
+  check("Fig3Pump: origin=0 INITIAL_ALL first",
+        n >= 1 && out[0].act == BRACHA87_INITIAL_ALL);
+  check("Fig3Pump: origin=0 ECHO_ALL second",
+        n >= 2 && out[1].act == BRACHA87_ECHO_ALL);
+  check("Fig3Pump: origin=0 READY_ALL third",
+        n >= 3 && out[2].act == BRACHA87_READY_ALL);
+  check("Fig3Pump: type matches act",
+        n >= 3
+         && out[0].type == BRACHA87_INITIAL
+         && out[1].type == BRACHA87_ECHO
+         && out[2].type == BRACHA87_READY);
+
+  n = bracha87Fig3Pump(f3, array, &pump, out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Pump: origin=1 returns 2 acts (no ORIGIN)",
+        n == 2 && out[0].origin == 1 && out[0].round == 0);
+  check("Fig3Pump: origin=1 ECHO_ALL first",
+        n >= 1 && out[0].act == BRACHA87_ECHO_ALL);
+  check("Fig3Pump: origin=1 READY_ALL second",
+        n >= 2 && out[1].act == BRACHA87_READY_ALL);
+
+  /*
+   * Defensive: NULL guards on Pump.
+   */
+  n = bracha87Fig3Pump(0, array, &pump, out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Pump: NULL f3 -> 0", n == 0);
+  n = bracha87Fig3Pump(f3, 0, &pump, out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Pump: NULL array -> 0", n == 0);
+  n = bracha87Fig3Pump(f3, array, 0, out, BRACHA87_FIG3_MAX_ACTS);
+  check("Fig3Pump: NULL pump -> 0", n == 0);
+  n = bracha87Fig3Pump(f3, array, &pump, out, 1);
+  check("Fig3Pump: undersized outCap -> 0", n == 0);
+
+  free(f3);
+  for (i = 0; i < (unsigned int)maxRounds * actualN; ++i)
+    free(array[i]);
+
+  /* Suppress unused-warning on rcEcho (kept symmetric for review). */
+  (void)rcEcho;
+
+  printf("    Origin / Input ladder / ROUND_COMPLETE / Pump tags: ok\n");
+}
+
+/*
+ * End-to-end Fig 4 consensus driven exclusively through the high-level
+ * API.  Mirrors the simComposed shape but the message-handling loop
+ * goes through bracha87Fig4Start + bracha87Fig4Input only — Fig 1
+ * Input, Fig 3 Accept, Fig 4 Round, and next-round origination are
+ * never called by the test.  All-honest n=4 t=1 with all initial
+ * values 0; every peer must emit DECIDE with value 0.
+ *
+ * Also exercises bracha87Fig4Pump (post-decision sweep returns
+ * replays) and bracha87Fig4CommittedFig1Count.
+ */
+static void
+testFig4HighLevel(
+  void
+){
+  unsigned char encodedN;
+  unsigned char actualN;
+  unsigned char t;
+  unsigned char maxPhases;
+  unsigned int maxRounds;
+  unsigned long f1sz;
+  unsigned long f4sz;
+  struct {
+    struct bracha87Fig1 **fig1;
+    struct bracha87Fig4 *fig4;
+  } peers[4];
+  unsigned char decisions[4];
+  unsigned int decided;
+  unsigned int i;
+  unsigned int j;
+  unsigned int origCommitted;
+  unsigned int pumpHits;
+  struct bracha87Fig4Act sact;
+  unsigned int ns;
+
+  printf("\n  Fig4 high-level end-to-end consensus:\n");
+
+  CoinVal = 0;
+  encodedN = 3;
+  actualN  = 4;
+  t        = 1;
+  maxPhases = 5;
+  maxRounds = (unsigned int)maxPhases * 3u;
+  f1sz = bracha87Fig1Sz(encodedN, 0);
+  f4sz = bracha87Fig4Sz(encodedN, maxPhases);
+
+  /* Allocate per-peer state */
+  for (i = 0; i < actualN; ++i) {
+    peers[i].fig1 = (struct bracha87Fig1 **)calloc(
+      maxRounds * actualN, sizeof (struct bracha87Fig1 *));
+    peers[i].fig4 = (struct bracha87Fig4 *)calloc(1, f4sz);
+    for (j = 0; j < maxRounds * actualN; ++j) {
+      peers[i].fig1[j] = (struct bracha87Fig1 *)calloc(1, f1sz);
+      bracha87Fig1Init(peers[i].fig1[j], encodedN, t, 0);
+    }
+    bracha87Fig4Init(peers[i].fig4, encodedN, t, maxPhases, 0,
+                     testCoin, 0);
+    decisions[i] = 0xFF;
+  }
+
+  /*
+   * Defensive guards on Start / Input.
+   */
+  ns = bracha87Fig4Start(0, peers[0].fig1, 0, &sact, 1);
+  check("Fig4Start: NULL f4 -> 0", ns == 0);
+  ns = bracha87Fig4Start(peers[0].fig4, 0, 0, &sact, 1);
+  check("Fig4Start: NULL fig1Array -> 0", ns == 0);
+  ns = bracha87Fig4Start(peers[0].fig4, peers[0].fig1, 0, 0, 1);
+  check("Fig4Start: NULL out -> 0", ns == 0);
+  ns = bracha87Fig4Start(peers[0].fig4, peers[0].fig1, 0, &sact, 0);
+  check("Fig4Start: outCap=0 -> 0", ns == 0);
+  ns = bracha87Fig4Start(peers[0].fig4, peers[0].fig1, actualN, &sact, 1);
+  check("Fig4Start: self > encoded n -> 0", ns == 0);
+
+  /*
+   * Bootstrap: each peer self-initiates round 0 via Fig4Start.
+   * Verify the act tagging on the first peer in detail.
+   */
+  bqInit();
+  for (i = 0; i < actualN; ++i) {
+    ns = bracha87Fig4Start(peers[i].fig4, peers[i].fig1,
+                           (unsigned char)i, &sact, 1);
+    check("Fig4Start: 1 act", ns == 1);
+    check("Fig4Start: INITIAL_ALL", sact.act == BRACHA87_INITIAL_ALL);
+    check("Fig4Start: round=0", sact.round == 0);
+    check("Fig4Start: origin=self", sact.origin == (unsigned char)i);
+    check("Fig4Start: type INITIAL", sact.type == BRACHA87_INITIAL);
+    check("Fig4Start: value=0 (initialValue)",
+          (sact.value & 1) == 0);
+    check("Fig4Start: ORIGIN flag set on (round=0, self) slot",
+          (peers[i].fig1[0 * actualN + i]->flags & BRACHA87_F1_ORIGIN));
+
+    for (j = 0; j < actualN; ++j)
+      bqPush(sact.round, sact.type, (unsigned char)i,
+             (unsigned char)j, sact.origin, sact.value);
+  }
+
+  /*
+   * Drain queue.  bracha87Fig4Input drives the entire cascade
+   * (Fig 1 -> Fig 3 -> Fig 4 -> next-round origination); the test
+   * only broadcasts emitted *_ALL acts and records DECIDE.
+   */
+  while (BQhead < BQtail) {
+    struct bMsgQ *m;
+    struct bracha87Fig4Act acts[BRACHA87_FIG4_MAX_ACTS];
+    unsigned int nacts;
+    unsigned int k;
+
+    m = &BMsgQ[BQhead++];
+    if (m->round >= maxRounds || m->origin >= actualN
+     || m->from >= actualN || m->to >= actualN)
+      continue;
+
+    nacts = bracha87Fig4Input(peers[m->to].fig4, peers[m->to].fig1,
+                              m->to, m->round, m->origin, m->type,
+                              m->from, m->value, acts,
+                              BRACHA87_FIG4_MAX_ACTS);
+
+    for (k = 0; k < nacts; ++k) {
+      switch (acts[k].act) {
+      case BRACHA87_INITIAL_ALL:
+      case BRACHA87_ECHO_ALL:
+      case BRACHA87_READY_ALL:
+        for (j = 0; j < actualN; ++j)
+          bqPush(acts[k].round, acts[k].type, m->to,
+                 (unsigned char)j, acts[k].origin, acts[k].value);
+        break;
+      case BRACHA87_FIG4_DECIDE:
+        check("Fig4HL: DECIDE origin=self",
+              acts[k].origin == m->to);
+        decisions[m->to] = acts[k].decision;
+        break;
+      case BRACHA87_FIG4_EXHAUSTED:
+        check("Fig4HL: no EXHAUSTED in honest run", 0);
+        break;
+      }
+    }
+  }
+
+  /*
+   * All honest peers must decide 0 (all-zero initial values, n=4
+   * t=1 -> step-1 majority is 0, terminates in phase 0).
+   */
+  decided = 0;
+  for (i = 0; i < actualN; ++i)
+    if (decisions[i] == 0)
+      ++decided;
+    else if (decisions[i] != 0xFF)
+      check("Fig4HL: decision != 0", 0);
+  check("Fig4HL: all 4 peers decided 0", decided == actualN);
+
+  /*
+   * CommittedFig1Count: post-consensus there is at least one
+   * committed Fig 1 instance per (origin x reached-round) pair.  The
+   * exact count depends on how many rounds completed before DECIDE;
+   * the load-bearing assertion is "non-zero" — the array is not
+   * empty.  Defensive NULL guards return 0.
+   */
+  for (i = 0; i < actualN; ++i) {
+    origCommitted = bracha87Fig4CommittedFig1Count(peers[i].fig4,
+                                                   peers[i].fig1);
+    check("Fig4HL: CommittedFig1Count > 0", origCommitted > 0);
+  }
+  check("Fig4HL: CommittedFig1Count NULL f4 -> 0",
+        bracha87Fig4CommittedFig1Count(0, peers[0].fig1) == 0);
+  check("Fig4HL: CommittedFig1Count NULL array -> 0",
+        bracha87Fig4CommittedFig1Count(peers[0].fig4, 0) == 0);
+
+  /*
+   * Fig4Pump: walks the same Fig 1 array.  At least one PumpStep call
+   * must return >0 (committed instances exist post-consensus).  Tagged
+   * round/origin must fall within the array's range.
+   */
+  for (i = 0; i < actualN; ++i) {
+    struct bracha87Pump pump;
+    struct bracha87Fig4Act pacts[BRACHA87_FIG4_MAX_ACTS];
+    unsigned int npacts;
+    unsigned int sweep;
+
+    bracha87PumpInit(&pump);
+    pumpHits = 0;
+    /* Bound by CommittedFig1Count + 1 sweeps to avoid infinite loops
+     * if some invariant breaks; healthy operation needs 1 call. */
+    for (sweep = 0; sweep
+                  < bracha87Fig4CommittedFig1Count(peers[i].fig4,
+                                                   peers[i].fig1) + 1u;
+         ++sweep) {
+      npacts = bracha87Fig4Pump(peers[i].fig4, peers[i].fig1,
+                                &pump, pacts, BRACHA87_FIG4_MAX_ACTS);
+      if (!npacts)
+        break;
+      ++pumpHits;
+      check("Fig4Pump: round in range",
+            pacts[0].round < (unsigned char)maxRounds);
+      check("Fig4Pump: origin < actualN",
+            pacts[0].origin < actualN);
+    }
+    check("Fig4Pump: at least 1 hit per peer", pumpHits >= 1);
+  }
+
+  /* Defensive Pump guards */
+  {
+    struct bracha87Pump pump;
+    struct bracha87Fig4Act pacts[BRACHA87_FIG4_MAX_ACTS];
+    unsigned int npacts;
+
+    bracha87PumpInit(&pump);
+    npacts = bracha87Fig4Pump(0, peers[0].fig1, &pump, pacts,
+                              BRACHA87_FIG4_MAX_ACTS);
+    check("Fig4Pump: NULL f4 -> 0", npacts == 0);
+    npacts = bracha87Fig4Pump(peers[0].fig4, 0, &pump, pacts,
+                              BRACHA87_FIG4_MAX_ACTS);
+    check("Fig4Pump: NULL array -> 0", npacts == 0);
+    npacts = bracha87Fig4Pump(peers[0].fig4, peers[0].fig1, 0, pacts,
+                              BRACHA87_FIG4_MAX_ACTS);
+    check("Fig4Pump: NULL pump -> 0", npacts == 0);
+    npacts = bracha87Fig4Pump(peers[0].fig4, peers[0].fig1, &pump,
+                              pacts, 1);
+    check("Fig4Pump: undersized outCap -> 0", npacts == 0);
+  }
+
+  /* Cleanup */
+  for (i = 0; i < actualN; ++i) {
+    for (j = 0; j < maxRounds * actualN; ++j)
+      free(peers[i].fig1[j]);
+    free(peers[i].fig1);
+    free(peers[i].fig4);
+  }
+
+  printf("    Start / Input cascade / DECIDE / Pump / Committed: ok\n");
+}
+
+
+/*************************************************************************/
 /*  Main — sequential test cases                                         */
 /*************************************************************************/
 
@@ -4244,6 +4910,15 @@ main(
   testPostDecideMultiPhase();
   testFig1ValueSwitch();
   testFig1Bpr();
+
+  /*
+   * High-level entry-point coverage: bracha87PumpInit, Fig 1 array
+   * pump, Fig 3 Origin/Input/Pump/CommittedFig1Count, Fig 4
+   * Start/Input/Pump/CommittedFig1Count.
+   */
+  testFig1HighLevelPump();
+  testFig3HighLevel();
+  testFig4HighLevel();
 
   printf("\n===================\n");
   if (Fail)

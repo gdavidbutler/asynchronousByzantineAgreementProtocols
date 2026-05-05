@@ -396,6 +396,15 @@ struct bracha87Fig3 {
   unsigned char n;
   unsigned char t;
   unsigned char maxRounds;
+  /*
+   * nextRound is used by the high-level bracha87Fig3Input entry
+   * point (and the Fig 4 layer) to track which rounds have been
+   * surfaced as ROUND_COMPLETE.  The low-level bracha87Fig3Accept
+   * entry point ignores it and the field is harmless to old
+   * callers — they simply never advance it.  Initialized to 0 by
+   * bracha87Fig3Init.
+   */
+  unsigned char nextRound;
   unsigned char data[1];   /* variable: see bracha87Fig3Sz */
 };
 
@@ -586,6 +595,302 @@ bracha87Fig4Round(
  ,unsigned int             /* n_msgs */
  ,const unsigned char *    /* senders */
  ,const unsigned char *    /* values */
+);
+
+/*************************************************************************/
+/*                                                                       */
+/*  High-level entry points: Input + Pump                                */
+/*                                                                       */
+/*  Mirrors the bkr94acs layer's ergonomics: one Input call per          */
+/*  inbound message, one Pump call per tick.  Each layer surfaces        */
+/*  rich Act structs tagged with the layer's natural identity            */
+/*  (origin, round, type, value).                                        */
+/*                                                                       */
+/*  These wrap the low-level entry points above (Fig1Input, Fig1Bpr,     */
+/*  Fig3Accept, Fig4Round) and live alongside them.  The low-level       */
+/*  entry points remain available for callers that need direct access    */
+/*  (e.g. test_predicates.c, which exercises the algorithmic predicates  */
+/*  beneath the dispatch).                                               */
+/*                                                                       */
+/*  All Pump entry points share one cursor type.  The cursor lives in    */
+/*  caller storage, allowing multiple parallel sweeps over the same      */
+/*  state (no library-internal cursor; no hidden mutation).              */
+/*                                                                       */
+/*  Each Pump call walks the cursor forward to the next committed Fig 1 */
+/*  instance and returns its replay actions (≤ 3).                       */
+/*                                                                       */
+/*  NETWORK FLOOD WARNING.  Pump is one-call-per-tick.  Do NOT loop.     */
+/*  BPR replays are persistent (committed flags live forever), so every  */
+/*  committed instance always has actions; a `while (Pump(...))` loop    */
+/*  empties the cursor space onto the wire as fast as the CPU runs,      */
+/*  burning through kernel UDP buffers and causing the very drops the    */
+/*  pump exists to recover from.  The application's tick rate is the     */
+/*  rate limit.  In healthy operation Pump returns >0 on every call.     */
+/*                                                                       */
+/*  The 0 return appears only when a full sweep across the whole array   */
+/*  found no committed instance — pre-broadcast / fully-shutdown state,  */
+/*  NOT a termination signal.                                            */
+/*                                                                       */
+/*  Termination is the application's responsibility, via the silence-    */
+/*  quorum + K-sweep gate from README.md "Termination policy."  Count    */
+/*  Pump calls across ticks; one sweep = bracha87Fig1CommittedCount      */
+/*  calls; K sweeps + silence-quorum from peers ⇒ exit.                  */
+/*                                                                       */
+/*************************************************************************/
+
+/*
+ * Shared pump cursor.  Initialize with bracha87PumpInit before first
+ * use of any Fig*Pump entry point that takes a *bracha87Pump.
+ */
+struct bracha87Pump {
+  unsigned int pos;        /* next index to visit */
+  unsigned int sweepActs;  /* actions emitted in current sweep */
+};
+
+void
+bracha87PumpInit(
+  struct bracha87Pump *
+);
+
+/*------------------------------------------------------------------*/
+/*  Fig 1 — array pump                                              */
+/*                                                                  */
+/*  For applications that own multiple Fig 1 instances of any       */
+/*  shape (single-broadcast streaming, multi-origin reliable        */
+/*  multicast, etc.).  The application supplies the array; the      */
+/*  pump walks it with internal cursor and returns one instance's   */
+/*  BPR actions per call.                                           */
+/*------------------------------------------------------------------*/
+
+#define BRACHA87_FIG1_PUMP_MAX_ACTS 3
+
+/*
+ * One BPR replay action for one Fig 1 instance.
+ *
+ *   act       BRACHA87_INITIAL_ALL / ECHO_ALL / READY_ALL
+ *   idx       index in the caller's instances array
+ *   value     borrowed pointer into the Fig 1 instance's
+ *             committed-value slot, vLen+1 bytes; valid until the
+ *             next call into that instance.  Caller copies if
+ *             persistence is required past that boundary.
+ */
+struct bracha87Fig1Act {
+  unsigned char act;
+  unsigned int  idx;
+  const unsigned char *value;
+};
+
+/*
+ * One Fig 1's replay actions per call.  Walks the cursor forward to
+ * the next committed instance and returns its actions.
+ *
+ * Call ONCE per application tick.  Do NOT loop — see the network
+ * flood warning at the top of this section.  In healthy operation
+ * this never returns 0; 0 means a full sweep found nothing committed.
+ *
+ * Null entries in instances[] are skipped (useful when the
+ * application's array is sparse — e.g. one slot per (origin, round)
+ * but only some pairs have been allocated).
+ */
+unsigned int
+bracha87Fig1PumpStep(
+  struct bracha87Fig1 *const *  /* instances */
+ ,unsigned int                  /* count */
+ ,struct bracha87Pump *
+ ,struct bracha87Fig1Act *      /* out */
+ ,unsigned int                  /* outCap, must be >= 3 */
+);
+
+/*
+ * Count of instances with any committed flag (ORIGIN, ECHOED, or
+ * RDSENT) — i.e., the number of instances the pump will visit per
+ * sweep.  Useful for sweep-cadence calibration in the caller's
+ * silence-quorum K-sweep gate.
+ */
+unsigned int
+bracha87Fig1CommittedCount(
+  struct bracha87Fig1 *const *  /* instances */
+ ,unsigned int                  /* count */
+);
+
+/*------------------------------------------------------------------*/
+/*  Fig 3 — Input + Pump                                            */
+/*                                                                  */
+/*  Drives Fig 1 + Fig 3 cascade in a single Input call.  Pump      */
+/*  walks the (caller-owned) Fig 1 array, returning actions tagged  */
+/*  with (origin, round) derived from the array layout convention   */
+/*  idx = round * (n+1) + origin.                                   */
+/*                                                                  */
+/*  Caller still owns the Fig 1 array.  Allocate                    */
+/*  maxRounds * (n+1) instances of size bracha87Fig1Sz(n, vLen),    */
+/*  each initialized with bracha87Fig1Init.  Indexing is            */
+/*  fig1Array[round * (n+1) + origin].                              */
+/*------------------------------------------------------------------*/
+
+#define BRACHA87_FIG3_MAX_ACTS 6  /* Fig1 ladder + cascade ROUND_COMPLETE bursts */
+
+/* Fig 3 Act values.  ECHO_ALL/READY_ALL/INITIAL_ALL share encoding
+ * with Fig 1 Act for round-trip clarity. */
+#define BRACHA87_FIG3_ROUND_COMPLETE 5
+
+struct bracha87Fig3Act {
+  unsigned char act;            /* one of BRACHA87_*_ALL or ROUND_COMPLETE */
+  unsigned char origin;         /* (origin, round): broadcast identity */
+  unsigned char round;
+  unsigned char type;           /* INITIAL/ECHO/READY for *_ALL acts; 0 for ROUND_COMPLETE */
+  const unsigned char *value;   /* borrowed; null on ROUND_COMPLETE */
+};
+
+/*
+ * Self-initiate a broadcast for (round, origin).  Marks the
+ * corresponding Fig 1 instance as the originator with the supplied
+ * value, and emits one INITIAL_ALL act for the caller to broadcast.
+ *
+ * Idempotent.  outCap must be >= 1.
+ */
+unsigned int
+bracha87Fig3Origin(
+  struct bracha87Fig3 *
+ ,struct bracha87Fig1 *const *  /* fig1Array */
+ ,unsigned char                 /* round */
+ ,unsigned char                 /* origin */
+ ,const unsigned char *         /* value, vLen+1 bytes */
+ ,struct bracha87Fig3Act *      /* out */
+ ,unsigned int                  /* outCap, >= 1 */
+);
+
+/*
+ * Process one inbound Fig 1 message.  Drives Fig 1 Input + Fig 3
+ * Accept (on ACCEPT) + cascade scan; returns broadcast actions and
+ * any newly-completed rounds as ROUND_COMPLETE acts.
+ *
+ * On ROUND_COMPLETE: caller reads the validated set via
+ * bracha87Fig3GetValid(round) and applies its N to derive next
+ * round's value (if any).
+ *
+ * outCap must be >= BRACHA87_FIG3_MAX_ACTS.
+ */
+unsigned int
+bracha87Fig3Input(
+  struct bracha87Fig3 *
+ ,struct bracha87Fig1 *const *  /* fig1Array */
+ ,unsigned char                 /* round */
+ ,unsigned char                 /* origin */
+ ,unsigned char                 /* type: INITIAL/ECHO/READY */
+ ,unsigned char                 /* from: sender */
+ ,const unsigned char *         /* value, vLen+1 bytes */
+ ,struct bracha87Fig3Act *      /* out */
+ ,unsigned int                  /* outCap, >= BRACHA87_FIG3_MAX_ACTS */
+);
+
+/*
+ * One Fig 1's replay actions per call, tagged with (origin, round).
+ * Same one-call-per-tick semantic as bracha87Fig1PumpStep — see the
+ * network flood warning at the top of this section.
+ */
+unsigned int
+bracha87Fig3Pump(
+  struct bracha87Fig3 *
+ ,struct bracha87Fig1 *const *  /* fig1Array */
+ ,struct bracha87Pump *
+ ,struct bracha87Fig3Act *      /* out */
+ ,unsigned int                  /* outCap, >= 3 */
+);
+
+/*
+ * Count of committed Fig 1 instances; same semantics as
+ * bracha87Fig1CommittedCount but scoped to fig1Array's
+ * maxRounds * (n+1) range.
+ */
+unsigned int
+bracha87Fig3CommittedFig1Count(
+  const struct bracha87Fig3 *
+ ,struct bracha87Fig1 *const *  /* fig1Array */
+);
+
+/*------------------------------------------------------------------*/
+/*  Fig 4 — Start + Input + Pump                                    */
+/*                                                                  */
+/*  Drives Fig 1 + Fig 3 + Fig 4 cascade in a single Input call.    */
+/*  Internally calls Fig4Round on round-completion and originates   */
+/*  the next-round Fig 1 broadcast from `self`.                     */
+/*                                                                  */
+/*  Fig 4 binary value is 1 byte (with optional D_FLAG bit).        */
+/*  Caller's Fig 1 array uses vLen = 0 (1-byte values).             */
+/*------------------------------------------------------------------*/
+
+#define BRACHA87_FIG4_MAX_ACTS 6
+
+#define BRACHA87_FIG4_DECIDE     5
+#define BRACHA87_FIG4_EXHAUSTED  6
+
+struct bracha87Fig4Act {
+  unsigned char act;            /* INITIAL_ALL/ECHO_ALL/READY_ALL/DECIDE/EXHAUSTED */
+  unsigned char origin;
+  unsigned char round;
+  unsigned char type;           /* INITIAL/ECHO/READY for *_ALL acts */
+  unsigned char value;          /* binary, optional D_FLAG; for *_ALL acts */
+  unsigned char decision;       /* on DECIDE */
+};
+
+/*
+ * Self-initiate the round-0 broadcast.  Marks
+ * fig1Array[0 * (n+1) + self] as origin with the Fig 4's
+ * initialValue (set at Fig4Init time), and emits one INITIAL_ALL act.
+ *
+ * Idempotent.  outCap must be >= 1.
+ */
+unsigned int
+bracha87Fig4Start(
+  struct bracha87Fig4 *
+ ,struct bracha87Fig1 *const *  /* fig1Array */
+ ,unsigned char                 /* self */
+ ,struct bracha87Fig4Act *      /* out */
+ ,unsigned int                  /* outCap, >= 1 */
+);
+
+/*
+ * Process one inbound message.  Drives Fig 1 Input → Fig 3 Accept
+ * (on ACCEPT) → cascade → Fig 4 Round (on round-complete) →
+ * next-round origination from `self`.  Returns broadcast actions,
+ * DECIDE on decision, EXHAUSTED on terminal failure.
+ *
+ * On DECIDE: out[i].decision carries the decided value.  Per Bracha
+ * Theorem 2 the decided peer continues participating, so subsequent
+ * Inputs / Pumps may emit further BROADCAST/READY/ECHO actions.
+ *
+ * outCap must be >= BRACHA87_FIG4_MAX_ACTS.
+ */
+unsigned int
+bracha87Fig4Input(
+  struct bracha87Fig4 *
+ ,struct bracha87Fig1 *const *  /* fig1Array */
+ ,unsigned char                 /* self */
+ ,unsigned char                 /* round */
+ ,unsigned char                 /* origin */
+ ,unsigned char                 /* type */
+ ,unsigned char                 /* from */
+ ,unsigned char                 /* value, 1 byte (with optional D_FLAG) */
+ ,struct bracha87Fig4Act *      /* out */
+ ,unsigned int                  /* outCap, >= BRACHA87_FIG4_MAX_ACTS */
+);
+
+/*
+ * Same one-call-per-tick semantic as bracha87Fig1PumpStep.
+ */
+unsigned int
+bracha87Fig4Pump(
+  struct bracha87Fig4 *
+ ,struct bracha87Fig1 *const *  /* fig1Array */
+ ,struct bracha87Pump *
+ ,struct bracha87Fig4Act *      /* out */
+ ,unsigned int                  /* outCap, >= 3 */
+);
+
+unsigned int
+bracha87Fig4CommittedFig1Count(
+  const struct bracha87Fig4 *
+ ,struct bracha87Fig1 *const *  /* fig1Array */
 );
 
 #endif /* BRACHA87_H */

@@ -990,6 +990,9 @@ testBpr(
   unsigned char val[1];
   unsigned int n;
   unsigned int i;
+  struct bracha87Pump pump;
+
+  bracha87PumpInit(&pump);
 
   printf("\n  BPR pump tests:\n");
 
@@ -999,7 +1002,7 @@ testBpr(
   bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
 
   /* Pump on a virgin instance: no committed state -> idle */
-  n = bkr94acsPump(a, out);
+  n = bkr94acsPump(a, &pump, out);
   check("BPR pump virgin: 0 actions", n == 0);
 
   /* Propose: marks origin, emits PROP_SEND/INITIAL once */
@@ -1023,7 +1026,7 @@ testBpr(
    * finds replays or wraps, so one Pump call must surface our
    * PROP_SEND/INITIAL. */
   for (i = 0; i < 5; ++i) {
-    n = bkr94acsPump(a, out);
+    n = bkr94acsPump(a, &pump, out);
     check("BPR pump pre-loopback: emits", n >= 1);
     check("BPR pump pre-loopback: PROP_SEND/INITIAL",
           n >= 1 && out[0].act == BKR94ACS_ACT_PROP_SEND
@@ -1054,7 +1057,7 @@ testBpr(
     seenEcho = 0;
     /* One full sweep of the cursor space; bound generously. */
     for (sweep = 0; sweep < 4 * (4 + 4 * 12 * 4); ++sweep) {
-      n = bkr94acsPump(a, out);
+      n = bkr94acsPump(a, &pump, out);
       if (!n)
         continue;
       for (j = 0; j < n; ++j) {
@@ -1105,6 +1108,7 @@ testBpr(
    */
   {
     struct bkr94acs *peers[4];
+    struct bracha87Pump peerPump[4];
     struct acsResult results[4];
     const char *proposals[4] = {"a", "b", "c", "d"};
     unsigned int dropSeed;
@@ -1117,6 +1121,7 @@ testBpr(
       peers[p] = (struct bkr94acs *)calloc(1, sz);
       bkr94acsInit(peers[p], 3, 1, 0, MAX_PHASES, (unsigned char)p,
                    testCoin, 0);
+      bracha87PumpInit(&peerPump[p]);
     }
 
     qInit();
@@ -1207,7 +1212,7 @@ testBpr(
         unsigned int npact;
         unsigned int k;
 
-        npact = bkr94acsPump(peers[p], pact);
+        npact = bkr94acsPump(peers[p], &peerPump[p], pact);
         if (npact)
           progress = 1;
         for (k = 0; k < npact; ++k) {
@@ -1274,6 +1279,7 @@ testBprCursorCoverage(
 ){
   struct bkr94acs *peers[4];
   struct bkr94acsAct out[BKR94ACS_PUMP_MAX_ACTS];
+  struct bracha87Pump pump;
   unsigned char val[1];
   unsigned long sz;
   unsigned int p;
@@ -1281,6 +1287,8 @@ testBprCursorCoverage(
   unsigned int allSeen;
   unsigned int call;
   unsigned int budget;
+
+  bracha87PumpInit(&pump);
 
   printf("\n  BPR pump cursor coverage:\n");
 
@@ -1322,7 +1330,7 @@ testBprCursorCoverage(
   for (call = 0; call < budget; ++call) {
     unsigned int n;
 
-    n = bkr94acsPump(peers[0], out);
+    n = bkr94acsPump(peers[0], &pump, out);
     if (!n)
       continue;
     if (out[0].act == BKR94ACS_ACT_PROP_SEND)
@@ -1381,6 +1389,7 @@ testBprOriginGate(
 ){
   struct bkr94acs *a;
   struct bkr94acsAct out[BKR94ACS_PUMP_MAX_ACTS];
+  struct bracha87Pump pump;
   unsigned char val[1];
   unsigned long sz;
   unsigned int call;
@@ -1393,6 +1402,7 @@ testBprOriginGate(
   sz = bkr94acsSz(3, 0, 4);
   a = (struct bkr94acs *)calloc(1, sz);
   bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+  bracha87PumpInit(&pump);
 
   /* Both proposal Fig1s for origins 0 and 1 in ECHOED state.
    * Origin 0: Propose (ORIGIN+!ECHOED, then loopback -> ECHOED).
@@ -1417,7 +1427,7 @@ testBprOriginGate(
   for (call = 0; call < budget; ++call) {
     unsigned int n;
 
-    n = bkr94acsPump(a, out);
+    n = bkr94acsPump(a, &pump, out);
     if (!n)
       continue;
     if (out[0].act == BKR94ACS_ACT_PROP_SEND) {
@@ -1445,7 +1455,7 @@ testBprOriginGate(
   for (call = 0; call < budget; ++call) {
     unsigned int n;
 
-    n = bkr94acsPump(a, out);
+    n = bkr94acsPump(a, &pump, out);
     if (!n)
       continue;
     if (out[0].act == BKR94ACS_ACT_PROP_SEND
@@ -1476,6 +1486,7 @@ testBprByzantineSilent(
   void
 ){
   struct bkr94acs *peers[4];
+  struct bracha87Pump peerPump[4];
   struct acsResult results[4];
   struct bkr94acsAct out[BKR94ACS_PUMP_MAX_ACTS];
   unsigned char val;
@@ -1493,6 +1504,7 @@ testBprByzantineSilent(
     peers[p] = (struct bkr94acs *)calloc(1, sz);
     bkr94acsInit(peers[p], 3, 1, 0, MAX_PHASES, (unsigned char)p,
                  testCoin, 0);
+    bracha87PumpInit(&peerPump[p]);
   }
 
   qInit();
@@ -1587,7 +1599,7 @@ testBprByzantineSilent(
       unsigned int npact;
       unsigned int k;
 
-      npact = bkr94acsPump(peers[p], out);
+      npact = bkr94acsPump(peers[p], &peerPump[p], out);
       if (npact)
         progress = 1;
       for (k = 0; k < npact; ++k) {
@@ -1662,6 +1674,7 @@ runPumpOnlyE2e(
  ,unsigned int *sweepsOut
 ){
   struct bkr94acs *peers[4];
+  struct bracha87Pump peerPump[4];
   struct acsResult results[4];
   struct bkr94acsAct out[BKR94ACS_PUMP_MAX_ACTS];
   unsigned char val;
@@ -1677,6 +1690,7 @@ runPumpOnlyE2e(
     peers[p] = (struct bkr94acs *)calloc(1, sz);
     bkr94acsInit(peers[p], 3, 1, 0, MAX_PHASES, (unsigned char)p,
                  testCoin, 0);
+    bracha87PumpInit(&peerPump[p]);
   }
 
   qInit();
@@ -1750,7 +1764,7 @@ runPumpOnlyE2e(
       unsigned int npact;
       unsigned int k;
 
-      npact = bkr94acsPump(peers[p], out);
+      npact = bkr94acsPump(peers[p], &peerPump[p], out);
       if (npact)
         progress = 1;
       for (k = 0; k < npact; ++k) {

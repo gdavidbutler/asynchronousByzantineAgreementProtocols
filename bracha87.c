@@ -1216,3 +1216,552 @@ bracha87Fig4Round(
   }
   return (0);
 }
+
+/*************************************************************************/
+/*  High-level entry points: Input + Pump                                */
+/*                                                                       */
+/*  These wrap the low-level state machines into the bkr94acs-style      */
+/*  one-call-per-message / one-call-per-tick ergonomic.  They mutate     */
+/*  the same state the low-level entries do; mixing styles in a single   */
+/*  caller is permitted but rarely useful.                               */
+/*************************************************************************/
+
+void
+bracha87PumpInit(
+  struct bracha87Pump *p
+){
+  if (p) {
+    p->pos = 0;
+    p->sweepActs = 0;
+  }
+}
+
+/*------------------------------------------------------------------*/
+/*  Fig 1 array pump                                                */
+/*------------------------------------------------------------------*/
+
+/*
+ * One Fig 1's worth of replay actions per call.
+ *
+ * NETWORK FLOOD WARNING.  This entry is meant to be called ONCE per
+ * application tick.  It must NOT be invoked in a loop.  Bracha BPR
+ * replays are persistent (committed flags live forever), so every
+ * committed instance always has actions to emit; a tight loop will
+ * empty the cursor space onto the wire as fast as the CPU can run,
+ * exhausting kernel UDP buffers and causing the very drops the pump
+ * is meant to recover from (verified empirically — see brachaAcsPsk.c
+ * pump-induced kernel-buffer-overrun fix).  The application's tick
+ * rate is the rate limit.
+ *
+ * Walks the cursor forward from p->pos to the next committed
+ * instance and returns its actions.  Returns 0 ONLY when a full
+ * sweep across the entire array found nothing committed (no Fig 1
+ * has ORIGIN / ECHOED / RDSENT) — pre-broadcast / fully-shutdown
+ * state, NOT a per-tick termination signal.  In healthy operation
+ * this never returns 0.
+ *
+ * Termination is the application's responsibility: count Pump calls
+ * across ticks; one sweep = bracha87Fig1CommittedCount calls; K
+ * sweeps + silence-quorum = exit.  See README.md "Termination
+ * policy."  Bounded: at most one wrap per call (one to drain a
+ * partial sweep with actions, one to detect truly-idle).
+ */
+unsigned int
+bracha87Fig1PumpStep(
+  struct bracha87Fig1 *const *instances
+ ,unsigned int count
+ ,struct bracha87Pump *p
+ ,struct bracha87Fig1Act *out
+ ,unsigned int outCap
+){
+  unsigned int idx;
+  unsigned char acts[3];
+  unsigned int n;
+  unsigned int i;
+  const unsigned char *v;
+
+  if (!instances || !p || !out || !count
+   || outCap < BRACHA87_FIG1_PUMP_MAX_ACTS)
+    return (0);
+
+  for (;;) {
+    if (p->pos >= count) {
+      p->pos = 0;
+      if (p->sweepActs == 0)
+        return (0);
+      p->sweepActs = 0;
+    }
+    idx = p->pos++;
+    if (instances[idx]) {
+      n = bracha87Fig1Bpr(instances[idx], acts);
+      if (n) {
+        v = bracha87Fig1Value(instances[idx]);
+        for (i = 0; i < n; ++i) {
+          out[i].act = acts[i];
+          out[i].idx = idx;
+          out[i].value = v;
+        }
+        p->sweepActs += n;
+        return (n);
+      }
+    }
+  }
+}
+
+unsigned int
+bracha87Fig1CommittedCount(
+  struct bracha87Fig1 *const *instances
+ ,unsigned int count
+){
+  unsigned int cnt;
+  unsigned int i;
+
+  if (!instances)
+    return (0);
+  cnt = 0;
+  for (i = 0; i < count; ++i)
+    if (instances[i]
+     && (instances[i]->flags & (BRACHA87_F1_ORIGIN
+                              | BRACHA87_F1_ECHOED
+                              | BRACHA87_F1_RDSENT)))
+      ++cnt;
+  return (cnt);
+}
+
+/*------------------------------------------------------------------*/
+/*  Fig 3 high-level entry points                                   */
+/*------------------------------------------------------------------*/
+
+/*
+ * Translate a Fig 1 act enum to its corresponding incoming-message
+ * type (the type of message the caller broadcasts on the wire).
+ */
+static unsigned char
+fig1ActToType(
+  unsigned char act
+){
+  switch (act) {
+  case BRACHA87_INITIAL_ALL: return (BRACHA87_INITIAL);
+  case BRACHA87_ECHO_ALL:    return (BRACHA87_ECHO);
+  case BRACHA87_READY_ALL:   return (BRACHA87_READY);
+  default:                   return (0);
+  }
+}
+
+unsigned int
+bracha87Fig3Origin(
+  struct bracha87Fig3 *f3
+ ,struct bracha87Fig1 *const *fig1Array
+ ,unsigned char round
+ ,unsigned char origin
+ ,const unsigned char *value
+ ,struct bracha87Fig3Act *out
+ ,unsigned int outCap
+){
+  unsigned int N;
+  unsigned int idx;
+  struct bracha87Fig1 *f1;
+
+  if (!f3 || !fig1Array || !value || !out || outCap < 1)
+    return (0);
+  if (round >= f3->maxRounds || origin > f3->n)
+    return (0);
+
+  N = B_N(f3);
+  idx = (unsigned int)round * N + origin;
+  f1 = fig1Array[idx];
+  if (!f1)
+    return (0);
+
+  bracha87Fig1Origin(f1, value);
+
+  out[0].act = BRACHA87_INITIAL_ALL;
+  out[0].origin = origin;
+  out[0].round = round;
+  out[0].type = BRACHA87_INITIAL;
+  out[0].value = bracha87Fig1Value(f1);
+  return (1);
+}
+
+/*
+ * Scan from f3->nextRound forward, emitting ROUND_COMPLETE acts for
+ * each newly-completed round.  Advances nextRound past every round
+ * surfaced.  Returns the number of acts emitted.
+ *
+ * The cascade in bracha87Fig3Accept can complete multiple rounds in
+ * a single Accept call (paper Lemma 6 monotonicity); this scan
+ * surfaces them in order.
+ */
+static unsigned int
+fig3DrainCompletes(
+  struct bracha87Fig3 *f3
+ ,struct bracha87Fig3Act *out
+ ,unsigned int outCap
+ ,unsigned int nout
+){
+  while (nout < outCap
+      && f3->nextRound < f3->maxRounds
+      && bracha87Fig3RoundComplete(f3, f3->nextRound)) {
+    out[nout].act = BRACHA87_FIG3_ROUND_COMPLETE;
+    out[nout].origin = 0;
+    out[nout].round = f3->nextRound;
+    out[nout].type = 0;
+    out[nout].value = 0;
+    ++nout;
+    ++f3->nextRound;
+  }
+  return (nout);
+}
+
+unsigned int
+bracha87Fig3Input(
+  struct bracha87Fig3 *f3
+ ,struct bracha87Fig1 *const *fig1Array
+ ,unsigned char round
+ ,unsigned char origin
+ ,unsigned char type
+ ,unsigned char from
+ ,const unsigned char *value
+ ,struct bracha87Fig3Act *out
+ ,unsigned int outCap
+){
+  unsigned int N;
+  unsigned int idx;
+  struct bracha87Fig1 *f1;
+  unsigned char acts[3];
+  unsigned int n;
+  unsigned int i;
+  unsigned int nout;
+  const unsigned char *cv;
+
+  if (!f3 || !fig1Array || !value || !out
+   || outCap < BRACHA87_FIG3_MAX_ACTS)
+    return (0);
+  if (round >= f3->maxRounds || origin > f3->n || from > f3->n)
+    return (0);
+
+  N = B_N(f3);
+  idx = (unsigned int)round * N + origin;
+  f1 = fig1Array[idx];
+  if (!f1)
+    return (0);
+
+  nout = 0;
+  n = bracha87Fig1Input(f1, type, from, value, acts);
+
+  for (i = 0; i < n; ++i) {
+    if (acts[i] == BRACHA87_ACCEPT) {
+      cv = bracha87Fig1Value(f1);
+      if (cv) {
+        bracha87Fig3Accept(f3, round, origin, cv[0], 0);
+        nout = fig3DrainCompletes(f3, out, outCap, nout);
+      }
+      continue;
+    }
+    /* BRACHA87_ECHO_ALL / READY_ALL — INITIAL_ALL not produced by Input. */
+    if (nout >= outCap)
+      break;
+    out[nout].act = acts[i];
+    out[nout].origin = origin;
+    out[nout].round = round;
+    out[nout].type = fig1ActToType(acts[i]);
+    out[nout].value = bracha87Fig1Value(f1);
+    ++nout;
+  }
+  return (nout);
+}
+
+unsigned int
+bracha87Fig3Pump(
+  struct bracha87Fig3 *f3
+ ,struct bracha87Fig1 *const *fig1Array
+ ,struct bracha87Pump *p
+ ,struct bracha87Fig3Act *out
+ ,unsigned int outCap
+){
+  struct bracha87Fig1Act buf[BRACHA87_FIG1_PUMP_MAX_ACTS];
+  unsigned int n;
+  unsigned int i;
+  unsigned int N;
+  unsigned int total;
+
+  if (!f3 || !fig1Array || !p || !out
+   || outCap < BRACHA87_FIG1_PUMP_MAX_ACTS)
+    return (0);
+
+  N = B_N(f3);
+  total = (unsigned int)f3->maxRounds * N;
+
+  n = bracha87Fig1PumpStep(fig1Array, total, p, buf,
+                           BRACHA87_FIG1_PUMP_MAX_ACTS);
+  if (!n)
+    return (0);
+
+  for (i = 0; i < n; ++i) {
+    out[i].act = buf[i].act;
+    out[i].round = (unsigned char)(buf[i].idx / N);
+    out[i].origin = (unsigned char)(buf[i].idx % N);
+    out[i].type = fig1ActToType(buf[i].act);
+    out[i].value = buf[i].value;
+  }
+  return (n);
+}
+
+unsigned int
+bracha87Fig3CommittedFig1Count(
+  const struct bracha87Fig3 *f3
+ ,struct bracha87Fig1 *const *fig1Array
+){
+  unsigned int N;
+  unsigned int total;
+
+  if (!f3 || !fig1Array)
+    return (0);
+  N = B_N(f3);
+  total = (unsigned int)f3->maxRounds * N;
+  return (bracha87Fig1CommittedCount(fig1Array, total));
+}
+
+/*------------------------------------------------------------------*/
+/*  Fig 4 high-level entry points                                   */
+/*------------------------------------------------------------------*/
+
+unsigned int
+bracha87Fig4Start(
+  struct bracha87Fig4 *f4
+ ,struct bracha87Fig1 *const *fig1Array
+ ,unsigned char self
+ ,struct bracha87Fig4Act *out
+ ,unsigned int outCap
+){
+  unsigned int N;
+  unsigned int idx;
+  struct bracha87Fig1 *f1;
+  unsigned char v;
+
+  if (!f4 || !fig1Array || !out || outCap < 1)
+    return (0);
+  if (self > f4->n)
+    return (0);
+
+  N = B_N(f4);
+  idx = 0u * N + self;  /* round 0 slot for self */
+  f1 = fig1Array[idx];
+  if (!f1)
+    return (0);
+
+  v = f4->value;  /* set by Fig4Init from initialValue */
+  bracha87Fig1Origin(f1, &v);
+
+  out[0].act = BRACHA87_INITIAL_ALL;
+  out[0].origin = self;
+  out[0].round = 0;
+  out[0].type = BRACHA87_INITIAL;
+  out[0].value = v;
+  out[0].decision = 0;
+  return (1);
+}
+
+/*
+ * Drive Fig 4 over any newly-completed Fig 3 rounds.  For each
+ * round k that just hit n-t validations, call Fig4Round and emit
+ * the resulting act (DECIDE / EXHAUSTED) plus the originating
+ * INITIAL_ALL for the new round (if Fig 4 says BROADCAST).
+ *
+ * Returns updated nout.  Stops if outCap is exhausted.
+ */
+static unsigned int
+fig4DrainCompletes(
+  struct bracha87Fig4 *f4
+ ,struct bracha87Fig1 *const *fig1Array
+ ,unsigned char self
+ ,struct bracha87Fig4Act *out
+ ,unsigned int outCap
+ ,unsigned int nout
+){
+  struct bracha87Fig3 *f3;
+  unsigned int N;
+  unsigned int mr;
+
+  f3 = &f4->fig3;
+  N = B_N(f4);
+  mr = (unsigned int)f4->maxPhases * 3u;
+
+  while (nout < outCap
+      && f3->nextRound < mr
+      && bracha87Fig3RoundComplete(f3, f3->nextRound)) {
+    unsigned char rsnd[256];
+    unsigned char rval[256];
+    unsigned int rcnt;
+    unsigned int act;
+    unsigned char k;
+    unsigned int idx;
+
+    k = f3->nextRound;
+    rcnt = bracha87Fig3GetValid(f3, k, rsnd, rval);
+    act = bracha87Fig4Round(f4, k, rcnt, rsnd, rval);
+    ++f3->nextRound;
+
+    if (act & BRACHA87_DECIDE) {
+      if (nout >= outCap) break;
+      out[nout].act = BRACHA87_FIG4_DECIDE;
+      out[nout].origin = self;
+      out[nout].round = k;
+      out[nout].type = 0;
+      out[nout].value = f4->decision;
+      out[nout].decision = f4->decision;
+      ++nout;
+    }
+    if (act & BRACHA87_BROADCAST) {
+      /*
+       * Fig 4 says broadcast for the next round (k+1).  Originate
+       * via the (k+1, self) Fig 1 slot using f4->value.
+       */
+      if (nout >= outCap) break;
+      if ((unsigned int)k + 1 < mr) {
+        unsigned char nv;
+
+        idx = ((unsigned int)k + 1) * N + self;
+        if (fig1Array[idx]) {
+          nv = f4->value;
+          bracha87Fig1Origin(fig1Array[idx], &nv);
+          out[nout].act = BRACHA87_INITIAL_ALL;
+          out[nout].origin = self;
+          out[nout].round = (unsigned char)(k + 1);
+          out[nout].type = BRACHA87_INITIAL;
+          out[nout].value = nv;
+          out[nout].decision = 0;
+          ++nout;
+        }
+      }
+    }
+    if (act & BRACHA87_EXHAUSTED) {
+      if (nout >= outCap) break;
+      out[nout].act = BRACHA87_FIG4_EXHAUSTED;
+      out[nout].origin = self;
+      out[nout].round = k;
+      out[nout].type = 0;
+      out[nout].value = 0;
+      out[nout].decision = 0;
+      ++nout;
+      /* EXHAUSTED is terminal; no further rounds will complete
+       * meaningfully, but we keep walking so any cascade-completed
+       * later rounds (rare under EXHAUSTED) get processed. */
+    }
+  }
+  return (nout);
+}
+
+unsigned int
+bracha87Fig4Input(
+  struct bracha87Fig4 *f4
+ ,struct bracha87Fig1 *const *fig1Array
+ ,unsigned char self
+ ,unsigned char round
+ ,unsigned char origin
+ ,unsigned char type
+ ,unsigned char from
+ ,unsigned char value
+ ,struct bracha87Fig4Act *out
+ ,unsigned int outCap
+){
+  unsigned int N;
+  unsigned int idx;
+  unsigned int mr;
+  struct bracha87Fig1 *f1;
+  unsigned char acts[3];
+  unsigned int n;
+  unsigned int i;
+  unsigned int nout;
+  const unsigned char *cv;
+
+  if (!f4 || !fig1Array || !out
+   || outCap < BRACHA87_FIG4_MAX_ACTS)
+    return (0);
+  mr = (unsigned int)f4->maxPhases * 3u;
+  if (self > f4->n || round >= mr || origin > f4->n || from > f4->n)
+    return (0);
+
+  N = B_N(f4);
+  idx = (unsigned int)round * N + origin;
+  f1 = fig1Array[idx];
+  if (!f1)
+    return (0);
+
+  nout = 0;
+  n = bracha87Fig1Input(f1, type, from, &value, acts);
+
+  for (i = 0; i < n; ++i) {
+    if (acts[i] == BRACHA87_ACCEPT) {
+      cv = bracha87Fig1Value(f1);
+      if (cv) {
+        bracha87Fig3Accept(&f4->fig3, round, origin, cv[0], 0);
+        nout = fig4DrainCompletes(f4, fig1Array, self, out, outCap, nout);
+      }
+      continue;
+    }
+    if (nout >= outCap)
+      break;
+    out[nout].act = acts[i];
+    out[nout].origin = origin;
+    out[nout].round = round;
+    out[nout].type = fig1ActToType(acts[i]);
+    cv = bracha87Fig1Value(f1);
+    out[nout].value = cv ? cv[0] : 0;
+    out[nout].decision = 0;
+    ++nout;
+  }
+  return (nout);
+}
+
+unsigned int
+bracha87Fig4Pump(
+  struct bracha87Fig4 *f4
+ ,struct bracha87Fig1 *const *fig1Array
+ ,struct bracha87Pump *p
+ ,struct bracha87Fig4Act *out
+ ,unsigned int outCap
+){
+  struct bracha87Fig1Act buf[BRACHA87_FIG1_PUMP_MAX_ACTS];
+  unsigned int n;
+  unsigned int i;
+  unsigned int N;
+  unsigned int total;
+
+  if (!f4 || !fig1Array || !p || !out
+   || outCap < BRACHA87_FIG1_PUMP_MAX_ACTS)
+    return (0);
+
+  N = B_N(f4);
+  total = (unsigned int)f4->maxPhases * 3u * N;
+
+  n = bracha87Fig1PumpStep(fig1Array, total, p, buf,
+                           BRACHA87_FIG1_PUMP_MAX_ACTS);
+  if (!n)
+    return (0);
+
+  for (i = 0; i < n; ++i) {
+    out[i].act = buf[i].act;
+    out[i].round = (unsigned char)(buf[i].idx / N);
+    out[i].origin = (unsigned char)(buf[i].idx % N);
+    out[i].type = fig1ActToType(buf[i].act);
+    out[i].value = buf[i].value ? buf[i].value[0] : 0;
+    out[i].decision = 0;
+  }
+  return (n);
+}
+
+unsigned int
+bracha87Fig4CommittedFig1Count(
+  const struct bracha87Fig4 *f4
+ ,struct bracha87Fig1 *const *fig1Array
+){
+  unsigned int N;
+  unsigned int total;
+
+  if (!f4 || !fig1Array)
+    return (0);
+  N = B_N(f4);
+  total = (unsigned int)f4->maxPhases * 3u * N;
+  return (bracha87Fig1CommittedCount(fig1Array, total));
+}
