@@ -119,9 +119,18 @@
  *                 BA per ACS instance.)
  *
  * .value is a borrowed pointer into library-owned storage (the
- * Fig1's accepted-value slot).  Valid until the next call into
- * the library on the same struct bkr94acs that mutates state.
- * Caller must copy if persistence beyond that boundary is needed.
+ * Fig1's committed-value slot — populated as soon as ORIGIN, Rule
+ * 1, 2, or 3 commits a value, i.e. while ECHOED is set, before
+ * ACCEPT).  Valid until the next call into the library on the
+ * same struct bkr94acs that mutates state.  Caller must copy if
+ * persistence beyond that boundary is needed.
+ *
+ * Distinct from bkr94acsProposalValue, which queries the same
+ * physical slot but is ACCEPT-gated for non-self origins so
+ * application reads see only Bracha-Lemma-2-protected values.
+ * PROP_SEND emissions need the committed bytes pre-ACCEPT for the
+ * protocol's ECHO/READY traffic to carry, so this field exposes
+ * the broader gate.
  */
 struct bkr94acsAct {
   const unsigned char *value; /* PROP_SEND: vLen+1 bytes; otherwise 0 */
@@ -267,7 +276,7 @@ bkr94acsInit(
  *   Caller broadcasts a proposal Fig1 message of .type
  *   (BRACHA87_INITIAL/ECHO/READY) for .origin.  Bytes to send:
  *   .value (vLen+1 bytes, borrowed pointer into the library's
- *   accepted-value slot).
+ *   committed-value slot — see struct bkr94acsAct.value).
  *
  * On BKR94ACS_ACT_CON_SEND:
  *   Caller broadcasts a consensus Fig1 message.
@@ -331,6 +340,12 @@ bkr94acsSubset(
  * Query: get the accepted proposal value for an origin.
  * Returns pointer to the vLen + 1 byte value, or 0 if not yet
  * accepted (or, for self-origin, not yet proposed).
+ *
+ * Reads the same physical slot as struct bkr94acsAct.value, but
+ * ACCEPT-gated for non-self origins so callers see only values
+ * Bracha 1987 Lemma 2 protects against Byzantine equivocation.
+ * Pre-ACCEPT echoed values can disagree across honest peers and
+ * are intentionally hidden here.
  */
 const unsigned char *
 bkr94acsProposalValue(

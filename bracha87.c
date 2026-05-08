@@ -1092,8 +1092,8 @@ bracha87Fig4Init(
   b->phase = 0;
   b->subRound = 0;
   b->value = initialValue;
-  b->decided = 0;
   b->decision = 0;
+  b->flags = 0;
   b->coin = coin;
   b->coinClosure = coinClosure;
   bracha87Fig3Init(
@@ -1130,6 +1130,8 @@ bracha87Fig4Round(
   (void)senders;
   if (!b || !n_msgs)
     return (0);
+  if (b->flags & BRACHA87_F4_EXHAUSTED)
+    return (0);
 
   sub = (unsigned int)(k % 3);
   ph = (unsigned int)(k / 3);
@@ -1151,7 +1153,7 @@ bracha87Fig4Round(
    * therefore 2t), since their sum is bounded by n_msgs <= n-t and
    * 2t+2 > n-t when n > 3t -- so dmax disambiguates safely. */
   subRound    = (unsigned char)sub;
-  haveDecided = b->decided ? 1 : 0;
+  haveDecided = (b->flags & BRACHA87_F4_DECIDED) ? 1 : 0;
   n2Half      = (cnt[0] * 2 > B_N(b)) || (cnt[1] * 2 > B_N(b));
   gt2T        = dc[dmax] > 2u * b->t;
   gtT         = dc[dmax] > (unsigned int)b->t;
@@ -1172,7 +1174,7 @@ bracha87Fig4Round(
   if (decideV) {
     b->value = dmax;
     b->decision = dmax;
-    b->decided = 1;
+    b->flags |= BRACHA87_F4_DECIDED;
   }
   if (adoptV)
     b->value = dmax;
@@ -1208,8 +1210,10 @@ bracha87Fig4Round(
       b->subRound = 0;
       return (BRACHA87_BROADCAST);
     }
-    if (ph + 1 >= b->maxPhases)
+    if (ph + 1 >= b->maxPhases) {
+      b->flags |= BRACHA87_F4_EXHAUSTED;
       return (BRACHA87_EXHAUSTED);
+    }
     b->phase = (unsigned char)(ph + 1);
     b->subRound = 0;
     return (BRACHA87_BROADCAST);

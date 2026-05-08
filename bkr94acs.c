@@ -767,9 +767,20 @@ bkr94acsProposalValue(
   const struct bkr94acs *a
  ,unsigned char origin
 ){
+  struct bracha87Fig1 *f;
   if (!a || origin > a->n)
     return (0);
-  return (bracha87Fig1Value(propF1(a, origin)));
+  f = propF1(a, origin);
+  /* Header contract: returns non-null only when ACCEPTED, or for
+   * self-origin once ORIGIN is set (after Propose).  Pre-ACCEPT
+   * ECHOED values are intentionally hidden — under Byzantine
+   * equivocation they can disagree across honest peers (Bracha 1987
+   * Lemmas 1/2 only constrain READY/ACCEPT), so exposing them
+   * would let callers act on values that aren't yet
+   * agreement-protected. */
+  if ((f->flags & (BRACHA87_F1_ORIGIN | BRACHA87_F1_ACCEPTED)) == 0)
+    return (0);
+  return (bracha87Fig1Value(f));
 }
 
 unsigned int
@@ -1020,8 +1031,13 @@ bkr94acsActIdentity(
     return (0);
   out[0] = act->act;
   out[1] = act->origin;
-  out[2] = act->round;       /* 0 for PROP_SEND */
-  out[3] = act->broadcaster; /* 0 for PROP_SEND */
+  if (act->act == BKR94ACS_ACT_PROP_SEND) {
+    out[2] = 0;
+    out[3] = 0;
+  } else {
+    out[2] = act->round;
+    out[3] = act->broadcaster;
+  }
   out[4] = act->type;
   return (BKR94ACS_ACT_IDENTITY_LEN);
 }

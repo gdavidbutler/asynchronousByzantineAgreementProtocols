@@ -81,6 +81,19 @@
 /*  Lemma 1 proof says "more than (n+t)/2." The proof requires           */
 /*  strict > for the pigeonhole argument. Code follows the proof.        */
 /*                                                                       */
+/*  Variable convention in the rule table above:                         */
+/*    n   = actual process count (the struct field decoded; actual =     */
+/*          fig1->n + 1).  This matches the paper.  Do NOT substitute    */
+/*          the encoded byte from struct bracha87Fig1.                   */
+/*    t   = max Byzantine, used as-is.                                   */
+/*    Worked example: n_actual = 4, t = 1.                               */
+/*      (n+t)/2 = 5/2 = 2 (C integer arithmetic).                        */
+/*      Rule 2 fires on the 3rd distinct echo (strict >).                */
+/*                                                                       */
+/*  Per-sender dedup bounds Byzantine equivocation: at most one ECHO     */
+/*  and one READY from each sender contribute to thresholds, regardless  */
+/*  of how many duplicates or differing-value copies arrive.             */
+/*                                                                       */
 /*************************************************************************/
 
 /* Figure 1 message types (input) */
@@ -524,6 +537,10 @@ typedef unsigned char (*bracha87CoinFn)(
  */
 #define BRACHA87_D_FLAG    0x80
 
+/* Figure 4 state flags (bitmap; same idiom as BRACHA87_F1_*) */
+#define BRACHA87_F4_DECIDED   0x01
+#define BRACHA87_F4_EXHAUSTED 0x02
+
 /*
  * Figure 4 state.
  *
@@ -545,8 +562,8 @@ struct bracha87Fig4 {
   unsigned char phase;     /* current phase (0-based) */
   unsigned char subRound;  /* 0, 1, or 2 within phase */
   unsigned char value;     /* current estimate */
-  unsigned char decided;
   unsigned char decision;
+  unsigned char flags;     /* BRACHA87_F4_DECIDED / BRACHA87_F4_EXHAUSTED */
   struct bracha87Fig3 fig3;/* embedded Fig 3; variable tail extends past */
 };
 
@@ -556,6 +573,20 @@ bracha87Fig4Sz(
  ,unsigned int             /* maxPhases, <= BRACHA87_MAX_PHASES (85) */
 );
 
+/*
+ * Initialize a Fig 4 instance.
+ *
+ * coin must NOT be 0.  Step 3 case (iii) (no decision-candidate
+ * majority) invokes coin(coinClosure, phase) to derive value_p.
+ * Even on input traces where case (iii) never fires, callers must
+ * supply a valid coin: the library does not branch on a null coin
+ * pointer, and supplying 0 is undefined behavior.
+ *
+ * For caller-side coin guidance (local vs common vs MPW alternatives,
+ * adversarial vs reproducibility tradeoffs) see the project README's
+ * "Local coin vs common coin" section.  The bundled examples use a
+ * deterministic alternating coin for demo reproducibility only.
+ */
 void
 bracha87Fig4Init(
   struct bracha87Fig4 *
@@ -563,7 +594,7 @@ bracha87Fig4Init(
  ,unsigned char            /* t */
  ,unsigned char            /* maxPhases, <= BRACHA87_MAX_PHASES (85) */
  ,unsigned char            /* initialValue: 0 or 1 */
- ,bracha87CoinFn           /* coin */
+ ,bracha87CoinFn           /* coin, must not be 0 */
  ,void *                   /* coinClosure */
 );
 
@@ -580,6 +611,24 @@ bracha87Fig4Init(
  * BRACHA87_DECIDE is returned exactly once (the first time >2t d-messages
  * are seen), combined with BRACHA87_BROADCAST. Per the paper, a decided
  * process continues participating so others can reach consensus.
+ *
+ * BRACHA87_EXHAUSTED is also returned at most once: it is mutually
+ * exclusive with BRACHA87_DECIDE (decideV requires !haveDecided;
+ * EXHAUSTED requires sub=2 of the last phase with !haveDecided &&
+ * !decideV) and the maxPhases ceiling makes single emission structural.
+ * Subsequent calls to bracha87Fig4Round on an EXHAUSTED instance are
+ * safe and return 0 actions; the state machine remains in EXHAUSTED.
+ * No unilateral substitute decision is produced -- exhaustion is a
+ * fatal protocol event the application must handle (e.g. abort).
+ *
+ * Inbound message integrity is the caller's responsibility (sender
+ * authentication, well-formed framing).  Within those bounds, malformed
+ * Byzantine values are filtered structurally: fig3IsValid via fig4Nfn
+ * rejects any value outside {0, 1, D_FLAG|0, D_FLAG|1} appropriate for
+ * the round, so they are non-events that do not advance phase.  An
+ * adversarial schedule can still prevent local termination by
+ * preventing n-t honest validations -- this is the asynchronous
+ * impossibility result, not a defect.
  *
  * The round k maps to phase/subRound:
  *   phase = k / 3
@@ -635,6 +684,13 @@ bracha87Fig4Round(
 /*  quorum + K-sweep gate from README.md "Termination policy."  Count    */
 /*  Pump calls across ticks; one sweep = bracha87Fig1CommittedCount      */
 /*  calls; K sweeps + silence-quorum from peers ⇒ exit.                  */
+/*                                                                       */
+/*  outCap precondition.  Every entry point in this section that takes   */
+/*  an outCap parameter documents a minimum (>= 1, >= 3, >= MAX_ACTS).   */
+/*  The minimum is a caller precondition; the library does not range-    */
+/*  check it.  Calling with outCap below the documented minimum is       */
+/*  undefined behavior (the library may write past out[] up to the       */
+/*  documented minimum count).                                           */
 /*                                                                       */
 /*************************************************************************/
 
@@ -744,7 +800,9 @@ struct bracha87Fig3Act {
 /*
  * Self-initiate a broadcast for (round, origin).  Marks the
  * corresponding Fig 1 instance as the originator with the supplied
- * value, and emits one INITIAL_ALL act for the caller to broadcast.
+ * value, and emits exactly one act in out[]: act = BRACHA87_INITIAL_ALL,
+ * type = BRACHA87_INITIAL, (origin, round) as supplied, value pointing
+ * into the Fig 1 instance's committed-value slot.
  *
  * Idempotent.  outCap must be >= 1.
  */
@@ -836,7 +894,9 @@ struct bracha87Fig4Act {
 /*
  * Self-initiate the round-0 broadcast.  Marks
  * fig1Array[0 * (n+1) + self] as origin with the Fig 4's
- * initialValue (set at Fig4Init time), and emits one INITIAL_ALL act.
+ * initialValue (set at Fig4Init time), and emits exactly one act in
+ * out[]: act = BRACHA87_INITIAL_ALL, type = BRACHA87_INITIAL,
+ * origin = self, round = 0, value = initialValue.
  *
  * Idempotent.  outCap must be >= 1.
  */

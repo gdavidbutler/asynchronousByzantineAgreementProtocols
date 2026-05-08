@@ -290,7 +290,7 @@ Read `acs->complete` directly to check if all N BAs have decided.  Pump cursor l
 | `BKR94ACS_ACT_COMPLETE` | all N BAs decided | (none) |
 | `BKR94ACS_ACT_BA_EXHAUSTED` | a BA's Fig 4 reached `maxPhases` with no decision; the local ACS instance cannot complete (BKR94 Lemma 2 Part B's BA-termination assumption violated). No safe in-protocol recovery — substituting a unilateral decision could disagree with another peer's actual decision and break SubSet agreement. Application must abort and (optionally) restart with fresh state. The library marks `bkr94acsBaDecision[origin] = 0xFE` and continues pumping replays for this origin (other peers may still benefit from earlier-round echoes / readys). Emitted exactly once per BA per ACS instance. | `.origin` |
 
-`.value` is a borrowed pointer into the library's accepted-value slot; valid until the next library call that mutates state. Caller copies if persistence is needed past that boundary.
+`.value` is a borrowed pointer into the library's committed-value slot — populated as soon as ORIGIN, Rule 1, 2, or 3 commits a value (i.e. while ECHOED is set, before ACCEPT) so PROP_SEND emissions can carry the bytes during ECHO/READY traffic. Valid until the next library call that mutates state. Caller copies if persistence is needed past that boundary. Distinct from `bkr94acsProposalValue`, which queries the same slot but is ACCEPT-gated for non-self origins so application reads see only Bracha-Lemma-2-protected values.
 
 ### Caller Composition Pattern
 
@@ -357,7 +357,7 @@ Round indices range from 0 to 3 * maxPhases - 1 (max 254).
 
 ```bash
 make            # build .o and example
-make check      # build and run tests (test_bracha87, test_bkr94acs, test_predicates)
+make check      # build and run all five test binaries (see Test Coverage below)
 make clean      # remove build artifacts
 make clobber    # remove DTC generated .c files
 ```
@@ -365,6 +365,22 @@ make clobber    # remove DTC generated .c files
 Building requires `../decisionTableCompiler/dtc` and `awk` to compile the `.dtc` rule tables to dispatch C snippets; the Makefile invokes both automatically. The generated `.psu` and `*Fig{1,3,4}.c` / `bkr94acsRules.c` files are reproducible artifacts (`make clobber` removes them, the next `make` regenerates).
 
 Compiler flags: `-std=c89 -pedantic -Wall -Wextra -Os -g`
+
+## Test Coverage
+
+`make check` runs five test binaries that exercise the library at three different scopes. Each scope catches a different class of regression; together they form a defense in depth.
+
+| Binary | Scope | What it asserts |
+|---|---|---|
+| `test_predicates` | Algorithmic primitives | Paper-direct correspondence at n=4, t=1: `fig4Nfn` (960 inputs), `fig3IsValid` (165 evaluations), Fig 3 cascade (4 delivery permutations). White-box: `#include`s `bracha87.c` and enumerates inputs against a paper-direct subset-enumeration reference. Anchors the algorithmic primitives that sit below the DTC dispatch. |
+| `test_bracha87` | Protocol white-box (bracha87) | Unit tests on each Bracha rule, composed simulation, lemma assertions inline (Lemmas 1, 2, 3, 4, 9), Theorem 2, shuffled delivery, Byzantine equivocation, post-decide multi-phase + adversarial-majority preservation, value-switch tests, BPR replay invariants (originator INITIAL replay forever, post-accept READY replay), high-level `Fig*Input` / `Fig*Pump` entry-point coverage, defensive null-pointer guards. Reads internal flags directly. |
+| `test_bracha87_blackbox` | Protocol black-box (bracha87) | 234 checks via the public bracha87.h surface only. Validity, agreement, totality, and Lemma-2 invariants at n=4 t=1; precise echo-threshold tests at n=4 and n=7; Fig3Origin / Fig4Start exact emission tuples; malformed-value filtering; post-EXHAUSTED safety. Tests are derived from the header contract and `Bracha87.txt` only — no `bracha87.c` reads. |
+| `test_bkr94acs` | Protocol white-box (bkr94acs) | All-to-all simulation with shuffled delivery, multi-byte values, identical proposals, larger N, post-decide continuation regression, step-2 trigger regression, BPR pump tests (50% drop end-to-end, cursor coverage, decided-0 skip, Byzantine-silent canary at 50000+ sweeps for pitfall 11, 75%/87.5% drop convergence), EXHAUSTED single-emission + 0xFE sentinel, ActIdentity field placement, ProposalValue ACCEPT-gate transition (ECHOED-only → NULL, post-ACCEPT → value, ORIGIN-bit carve-out for self-origin). Reaches into `a->threshold`, `a->nDecided`, and the `data[]` layout for setup and assertion. |
+| `test_bkr94acs_blackbox` | Protocol black-box (bkr94acs) | 52199 checks via the public bkr94acs.h surface only. Section A: Sz/Init contract, Propose round-trip + idempotency, ActIdentity field placement, defensive nulls. Section B: Lemma 2 Parts A/B/C/D explicit at n=4/n=7, identical proposals, multi-byte values, step-2 trigger uses BA-decision count not Fig1-ACCEPT count, single-input-per-BA-per-peer (paper Implementer remark), honest-exclusion contract. Section C: Pump idle on fresh peer, Pump after Propose, MAX_ACTS bound, CommittedFig1Count monotone, silence-quorum signal, 50% drop convergence, silent-Byzantine canary. Section D: BA_EXHAUSTED single emission + sentinel + permanent !complete, Pump continues post-EXHAUSTED. Section E: equivocating proposer (Bracha Lemma 2 inheritance). Tests derived from `bkr94acs.h`, `bracha87.h`, `BKR94ACS.txt`, `Bracha87.txt`, and the bracha87 black-box style — no `.c` reads. |
+
+The white-box / black-box pairing surfaces a different class of bug at each layer. White-box catches internal-invariant regressions (a state-machine flag set wrong, a ledger field unbumped). Black-box catches API contract drift — header text and code behavior pulling apart over time. Two recent contract-drift fixes were caught by the black-box suite: `bkr94acsActIdentity`'s defensive zeroing of PROP_SEND round/broadcaster output bytes, and `bkr94acsProposalValue`'s ACCEPT-gate (header documented "0 if not yet accepted" but pre-fix returned ECHOED-stored bytes, exposing pre-Lemma-2 values to callers).
+
+The black-box suites stay strict about scope: only `*.h`, paper-extract `.txt`, and the matching black-box-style sibling are read while writing tests. When a test fails, the contract sources alone determine whether to tighten the code or rewrite the comment.
 
 ## Examples
 

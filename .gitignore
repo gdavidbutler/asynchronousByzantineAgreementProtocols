@@ -64,6 +64,8 @@ example_bracha87Fig1
 example_bracha87Fig3
 example_bracha87Fig4
 example_bkr94acs
-test_bracha87
-test_bkr94acs
 test_predicates
+test_bracha87
+test_bracha87_blackbox
+test_bkr94acs
+test_bkr94acs_blackbox

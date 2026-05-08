@@ -43,6 +43,12 @@ test_bkr94acs: test/test_bkr94acs.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
 test_predicates: test/test_predicates.c bracha87.c bracha87.h bracha87Fig1.c bracha87Fig3.c bracha87Fig4.c
 	$(CC) $(CFLAGS) -I. -o $@ test/test_predicates.c
 
+test_bracha87_blackbox: test/test_bracha87_blackbox.c bracha87.o bracha87.h
+	$(CC) $(CFLAGS) -I. -o $@ test/test_bracha87_blackbox.c bracha87.o
+
+test_bkr94acs_blackbox: test/test_bkr94acs_blackbox.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
+	$(CC) $(CFLAGS) -I. -o $@ test/test_bkr94acs_blackbox.c bkr94acs.o bracha87.o
+
 example_bracha87Fig1: example/bracha87Fig1.c bracha87.o bracha87.h
 	$(CC) $(CFLAGS) -I. -o $@ example/bracha87Fig1.c bracha87.o
 
@@ -55,16 +61,18 @@ example_bracha87Fig4: example/bracha87Fig4.c bracha87.o bracha87.h
 example_bkr94acs: example/bkr94acs.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) -I. -o $@ example/bkr94acs.c bkr94acs.o bracha87.o
 
-check: test_bracha87 test_bkr94acs test_predicates
+check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox
 	./test_bracha87
 	./test_bkr94acs
 	./test_predicates
+	./test_bracha87_blackbox
+	./test_bkr94acs_blackbox
 
 clean:
 	rm -f bracha87Fig1.psu bracha87Fig3.psu bracha87Fig4.psu bkr94acs.psu
 	rm -f bracha87.o bkr94acs.o
 	rm -f example_bracha87Fig1 example_bracha87Fig3 example_bracha87Fig4 example_bkr94acs
-	rm -f test_bracha87 test_bkr94acs test_predicates
+	rm -f test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox
 
 clobber: clean
 	rm -f bracha87Fig1.c bracha87Fig3.c bracha87Fig4.c bkr94acsRules.c

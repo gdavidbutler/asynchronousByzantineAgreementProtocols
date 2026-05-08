@@ -1967,6 +1967,175 @@ testExhausted(
   free(a);
 }
 
+/*
+ * White-box: bkr94acsActIdentity field placement and outCap guard.
+ *
+ * Black-box A3 covers the same surface; this test guards the
+ * implementation against regressions specifically:
+ *   - PROP_SEND output bytes [2]/[3] are zero regardless of the
+ *     input act's round/broadcaster fields (defensive normalization
+ *     for wire-tag stability — see bkr94acs.h ActIdentity prose).
+ *   - CON_SEND carries all five bytes from the act struct.
+ *   - Non-wire acts (BA_DECIDED, COMPLETE, BA_EXHAUSTED) return 0.
+ *   - outCap < BKR94ACS_ACT_IDENTITY_LEN returns 0.
+ */
+static void
+testActIdentityFields(
+  void
+){
+  struct bkr94acsAct act;
+  unsigned char buf[BKR94ACS_ACT_IDENTITY_LEN + 4];
+  unsigned int n;
+
+  printf("\n  bkr94acsActIdentity field placement:\n");
+
+  /* PROP_SEND with deliberately non-zero round/broadcaster: output
+   * MUST zero them (defensive normalization). */
+  memset(&act, 0, sizeof (act));
+  act.act = BKR94ACS_ACT_PROP_SEND;
+  act.origin = 7;
+  act.round = 9;
+  act.broadcaster = 5;
+  act.type = BRACHA87_ECHO;
+  n = bkr94acsActIdentity(&act, buf, sizeof (buf));
+  check("ActIdentity PROP_SEND: returns IDENTITY_LEN",
+        n == BKR94ACS_ACT_IDENTITY_LEN);
+  check("ActIdentity PROP_SEND: byte 0 == act",
+        buf[0] == BKR94ACS_ACT_PROP_SEND);
+  check("ActIdentity PROP_SEND: byte 1 == origin",
+        buf[1] == 7);
+  check("ActIdentity PROP_SEND: byte 2 == 0 (round zeroed)",
+        buf[2] == 0);
+  check("ActIdentity PROP_SEND: byte 3 == 0 (broadcaster zeroed)",
+        buf[3] == 0);
+  check("ActIdentity PROP_SEND: byte 4 == type",
+        buf[4] == BRACHA87_ECHO);
+
+  /* CON_SEND fills all five bytes. */
+  memset(&act, 0, sizeof (act));
+  act.act = BKR94ACS_ACT_CON_SEND;
+  act.origin = 3;
+  act.round = 5;
+  act.broadcaster = 2;
+  act.type = BRACHA87_READY;
+  n = bkr94acsActIdentity(&act, buf, sizeof (buf));
+  check("ActIdentity CON_SEND: returns IDENTITY_LEN",
+        n == BKR94ACS_ACT_IDENTITY_LEN);
+  check("ActIdentity CON_SEND: byte 0 == act",
+        buf[0] == BKR94ACS_ACT_CON_SEND);
+  check("ActIdentity CON_SEND: byte 1 == origin",
+        buf[1] == 3);
+  check("ActIdentity CON_SEND: byte 2 == round",
+        buf[2] == 5);
+  check("ActIdentity CON_SEND: byte 3 == broadcaster",
+        buf[3] == 2);
+  check("ActIdentity CON_SEND: byte 4 == type",
+        buf[4] == BRACHA87_READY);
+
+  /* Non-wire acts: returns 0. */
+  memset(&act, 0, sizeof (act));
+  act.act = BKR94ACS_ACT_BA_DECIDED;
+  check("ActIdentity BA_DECIDED: returns 0",
+        bkr94acsActIdentity(&act, buf, sizeof (buf)) == 0);
+  act.act = BKR94ACS_ACT_COMPLETE;
+  check("ActIdentity COMPLETE: returns 0",
+        bkr94acsActIdentity(&act, buf, sizeof (buf)) == 0);
+  act.act = BKR94ACS_ACT_BA_EXHAUSTED;
+  check("ActIdentity BA_EXHAUSTED: returns 0",
+        bkr94acsActIdentity(&act, buf, sizeof (buf)) == 0);
+
+  /* outCap < IDENTITY_LEN: contractual guard. */
+  act.act = BKR94ACS_ACT_PROP_SEND;
+  check("ActIdentity outCap < LEN: returns 0",
+        bkr94acsActIdentity(&act, buf,
+                            BKR94ACS_ACT_IDENTITY_LEN - 1) == 0);
+}
+
+/*
+ * White-box: bkr94acsProposalValue ACCEPT-gate transition for a
+ * non-self origin.
+ *
+ * Pre-Rule-1: returns NULL (no flags set).
+ * Post-Rule-1 (ECHOED only, no ACCEPT yet): returns NULL.  This is
+ *   the regression for the recent .c tightening — pre-change the
+ *   function returned the ECHOED-stored value, exposing potentially
+ *   Byzantine-equivocated bytes that Bracha Lemma 2 doesn't protect.
+ * Post-Rule-6 (ACCEPT): returns the accepted value.
+ *
+ * For self-origin: ORIGIN bit (set by Propose) gates non-null even
+ * before ACCEPT, per the header's "or, for self-origin, not yet
+ * proposed" carve-out.
+ */
+static void
+testProposalValueGate(
+  void
+){
+  struct bkr94acs *a;
+  unsigned long sz;
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, MAX_PHASES)];
+  unsigned char val;
+  unsigned char sender;
+
+  printf("\n  bkr94acsProposalValue ACCEPT-gate:\n");
+
+  /* n=4, t=1, vLen=1, self=0 */
+  sz = bkr94acsSz(3, 0, MAX_PHASES);
+  a = (struct bkr94acs *)calloc(1, sz);
+  if (!a) {
+    check("ProposalValueGate alloc", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, MAX_PHASES, 0, testCoin, 0);
+
+  /* Pre-input: no flags set on any Fig1 → ProposalValue returns NULL
+   * for both self and non-self origins. */
+  check("ProposalValueGate: pre-input non-self returns NULL",
+        bkr94acsProposalValue(a, 1) == 0);
+  check("ProposalValueGate: pre-Propose self returns NULL",
+        bkr94acsProposalValue(a, 0) == 0);
+
+  /* Feed INITIAL from peer 1 to peer 0 for origin=1.  Rule 1 fires:
+   * peer 0's Fig1 origin=1 sets ECHOED, emits ECHO_ALL.  ACCEPTED is
+   * NOT yet set (no ready cascade).
+   *
+   * Pre-tightening (.c bug): ProposalValue returned the ECHOED-
+   * stored 0xC1 here, exposing pre-Lemma-2 bytes to callers.
+   * Post-tightening (current): returns NULL until ACCEPT. */
+  val = 0xC1;
+  bkr94acsProposalInput(a, /*origin=*/1, BRACHA87_INITIAL,
+                        /*from=*/1, &val, out);
+
+  check("ProposalValueGate: ECHOED-only non-self returns NULL "
+        "(post-tightening regression)",
+        bkr94acsProposalValue(a, 1) == 0);
+
+  /* Drive Rule 5 then Rule 6 by feeding 3 distinct READY/v messages.
+   * Rule 5 (echoed && rd>=t+1=2): sender 2 trips it, READY emitted.
+   * Rule 6 (rdsent && rd>=2t+1=3): sender 3 trips it, ACCEPT. */
+  for (sender = 1; sender <= 3; ++sender)
+    bkr94acsProposalInput(a, /*origin=*/1, BRACHA87_READY,
+                          sender, &val, out);
+
+  check("ProposalValueGate: post-ACCEPT non-self returns value",
+        bkr94acsProposalValue(a, 1) != 0);
+  if (bkr94acsProposalValue(a, 1))
+    check("ProposalValueGate: post-ACCEPT value bytes match",
+          bkr94acsProposalValue(a, 1)[0] == 0xC1);
+
+  /* Self-origin (ORIGIN-bit carve-out): pre-Propose returned NULL
+   * above; post-Propose returns the value before any ACCEPT. */
+  val = 0xA0;
+  bkr94acsPropose(a, &val, out);
+
+  check("ProposalValueGate: post-Propose self returns value (ORIGIN bit)",
+        bkr94acsProposalValue(a, 0) != 0);
+  if (bkr94acsProposalValue(a, 0))
+    check("ProposalValueGate: post-Propose self value matches",
+          bkr94acsProposalValue(a, 0)[0] == 0xA0);
+
+  free(a);
+}
+
 int
 main(
   void
@@ -1994,6 +2163,8 @@ main(
   testBprByzantineSilent();
   testBprHighDrop();
   testExhausted();
+  testActIdentityFields();
+  testProposalValueGate();
 
   free(MsgQ);
 
