@@ -1045,10 +1045,8 @@ main(
      * terminated with output 1".  In the n=3t+1 regime that's n-t.
      * The HoneyBadger optimization uses Fig1-ACCEPT count instead;
      * BKR94ACS.txt and bkr94acs.h's own commentary flag this as a
-     * deviation (see CLAUDE.md: "the two coincide in benign runs but
-     * diverge under asynchrony/Byzantine scheduling, and only the
-     * decide-1 trigger satisfies Part A case (i) of the BKR94 Lemma 2
-     * proof").
+     * deviation (only the decide-1 trigger satisfies Part A case (i)
+     * of the BKR94 Lemma 2 proof").
      *
      * Construction (n=4 t=1, single peer P0): deliver a complete
      * proposal-message cascade for origins 0/1/2 (PROP_SEND traffic
@@ -1380,10 +1378,9 @@ main(
   {
     /* High-loss network: 50% of every emitted wire is dropped at
      * source.  The protocol's only mechanism for recovering is BPR
-     * replay via Pump (per CLAUDE.md: "BPR is the ONLY mechanism
-     * that guarantees eventual delivery").  Convergence under loss
-     * exercises the replay rules (ORIGIN → INITIAL forever, ECHOED
-     * → ECHO forever, RDSENT → READY forever) end-to-end. */
+     * replay via Pump.  Convergence under loss exercises the replay
+     * rules (ORIGIN → INITIAL forever, ECHOED → ECHO forever,
+     * RDSENT → READY forever) end-to-end. */
     unsigned int n = 4, t = 1, vLen = 1, mp = 10;
     unsigned int maxPumpActs;
     unsigned int monotoneViolations;
@@ -1482,9 +1479,8 @@ main(
      * so neither the >2t case (i) nor the >t case (ii) of Fig4
      * step 3 fires.  Fig4 returns BRACHA87_EXHAUSTED.  BKR94 surfaces
      * BKR94ACS_ACT_BA_EXHAUSTED exactly once, sets baDecision[0]=0xFE,
-     * and never sets a->complete (per Implementation Pitfall #12 in
-     * CLAUDE.md, no unilateral substitute is safe — Part C of Lemma 2
-     * agreement would break). */
+     * and never sets a->complete (no unilateral substitute is safe —
+     * Part C of Lemma 2 agreement would break). */
     unsigned long sz;
     struct bkr94acs *a;
     struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PEERS, 1)];

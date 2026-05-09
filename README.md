@@ -1,5 +1,7 @@
 # asynchronousByzantineAgreementProtocols
 
+Generated with Claude Code (https://claude.ai/code)
+
 A C library implementing Gabriel Bracha's 1987 paper (Figures 1, 3, and 4 as composable pure state machines; Figure 2 captured for paper completeness and subsumed by Figure 3), plus the BKR94 Asynchronous Common Subset (ACS) protocol built from them.
 
 ## Overview
