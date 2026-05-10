@@ -8,7 +8,7 @@
  * Verifies:
  *   Agreement  — all honest peers decide the same subset
  *   Validity   — subset contains at least n-t origins
- *   Totality   — all BAs decide (a->complete becomes non-zero)
+ *   Totality   — all BAs decide (BKR94ACS_F_COMPLETE flag set)
  *   Values     — accepted proposal values match what was proposed
  *   Ordering   — deterministic sort produces identical order at each peer
  */
@@ -198,7 +198,7 @@ runAcs(
      * reach peers still working on some BAs.  Skipping replicates
      * the post-decide stall the library itself was fixed to avoid
      * (see bkr94acs.c bkr94acsConsensusInput comment on
-     * a->complete).
+     * BKR94ACS_F_COMPLETE).
      */
     oldTail = Qtail;
 
@@ -241,7 +241,7 @@ runAcs(
 
   /* Collect results */
   for (i = 0; i < n; ++i) {
-    results[i].complete = peers[i]->complete;
+    results[i].complete = (peers[i]->flags & BKR94ACS_F_COMPLETE) ? 1 : 0;
     results[i].subsetCnt = bkr94acsSubset(peers[i], results[i].subset);
   }
 
@@ -529,7 +529,7 @@ testValues(
 
     m = &MsgQ[Qhead++];
     st = peers[m->to];
-    if (st->complete)
+    if (st->flags & BKR94ACS_F_COMPLETE)
       continue;
 
     if (m->cls == BKR94ACS_CLS_PROPOSAL) {
@@ -572,7 +572,7 @@ testValues(
     unsigned char subset[MAX_PEERS];
     unsigned int cnt;
 
-    check("values: complete", peers[i]->complete);
+    check("values: complete", peers[i]->flags & BKR94ACS_F_COMPLETE);
     cnt = bkr94acsSubset(peers[i], subset);
     for (j = 0; j < cnt; ++j) {
       const unsigned char *pv;
@@ -855,7 +855,8 @@ testPostDecideContinuation(
 /*  This test pins the corrected semantics by driving all N Fig1          */
 /*  instances to ACCEPT on a single peer via bkr94acsProposalInput and    */
 /*  asserting:                                                            */
-/*    - a->threshold stays 0 after each accept (step 2 not fired),        */
+/*    - BKR94ACS_F_THRESHOLD stays clear after each accept (step 2 not    */
+/*      fired),                                                           */
 /*    - no BKR94ACS_ACT_CON_SEND with conValue=0 comes out of the         */
 /*      proposal path (no vote-0 fanout),                                 */
 /*    - voted[j] == BKR94ACS_VOTE_ONE for every j (step 1 fired per       */
@@ -943,7 +944,8 @@ testStepTwoTrigger(
      * (origin == 2 here) and the vote-0 fanout fired for the one
      * still-un-voted origin.
      */
-    check("proposal accepts don't fire step 2", a->threshold == 0);
+    check("proposal accepts don't fire step 2",
+          (a->flags & BKR94ACS_F_THRESHOLD) == 0);
   }
 
   check("no vote-0 emitted from proposal path", voteZeroSeen == 0);
@@ -1198,7 +1200,7 @@ testBpr(
       /* Idle quorum check */
       progress = 0;
       for (p = 0; p < 4; ++p)
-        if (!peers[p]->complete) {
+        if (!(peers[p]->flags & BKR94ACS_F_COMPLETE)) {
           progress = 1;
           break;
         }
@@ -1248,7 +1250,7 @@ testBpr(
     }
 
     for (p = 0; p < 4; ++p) {
-      results[p].complete = peers[p]->complete;
+      results[p].complete = (peers[p]->flags & BKR94ACS_F_COMPLETE) ? 1 : 0;
       results[p].subsetCnt = bkr94acsSubset(peers[p], results[p].subset);
     }
 
@@ -1586,7 +1588,7 @@ testBprByzantineSilent(
     /* Idle quorum on honest peers */
     progress = 0;
     for (p = 0; p < 3; ++p)
-      if (!peers[p]->complete) {
+      if (!(peers[p]->flags & BKR94ACS_F_COMPLETE)) {
         progress = 1;
         break;
       }
@@ -1634,7 +1636,7 @@ testBprByzantineSilent(
   }
 
   for (p = 0; p < 3; ++p) {
-    results[p].complete = peers[p]->complete;
+    results[p].complete = (peers[p]->flags & BKR94ACS_F_COMPLETE) ? 1 : 0;
     results[p].subsetCnt = bkr94acsSubset(peers[p], results[p].subset);
   }
 
@@ -1752,7 +1754,7 @@ runPumpOnlyE2e(
 
     progress = 0;
     for (p = 0; p < 4; ++p)
-      if (!peers[p]->complete) {
+      if (!(peers[p]->flags & BKR94ACS_F_COMPLETE)) {
         progress = 1;
         break;
       }
@@ -1801,7 +1803,7 @@ runPumpOnlyE2e(
   }
 
   for (p = 0; p < 4; ++p) {
-    results[p].complete = peers[p]->complete;
+    results[p].complete = (peers[p]->flags & BKR94ACS_F_COMPLETE) ? 1 : 0;
     results[p].subsetCnt = bkr94acsSubset(peers[p], results[p].subset);
   }
 
@@ -1943,8 +1945,8 @@ testExhausted(
         exhaustedSeen == 1);
   check("baDecision[0] == 0xFE (exhausted sentinel)",
         bkr94acsBaDecision(a, 0) == 0xFE);
-  check("a->complete remains 0 after EXHAUSTED",
-        a->complete == 0);
+  check("BKR94ACS_F_COMPLETE remains clear after EXHAUSTED",
+        (a->flags & BKR94ACS_F_COMPLETE) == 0);
 
   /*
    * After EXHAUSTED, the per-origin pump gate keeps pumping
@@ -1962,7 +1964,7 @@ testExhausted(
          "baDecision=0x%02X; complete=%u\n",
          exhaustedSeen,
          (unsigned)bkr94acsBaDecision(a, 0),
-         (unsigned)a->complete);
+         (unsigned)((a->flags & BKR94ACS_F_COMPLETE) ? 1 : 0));
 
   free(a);
 }

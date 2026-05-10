@@ -392,7 +392,7 @@ bkr94acsProposalInput(
    * Encoded: a->n = actual_N - 1, so valid peer indices are
    * 0..a->n inclusive.  "> a->n" rejects actual_N and above.
    *
-   * Do NOT short-circuit on a->complete.  This peer has locally
+   * Do NOT short-circuit on BKR94ACS_F_COMPLETE.  This peer has locally
    * decided all N BAs, but other peers may still be working on
    * some BAs and depend on THIS peer's continued Fig1 echoes and
    * readys to reach their own n-t thresholds.  Bracha requires
@@ -438,7 +438,7 @@ bkr94acsProposalInput(
        */
       acsEvent = BKR94ACS_ACS_EVENT_Q;
       inputToBAj = bkr94acsVoted(a)[origin];
-      fanoutTriggered = a->threshold ? 1 : 0;
+      fanoutTriggered = (a->flags & BKR94ACS_F_THRESHOLD) ? 1 : 0;
       postCountOneAtNT = 0;
       postCountAllN = 0;
       doInput1 = 0;
@@ -506,7 +506,7 @@ bkr94acsConsensusInput(
    *    is gated by Fig4Round returning DECIDE, which fires exactly
    *    once per BA, so idempotence holds.
    *
-   * 2. We do NOT short-circuit on a->complete.  A locally-complete
+   * 2. We do NOT short-circuit on BKR94ACS_F_COMPLETE.  A locally-complete
    *    peer has decided all N BAs but other peers may still be
    *    working on some BAs.  Their Fig1 instances for (origin_X,
    *    round_Y, broadcaster_THIS) wait on THIS peer's continued
@@ -597,7 +597,7 @@ bkr94acsConsensusInput(
             ? BKR94ACS_ACS_EVENT_BA1
             : BKR94ACS_ACS_EVENT_BA0;
           inputToBAj = bkr94acsVoted(a)[origin];
-          fanoutTriggered = a->threshold ? 1 : 0;
+          fanoutTriggered = (a->flags & BKR94ACS_F_THRESHOLD) ? 1 : 0;
           postCountOneAtNT = a->nDecidedOne >= A_N(a) - a->t;
           postCountAllN = a->nDecided >= A_N(a);
           doInput1 = 0;
@@ -610,12 +610,12 @@ bkr94acsConsensusInput(
           if (doInput0Fanout) {
             unsigned int j;
 
-            a->threshold = 1;
+            a->flags |= BKR94ACS_F_THRESHOLD;
             for (j = 0; j < A_N(a); ++j)
               nact += bkr94acsVote(a, j, 0, &out[nact]);
           }
           if (doOutputSubset) {
-            a->complete = 1;
+            a->flags |= BKR94ACS_F_COMPLETE;
             out[nact].value = 0;
             out[nact].act = BKR94ACS_ACT_COMPLETE;
             out[nact].origin = 0;
@@ -749,7 +749,7 @@ bkr94acsSubset(
    * BKR94 Step 3 read: SubSet_i = { j : BA_j had output 1 }.
    * Lemma 2 Part A gives |SubSet| >= 2t+1 = n-t; Part C gives
    * cross-peer agreement on SubSet; Part D gives Q(j)=1 for every
-   * j in SubSet.  Caller must gate this on a->complete to
+   * j in SubSet.  Caller must gate this on (a->flags & BKR94ACS_F_COMPLETE) to
    * observe the final subset; a mid-run read reports the partial
    * set of decided-1 origins.
    */

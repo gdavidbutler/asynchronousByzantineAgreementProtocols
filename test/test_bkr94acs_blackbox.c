@@ -404,9 +404,10 @@ assertLemma2(
   unsigned int sz0, szI;
   unsigned int i, j;
 
-  /* Part B: all peers complete (a->complete is the public field). */
+  /* Part B: all peers complete (BKR94ACS_F_COMPLETE flag in a->flags). */
   for (i = 0; i < nAct; ++i)
-    CHECK(peers[i]->complete != 0, "Lemma 2 Part B: peer completed");
+    CHECK(peers[i]->flags & BKR94ACS_F_COMPLETE,
+          "Lemma 2 Part B: peer completed");
 
   /* Part A: |SubSet| >= n - t for every peer. */
   sz0 = bkr94acsSubset(peers[0], subset0);
@@ -527,7 +528,7 @@ freeCluster(
 /*    2. Call bkr94acsPump once on every non-silent peer; emit acts.  */
 /*    3. Verify peer-level invariants (Pump act count <= MAX,         */
 /*       CommittedFig1Count monotone non-decreasing).                 */
-/*    4. Exit when all non-silent peers' a->complete is non-zero.     */
+/*    4. Exit when all non-silent peers carry BKR94ACS_F_COMPLETE.    */
 /*                                                                    */
 /*  Silent peer (-1 = none): never receives wires, never has its      */
 /*  Propose/Pump called, never appears in completion check.           */
@@ -632,7 +633,7 @@ runWithPump(
     for (i = 0; i < nAct; ++i) {
       if (silentPeer >= 0 && (int)i == silentPeer)
         continue;
-      if (peers[i]->complete == 0) {
+      if (!(peers[i]->flags & BKR94ACS_F_COMPLETE)) {
         allComplete = 0;
         break;
       }
@@ -735,7 +736,8 @@ main(
 
     bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
 
-    CHECK(a->complete == 0, "fresh: complete == 0");
+    CHECK((a->flags & BKR94ACS_F_COMPLETE) == 0,
+          "fresh: BKR94ACS_F_COMPLETE clear");
     CHECK(bkr94acsCommittedFig1Count(a) == 0,
           "fresh: CommittedFig1Count == 0");
     for (j = 0; j < 4; ++j)
@@ -1408,7 +1410,7 @@ main(
      * so neither the >2t case (i) nor the >t case (ii) of Fig4
      * step 3 fires.  Fig4 returns BRACHA87_EXHAUSTED.  BKR94 surfaces
      * BKR94ACS_ACT_BA_EXHAUSTED exactly once, sets baDecision[0]=0xFE,
-     * and never sets a->complete (no unilateral substitute is safe —
+     * and never sets BKR94ACS_F_COMPLETE (no unilateral substitute is safe —
      * Part C of Lemma 2 agreement would break). */
     unsigned long sz;
     struct bkr94acs *a;
@@ -1431,8 +1433,8 @@ main(
     CHECK(exhaustedSeen == 1, "D1: BA_EXHAUSTED emitted exactly once");
     CHECK(bkr94acsBaDecision(a, 0) == 0xFE,
           "D1: baDecision[0] == 0xFE (exhausted sentinel)");
-    CHECK(a->complete == 0,
-          "D1: a->complete remains 0 (no unilateral substitute)");
+    CHECK((a->flags & BKR94ACS_F_COMPLETE) == 0,
+          "D1: BKR94ACS_F_COMPLETE remains clear (no unilateral substitute)");
 
     /* Subsequent consensus input for the exhausted origin must NOT
      * re-emit BA_EXHAUSTED. */
@@ -1595,14 +1597,14 @@ main(
         }
         allComplete = 1;
         for (p = 1; p < n; ++p)
-          if (peers[p]->complete == 0) { allComplete = 0; break; }
+          if (!(peers[p]->flags & BKR94ACS_F_COMPLETE)) { allComplete = 0; break; }
         if (allComplete) break;
       }
       free(out);
 
       /* Honest peers (1, 2, 3) all completed. */
       for (p = 1; p < n; ++p)
-        CHECK(peers[p]->complete != 0,
+        CHECK(peers[p]->flags & BKR94ACS_F_COMPLETE,
               "E1: honest peer completes despite equivocating proposer");
 
       /* Honest peers agree on SubSet (Lemma 2 Part C). */

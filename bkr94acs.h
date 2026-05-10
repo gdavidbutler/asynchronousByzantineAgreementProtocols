@@ -146,6 +146,10 @@ struct bkr94acsAct {
 /*  BKR94 ACS state                                                      */
 /*************************************************************************/
 
+/* State flags (bitmap; same idiom as BRACHA87_F1_* / BRACHA87_F4_*) */
+#define BKR94ACS_F_THRESHOLD 0x01 /* BKR94 Step 2 has fired (vote-0 fanout done) */
+#define BKR94ACS_F_COMPLETE  0x02 /* all N BAs decided (Step 3 complete) */
+
 struct bkr94acs {
   unsigned char n;          /* process count encoding: actual = n + 1 */
   unsigned char t;          /* max Byzantine (n + 1 > 3t) */
@@ -154,15 +158,13 @@ struct bkr94acs {
   unsigned char self;       /* this peer's index (needed for consensus routing) */
   unsigned char nDecidedOne;/* BKR94 Step 2 trigger: count of BAs decided with output 1 */
   unsigned char nDecided;   /* BKR94 Step 3 trigger: count of BAs that have decided */
-  unsigned char threshold;  /* 1 iff BKR94 Step 2 has fired (vote-0 fanout done) */
-  unsigned char complete;   /* 1 iff all N BAs decided (Step 3 complete) */
+  unsigned char flags;      /* BKR94ACS_F_THRESHOLD / BKR94ACS_F_COMPLETE */
   /*
-   * Pad data[] to a pointer-aligned offset so Fig4 instances carved
-   * out of data[] are correctly aligned for their function-pointer
-   * fields.  Header is 9 bytes; pad 7 bytes to reach offset 16, a
-   * multiple of sizeof (void *) on all common 32- and 64-bit ABIs.
+   * Header is exactly 8 bytes — a multiple of sizeof (void *) on all
+   * common 32- and 64-bit ABIs — so data[] starts at the alignment
+   * required by the function-pointer fields in the Fig1/Fig4
+   * instances carved out of it.  No pad needed.
    */
-  unsigned char pad[7];
   unsigned char data[1];    /* variable: see bkr94acsSz */
 };
 
@@ -300,7 +302,7 @@ bkr94acsConsensusInput(
  * Query: get the decided common subset.
  * Returns count of included origins.
  * Fills origins[] with the included origin indices (caller provides n entries).
- * Only valid after a->complete is non-zero.
+ * Only valid after (a->flags & BKR94ACS_F_COMPLETE) is non-zero.
  */
 unsigned int
 bkr94acsSubset(

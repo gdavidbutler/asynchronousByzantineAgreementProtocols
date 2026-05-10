@@ -370,7 +370,7 @@ main(
      * reach peers still working on some BAs.  Skipping replicates
      * the post-decide stall the library itself was fixed to avoid
      * (see bkr94acs.c bkr94acsConsensusInput comment on
-     * a->complete).  The simulation loop terminates when the
+     * BKR94ACS_F_COMPLETE).  The simulation loop terminates when the
      * message queue drains, not when any one peer reaches complete.
      */
     oldTail = Qtail;
@@ -543,7 +543,7 @@ main(
       unsigned int cnt;
       const char *sorted[MAX_PEERS];
 
-      if (!peers[i]->complete) {
+      if (!(peers[i]->flags & BKR94ACS_F_COMPLETE)) {
         /*
          * Distinguish exhaustion from other incompleteness causes:
          * the library exposes 0xFE in bkr94acsBaDecision for BAs
