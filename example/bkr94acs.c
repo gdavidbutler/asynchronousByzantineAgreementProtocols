@@ -314,7 +314,7 @@ main(
   /*  N proposal broadcasts + N consensus pipelines, each with rounds.    */
   /*----------------------------------------------------------------------*/
 
-  if (qAlloc(64u * n * n * (unsigned int)MAX_PHASES * 3 + 1024)) {
+  if (qAlloc(64u * n * n * (unsigned int)MAX_PHASES * BRACHA87_ROUNDS_PER_PHASE + 1024)) {
     fprintf(stderr, "queue allocation failed\n");
     exitCode = 1;
     goto cleanup;

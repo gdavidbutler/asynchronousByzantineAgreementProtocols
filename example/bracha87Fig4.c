@@ -310,7 +310,7 @@ main(
   /*  Allocate per-process state                                          */
   /*----------------------------------------------------------------------*/
 
-  maxRounds = (unsigned int)MAX_PHASES * 3;
+  maxRounds = (unsigned int)MAX_PHASES * BRACHA87_ROUNDS_PER_PHASE;
   f1sz = bracha87Fig1Sz(n - 1, 0);  /* n-1 is the encoded n; vLen=0 => 1 byte */
 
   memset(peers, 0, sizeof (peers));

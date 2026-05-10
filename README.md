@@ -297,10 +297,11 @@ Test `acs->flags & BKR94ACS_F_COMPLETE` to check if all N BAs have decided (the 
 
 For multi-value agreement, use `bkr94acs` and the application loop shown in the **Bracha Phase Re-emitter (BPR)** section above — it manages all Fig 1 instances internally and provides `bkr94acsPump` for BPR replays. See `example/bkr94acs.c` for a runnable version of this pattern.
 
-For raw binary consensus (Fig 1 + Fig 3 + Fig 4 directly), the high-level Fig 4 entry points collapse the cascade into a single Input call.  The caller owns the Fig 1 array indexed by `round * (n+1) + origin`.  See `example/bracha87Fig4.c` for a runnable version.
+For raw binary consensus (Fig 1 + Fig 3 + Fig 4 directly), the high-level Fig 4 entry points collapse the cascade into a single Input call.  The caller owns the Fig 1 array indexed by `round * (n+1) + origin`, sized `maxPhases * BRACHA87_ROUNDS_PER_PHASE * (n+1)` (Fig 4 is keyed by phase per the paper; Fig 1 by round; the constant names the conversion).  See `example/bracha87Fig4.c` for a runnable version.
 
 ```c
 /* Per process: */
+unsigned int maxRounds = maxPhases * BRACHA87_ROUNDS_PER_PHASE;
 struct bracha87Fig1 *fig1[maxRounds * n];  /* one per (origin, round) */
 struct bracha87Fig4 *fig4;                 /* embeds Fig3 as fig4->fig3 */
 struct bracha87Pump pump;
@@ -350,9 +351,9 @@ The same Input + Pump shape applies at Fig 3 (`bracha87Fig3Origin` / `bracha87Fi
 | `n` | unsigned char | 1-256 (n+1) | Process count |
 | `t` | unsigned char | 0-85 | Max Byzantine faults; n+1 > 3t required |
 | `vLen` | unsigned char | 1-256 (vLen+1) | Value length in bytes |
-| `maxPhases` | unsigned char | 1-85 | 85 * 3 = 255 rounds fits in unsigned char |
+| `maxPhases` | unsigned char | 1-85 | `85 * BRACHA87_ROUNDS_PER_PHASE = 255` rounds fits in unsigned char |
 
-Round indices range from 0 to 3 * maxPhases - 1 (max 254).
+Round indices range from 0 to `BRACHA87_ROUNDS_PER_PHASE * maxPhases - 1` (max 254).  Fig 3 is keyed by round (paper's `round(k)`); Fig 4 by phase (paper's `Phase(i)` with sub-actions `3i+1, 3i+2, 3i+3`).  `BRACHA87_ROUNDS_PER_PHASE` (= 3) names the conversion at the boundary so callers do not write the bare `* 3` / `/ 3`.  The paper-vocabulary `(phase, subRound)` view of any `round` value is `phase = round / BRACHA87_ROUNDS_PER_PHASE`, `subRound = round % BRACHA87_ROUNDS_PER_PHASE`; Fig 4 also exposes `bracha87Fig4.phase` / `.subRound` directly for diagnostic use.
 
 ## Building
 

@@ -209,7 +209,8 @@ bkr94acsInit(
  *       + 1 (BA_DECIDED, fires at most once per BA)
  *       + N (BKR94 Step 2 vote-0 fanout, fires at most once per ACS)
  *       + 1 (COMPLETE, fires at most once per ACS instance)
- *   where M = maxPhases * 3 is the BA's round bound and N = n + 1.
+ *   where M = maxPhases * BRACHA87_ROUNDS_PER_PHASE is the BA's
+ *   round bound and N = n + 1.
  *   Bound: M + N + 4.
  *
  * Consensus case strictly dominates, so the unified bound is
@@ -217,7 +218,8 @@ bkr94acsInit(
  * is exact for the configured consensus, not the 85-phase ceiling.
  */
 #define BKR94ACS_MAX_ACTS(n, maxPhases) \
-  ((unsigned int)(maxPhases) * 3 + (unsigned int)(n) + 5)
+  ((unsigned int)(maxPhases) * BRACHA87_ROUNDS_PER_PHASE \
+   + (unsigned int)(n) + 5)
 
 /*
  * Maximum output actions from a single bkr94acsPump call.

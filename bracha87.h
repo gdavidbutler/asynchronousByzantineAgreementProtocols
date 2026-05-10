@@ -48,10 +48,20 @@
 #define BRACHA87_H
 
 /*
+ * Rounds per Figure 4 phase.  The paper writes Fig 4 as Phase(i) with
+ * sub-actions at rounds 3i, 3i+1, 3i+2 (0-based here; the paper uses
+ * 1-based 3i+1, 3i+2, 3i+3).  Fig 3 below is keyed by round; Fig 4
+ * above by phase.  This constant names the conversion so callers do
+ * not write the bare `* 3` / `/ 3`.
+ */
+#define BRACHA87_ROUNDS_PER_PHASE 3
+
+/*
  * Maximum phases for Figure 4 consensus.
- * Each phase uses 3 rounds. 85 * 3 = 255 rounds, which is
- * the maximum that fits in an unsigned char round count.
- * Round indices range from 0 to 3 * maxPhases - 1 (max 254).
+ * Each phase uses BRACHA87_ROUNDS_PER_PHASE rounds.  85 * 3 = 255
+ * rounds, which is the maximum that fits in an unsigned char round
+ * count.  Round indices range from 0 to
+ * BRACHA87_ROUNDS_PER_PHASE * maxPhases - 1 (max 254).
  */
 #define BRACHA87_MAX_PHASES 85
 
@@ -867,6 +877,14 @@ bracha87Fig3CommittedFig1Count(
 /*                                                                  */
 /*  Fig 4 binary value is 1 byte (with optional D_FLAG bit).        */
 /*  Caller's Fig 1 array uses vLen = 0 (1-byte values).             */
+/*                                                                  */
+/*  Fig 1 array sizing.  Fig 4 init takes maxPhases (paper's Fig 4  */
+/*  vocabulary); the underlying Fig 1 array follows Fig 3's round-  */
+/*  indexed convention.  Allocate                                   */
+/*    maxPhases * BRACHA87_ROUNDS_PER_PHASE * (n+1)                 */
+/*  instances of size bracha87Fig1Sz(n, 0), each initialized with   */
+/*  bracha87Fig1Init.  Indexing is fig1Array[round * (n+1) + origin] */
+/*  with round = phase * BRACHA87_ROUNDS_PER_PHASE + subRound.      */
 /*------------------------------------------------------------------*/
 
 #define BRACHA87_FIG4_MAX_ACTS 6
@@ -874,6 +892,14 @@ bracha87Fig3CommittedFig1Count(
 #define BRACHA87_FIG4_DECIDE     5
 #define BRACHA87_FIG4_EXHAUSTED  6
 
+/*
+ * .round is the Fig 1 broadcast round (single-byte wire identity).
+ * The paper's Fig 4 vocabulary is (phase, subRound):
+ *   phase    = round / BRACHA87_ROUNDS_PER_PHASE
+ *   subRound = round % BRACHA87_ROUNDS_PER_PHASE
+ * Both are also readable directly from the Fig 4 instance's
+ * struct fields (.phase, .subRound) for diagnostic use.
+ */
 struct bracha87Fig4Act {
   unsigned char act;            /* INITIAL_ALL/ECHO_ALL/READY_ALL/DECIDE/EXHAUSTED */
   unsigned char origin;

@@ -669,7 +669,7 @@ main(int argc, char **argv)
     /* Per peer, a Fig1 array of size maxRounds * (n+1).  We use   */
     /* maxPhases=4 to keep arrays small for Lemma 9.               */
 #define MP_LEMMA9   4
-#define MR_LEMMA9   (MP_LEMMA9 * 3)
+#define MR_LEMMA9   (MP_LEMMA9 * BRACHA87_ROUNDS_PER_PHASE)
     static unsigned char fig1Pool[N_ACT][MR_LEMMA9 * N_ACT][512];
     struct bracha87Fig4 *fig4[N_ACT];
     struct bracha87Fig1 *fig1Arr[N_ACT][MR_LEMMA9 * N_ACT];

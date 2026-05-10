@@ -2484,8 +2484,9 @@ testFig4DflagInjection(
 
 /*
  * Smoke-test that bracha87Fig4Init clamps maxPhases > BRACHA87_MAX_PHASES
- * to BRACHA87_MAX_PHASES (85).  Without the clamp, maxPhases * 3 wraps in
- * unsigned char and silently corrupts the embedded Fig3 size to 2 rounds.
+ * to BRACHA87_MAX_PHASES (85).  Without the clamp,
+ * maxPhases * BRACHA87_ROUNDS_PER_PHASE wraps in unsigned char and
+ * silently corrupts the embedded Fig3 size to 2 rounds.
  */
 static void
 testFig4MaxPhasesClamp(
@@ -2862,7 +2863,7 @@ simComposed(
   unsigned char firstDec;
   int decAgree;
 
-  maxRounds = (unsigned int)maxPhases * 3;
+  maxRounds = (unsigned int)maxPhases * BRACHA87_ROUNDS_PER_PHASE;
   f1sz = bracha87Fig1Sz(n - 1, 0);
 
   /* Allocate per-process state */
@@ -4434,7 +4435,7 @@ testFig4HighLevel(
   actualN  = 4;
   t        = 1;
   maxPhases = 5;
-  maxRounds = (unsigned int)maxPhases * 3u;
+  maxRounds = (unsigned int)maxPhases * BRACHA87_ROUNDS_PER_PHASE;
   f1sz = bracha87Fig1Sz(encodedN, 0);
   f4sz = bracha87Fig4Sz(encodedN, maxPhases);
 
