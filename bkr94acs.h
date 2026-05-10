@@ -142,34 +142,6 @@ struct bkr94acsAct {
   unsigned char broadcaster;  /* who initiated this Fig1 broadcast (CON_SEND) */
 };
 
-/*
- * Wire-uniqueness identity for transports that key reassembly
- * tables on a per-emission unique tag.
- *
- * Fills out[BKR94ACS_ACT_IDENTITY_LEN] with the protocol's
- * emission identity tuple [act, origin, round, broadcaster,
- * type] -- the minimal set of bytes that distinguishes one
- * lawful library emission from another.  PROP_SEND zeros round
- * and broadcaster (always 0 for proposals); CON_SEND fills all
- * five.  Non-wire acts (BA_DECIDED, COMPLETE) return 0.
- *
- * Callers append their own sender / seq / class-tag bytes to
- * disambiguate the same emission across sender peers and across
- * concurrent ACS instances.  Total tag size is application-
- * controlled; this helper produces only the library-owned slice.
- *
- * Returns BKR94ACS_ACT_IDENTITY_LEN on a wire-emitting act,
- * 0 otherwise (including outCap < BKR94ACS_ACT_IDENTITY_LEN).
- */
-#define BKR94ACS_ACT_IDENTITY_LEN 5
-
-unsigned int
-bkr94acsActIdentity(
-  const struct bkr94acsAct *
- ,unsigned char *           /* out: receives identity bytes */
- ,unsigned int              /* outCap: must be >= BKR94ACS_ACT_IDENTITY_LEN */
-);
-
 /*************************************************************************/
 /*  BKR94 ACS state                                                      */
 /*************************************************************************/

@@ -15,7 +15,6 @@
  *      - Sz / Init contract on a freshly allocated peer
  *      - Propose contract: act shape, ProposalValue round-trip,
  *        idempotency on repeated call
- *      - bkr94acsActIdentity field placement and outCap guard
  *      - Defensive nulls and out-of-range origin
  *
  *   B. Lemma 2 Parts A/B/C/D + paper-direct invariants
@@ -796,76 +795,6 @@ main(
     free(a);
   }
   a2_done: ;
-
-  /* ---------------------------------------------------------------- */
-  BANNER("A3: bkr94acsActIdentity field placement");
-  /* ---------------------------------------------------------------- */
-  {
-    /*
-     * Header contract: identity tuple is [act, origin, round,
-     * broadcaster, type].  "PROP_SEND zeros round and broadcaster
-     * (always 0 for proposals); CON_SEND fills all five."
-     *
-     * Reading: the output bytes at positions 2 and 3 are zero for
-     * PROP_SEND, regardless of the input act's round / broadcaster
-     * fields.  This is the strict-superset correct form — the
-     * function defensively normalizes its output so wire-reassembly
-     * tags remain consistent even if a future emission bug ever
-     * produced a PROP_SEND act with non-zero round / broadcaster.
-     */
-    struct bkr94acsAct act;
-    unsigned char buf[BKR94ACS_ACT_IDENTITY_LEN + 4];
-    unsigned int n;
-
-    /* PROP_SEND with deliberately non-zero round/broadcaster: output
-     * MUST zero them per the header. */
-    memset(&act, 0, sizeof (act));
-    act.act = BKR94ACS_ACT_PROP_SEND;
-    act.origin = 7;
-    act.round = 9;       /* per header: zeroed in output */
-    act.broadcaster = 5; /* per header: zeroed in output */
-    act.type = BRACHA87_ECHO;
-    n = bkr94acsActIdentity(&act, buf, sizeof (buf));
-    CHECK(n == BKR94ACS_ACT_IDENTITY_LEN, "PROP_SEND: returns IDENTITY_LEN");
-    CHECK(buf[0] == BKR94ACS_ACT_PROP_SEND, "PROP_SEND[0] == act");
-    CHECK(buf[1] == 7, "PROP_SEND[1] == origin");
-    CHECK(buf[2] == 0, "PROP_SEND[2] == 0 (round zeroed by Identity)");
-    CHECK(buf[3] == 0, "PROP_SEND[3] == 0 (broadcaster zeroed by Identity)");
-    CHECK(buf[4] == BRACHA87_ECHO, "PROP_SEND[4] == type");
-
-    /* CON_SEND fills all five. */
-    memset(&act, 0, sizeof (act));
-    act.act = BKR94ACS_ACT_CON_SEND;
-    act.origin = 3;
-    act.round = 5;
-    act.broadcaster = 2;
-    act.type = BRACHA87_READY;
-    n = bkr94acsActIdentity(&act, buf, sizeof (buf));
-    CHECK(n == BKR94ACS_ACT_IDENTITY_LEN, "CON_SEND: returns IDENTITY_LEN");
-    CHECK(buf[0] == BKR94ACS_ACT_CON_SEND, "CON_SEND[0] == act");
-    CHECK(buf[1] == 3, "CON_SEND[1] == origin");
-    CHECK(buf[2] == 5, "CON_SEND[2] == round");
-    CHECK(buf[3] == 2, "CON_SEND[3] == broadcaster");
-    CHECK(buf[4] == BRACHA87_READY, "CON_SEND[4] == type");
-
-    /* Non-wire acts: returns 0. */
-    memset(&act, 0, sizeof (act));
-    act.act = BKR94ACS_ACT_BA_DECIDED;
-    CHECK(bkr94acsActIdentity(&act, buf, sizeof (buf)) == 0,
-          "BA_DECIDED: Identity returns 0");
-    act.act = BKR94ACS_ACT_COMPLETE;
-    CHECK(bkr94acsActIdentity(&act, buf, sizeof (buf)) == 0,
-          "COMPLETE: Identity returns 0");
-    act.act = BKR94ACS_ACT_BA_EXHAUSTED;
-    CHECK(bkr94acsActIdentity(&act, buf, sizeof (buf)) == 0,
-          "BA_EXHAUSTED: Identity returns 0");
-
-    /* outCap < IDENTITY_LEN: contractual guard, returns 0. */
-    act.act = BKR94ACS_ACT_PROP_SEND;
-    CHECK(bkr94acsActIdentity(&act, buf,
-                              BKR94ACS_ACT_IDENTITY_LEN - 1) == 0,
-          "outCap < IDENTITY_LEN: Identity returns 0");
-  }
 
   /* ---------------------------------------------------------------- */
   BANNER("A4: Defensive nulls and out-of-range origin");

@@ -1014,34 +1014,6 @@ bkr94acsPump(
 /*  Diagnostic accessors                                                  */
 /*------------------------------------------------------------------------*/
 
-/*
- * Identity bytes for transports that need a per-emission wire
- * correlator.  See bkr94acs.h for the field-usage contract.
- */
-unsigned int
-bkr94acsActIdentity(
-  const struct bkr94acsAct *act
- ,unsigned char *out
- ,unsigned int outCap
-){
-  if (!act || !out || outCap < BKR94ACS_ACT_IDENTITY_LEN)
-    return (0);
-  if (act->act != BKR94ACS_ACT_PROP_SEND
-   && act->act != BKR94ACS_ACT_CON_SEND)
-    return (0);
-  out[0] = act->act;
-  out[1] = act->origin;
-  if (act->act == BKR94ACS_ACT_PROP_SEND) {
-    out[2] = 0;
-    out[3] = 0;
-  } else {
-    out[2] = act->round;
-    out[3] = act->broadcaster;
-  }
-  out[4] = act->type;
-  return (BKR94ACS_ACT_IDENTITY_LEN);
-}
-
 unsigned char
 bkr94acsBaDecision(
   const struct bkr94acs *a
