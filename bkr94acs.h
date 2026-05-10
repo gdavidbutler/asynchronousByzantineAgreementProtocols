@@ -178,15 +178,7 @@ bkr94acsSz(
  ,unsigned int             /* maxPhases: per binary consensus instance */
 );
 
-/*
- * Initialize a BKR94 ACS instance. Caller has allocated bkr94acsSz bytes.
- *
- * coin must be non-null. For Bracha's t < n/3 regime a per-peer
- * local source (e.g. arc4random) is appropriate; see Mostefaoui,
- * Perrin, Weibel (PODC 2024). A deterministic coin such as
- * phase%2 is safe only under a non-adversarial scheduler and is
- * not supplied as a default.
- */
+/* Initialize a BKR94 ACS instance. Caller has allocated bkr94acsSz bytes. */
 void
 bkr94acsInit(
   struct bkr94acs *

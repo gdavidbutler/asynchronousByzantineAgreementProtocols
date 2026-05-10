@@ -60,7 +60,7 @@
 
 #define MAX_PEERS  16
 #define MAX_PHASES 10
-#define MAX_VLEN   255  /* max proposal bytes (including \0) */
+#define MAX_VLEN   256  /* max proposal bytes (including \0); bracha87 vLen encoding 255 */
 
 /*------------------------------------------------------------------------*/
 /*  Message queue — simulated network                                     */
@@ -278,7 +278,7 @@ main(
 
     len = (unsigned int)strlen(argv[arg]) + 1; /* include \0 */
     if (len > MAX_VLEN) {
-      fprintf(stderr, "proposal too long: %s (max %d bytes)\n",
+      fprintf(stderr, "proposal too long: %s (max %d chars + \\0)\n",
               argv[arg], MAX_VLEN - 1);
       return (1);
     }

@@ -52,8 +52,6 @@
  * Each phase uses 3 rounds. 85 * 3 = 255 rounds, which is
  * the maximum that fits in an unsigned char round count.
  * Round indices range from 0 to 3 * maxPhases - 1 (max 254).
- * The protocol decides in expected O(1) phases with a random coin;
- * 85 phases is far beyond any practical execution.
  */
 #define BRACHA87_MAX_PHASES 85
 
@@ -498,7 +496,6 @@ bracha87Fig3RoundComplete(
 /*                                                                       */
 /*  maxPhases <= BRACHA87_MAX_PHASES (85).                               */
 /*  85 * 3 = 255 rounds fits in unsigned char round count (0..254).      */
-/*  The protocol decides in expected O(1) phases with a random coin.     */
 /*  If all phases are exhausted without decision, Fig4Round returns      */
 /*  BRACHA87_EXHAUSTED.                                                  */
 /*                                                                       */
@@ -581,11 +578,6 @@ bracha87Fig4Sz(
  * Even on input traces where case (iii) never fires, callers must
  * supply a valid coin: the library does not branch on a null coin
  * pointer, and supplying 0 is undefined behavior.
- *
- * For caller-side coin guidance (local vs common vs MPW alternatives,
- * adversarial vs reproducibility tradeoffs) see the project README's
- * "Local coin vs common coin" section.  The bundled examples use a
- * deterministic alternating coin for demo reproducibility only.
  */
 void
 bracha87Fig4Init(
