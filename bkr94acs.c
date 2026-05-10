@@ -47,8 +47,10 @@
  * Pointer alignment for carving Fig1/Fig4 instances out of a single
  * buffer.  bracha87Fig4 begins with function-pointer fields, and
  * bracha87Fig1 begins with 2-byte shorts; rounding up to pointer
- * alignment subsumes both.  struct bkr94acs.pad[3] pairs with this
- * to place a->data at a pointer-aligned offset from a.
+ * alignment subsumes both.  The struct bkr94acs header is 8 bytes
+ * so a->data is already pointer-aligned without an explicit pad
+ * field; the BKR94ACS_ALIGN_UP applications below pad each carved
+ * sub-region up to the same boundary.
  */
 #define BKR94ACS_ALIGN_P  ((unsigned long)sizeof (void *))
 #define BKR94ACS_ALIGN_UP(x)  (((unsigned long)(x) + BKR94ACS_ALIGN_P - 1) \
