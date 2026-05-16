@@ -66,7 +66,7 @@
 /*    conNextRound[N]    per-origin next consensus round to check         */
 /*    (alignment pad to pointer alignment)                                */
 /*    propFig1 area      N * propF1Sz bytes                               */
-/*    conPipeline area   N * (MR * N * conF1Sz + fig4Sz) bytes            */
+/*    conPipeline area   N * (MR * N * conF1Sz + conF4Sz) bytes            */
 /*------------------------------------------------------------------------*/
 
 /* Per-origin vote status */
@@ -135,7 +135,7 @@ conF1Sz(
 }
 
 static unsigned long
-fig4Sz(
+conF4Sz(
   const struct bkr94acs *a
 ){
   return (BKR94ACS_ALIGN_UP(bracha87Fig4Sz(a->n, a->maxPhases)));
@@ -178,7 +178,7 @@ static unsigned long
 conPipelineSz(
   const struct bkr94acs *a
 ){
-  return ((unsigned long)maxRounds(a) * A_N(a) * conF1Sz(a) + fig4Sz(a));
+  return ((unsigned long)maxRounds(a) * A_N(a) * conF1Sz(a) + conF4Sz(a));
 }
 
 /* Consensus Fig1 instance for origin j, round r, broadcaster k */
@@ -223,7 +223,7 @@ bkr94acsSz(
   unsigned int N;
   unsigned long pf1;
   unsigned long cf1;
-  unsigned long f4;
+  unsigned long cf4;
   unsigned long mr;
   unsigned long hdr;
   unsigned long conPipe;
@@ -240,10 +240,10 @@ bkr94acsSz(
   N = n + 1;
   pf1 = BKR94ACS_ALIGN_UP(bracha87Fig1Sz(n, vLen));
   cf1 = BKR94ACS_ALIGN_UP(bracha87Fig1Sz(n, 0));
-  f4 = BKR94ACS_ALIGN_UP(bracha87Fig4Sz(n, maxPhases));
+  cf4 = BKR94ACS_ALIGN_UP(bracha87Fig4Sz(n, maxPhases));
   mr = (unsigned long)maxPhases * 3;
   hdr = BKR94ACS_ALIGN_UP(3UL * N);
-  conPipe = mr * N * cf1 + f4;
+  conPipe = mr * N * cf1 + cf4;
 
   return (sizeof (struct bkr94acs) - 1
     + hdr                      /* voted + baDecision + conNextRound + pad */
@@ -344,11 +344,14 @@ bkr94acsVote(
    * Initial broadcast of our BA input.  Mark the corresponding
    * (origin, round=0, broadcaster=self) consensus Fig1 as the
    * originator and store the value, so bkr94acsPump's BPR walk
-   * replays BKR94ACS_ACT_CON_SEND with conType=INITIAL until
-   * loopback or echo / ready cascade sets ECHOED on that Fig1.
-   * Consensus Fig1s are vLen=0 (binary value), so we pass the
-   * raw vote byte (0 or 1), not the BKR94ACS_VOTE_* encoding
-   * stored in voted[].
+   * keeps emitting BKR94ACS_ACT_CON_SEND with .type=INITIAL for
+   * as long as F1_ORIGIN is set on that Fig1 (Implementation
+   * Note 11); once F1_ECHOED is set, CON_SEND/ECHO joins the
+   * stream alongside it, and once F1_RDSENT is set, CON_SEND/
+   * READY joins too — all three streams replay independently
+   * while their flags hold.  Consensus Fig1s are vLen=0 (binary
+   * value), so we pass the raw vote byte (0 or 1), not the
+   * BKR94ACS_VOTE_* encoding stored in voted[].
    */
   {
     unsigned char binary;
@@ -554,7 +557,6 @@ bkr94acsConsensusInput(
 
       /*
        * Check for completed rounds (including cascades).
-       * Same pattern as example/bracha87Fig4.c.
        */
       while (*nextRound < mr
           && bracha87Fig3RoundComplete(f3, *nextRound)) {
@@ -636,10 +638,11 @@ bkr94acsConsensusInput(
            * (self is broadcaster).  Mark the corresponding
            * (origin, round=*nextRound, broadcaster=self)
            * consensus Fig1 as the originator and store the
-           * value so bkr94acsPump replays this INITIAL on
-           * subsequent ticks until ECHOED (loopback or echo /
-           * ready cascade) takes over.  Same pattern as the
-           * round-0 case in bkr94acsVote.
+           * value so bkr94acsPump keeps replaying this INITIAL
+           * on subsequent ticks while F1_ORIGIN is set, plus
+           * CON_SEND/ECHO and CON_SEND/READY once F1_ECHOED /
+           * F1_RDSENT join (Implementation Note 11).  Same
+           * pattern as the round-0 case in bkr94acsVote.
            */
           {
             unsigned char binary;
@@ -802,10 +805,13 @@ bkr94acsPropose(
    * Rule 1 still fires from bkr94acsProposalInput receiving
    * (initial, v) via the network loopback).
    *
-   * Until loopback or echo / ready cascade sets ECHOED,
-   * bkr94acsPump replays BKR94ACS_ACT_PROP_INITIAL every
-   * tick.  After ECHOED, the proposal Fig1's own BPR carries
-   * the value forward via echo / ready replays.
+   * Thereafter bkr94acsPump keeps emitting BKR94ACS_ACT_
+   * PROP_SEND with .type=INITIAL for as long as F1_ORIGIN
+   * is set (Implementation Note 11); once F1_ECHOED is set
+   * by loopback or peer echoes, PROP_SEND/ECHO emits
+   * alongside it, and once F1_RDSENT is set, PROP_SEND/
+   * READY joins too — all three streams replay independently
+   * while their flags hold.
    */
   bracha87Fig1Origin(propF1(a, a->self), value);
 

@@ -34,8 +34,10 @@ no,0
 
 # Domain action -> boolean local that drives a post-dispatch side effect.
 # - doInput1: bkr94acsVote(a, origin, 1, ...)
-# - doInput0Fanout: loop over all BAs, vote 0 where unvoted; set threshold.
-# - doOutputSubset: emit BKR94ACS_ACT_COMPLETE; set complete.
+# - doInput0Fanout: loop over all BAs, vote 0 where unvoted; set
+#   BKR94ACS_F_THRESHOLD in a->flags.
+# - doOutputSubset: emit BKR94ACS_ACT_COMPLETE; set BKR94ACS_F_COMPLETE
+#   in a->flags.
 
 @~doInput1,"input 1 to BA_j"
 1,yes

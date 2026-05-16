@@ -972,8 +972,11 @@ testStepTwoTrigger(
 /*                                                                        */
 /*  White-box tests of bkr94acsPropose and bkr94acsPump:                  */
 /*    - Propose marks the local proposal Fig1 as origin and emits         */
-/*      PROP_SEND/INITIAL.                                                     */
-/*    - Pump replays PROP_SEND/INITIAL on every tick until ECHOED.             */
+/*      PROP_SEND/INITIAL.                                                */
+/*    - Pump keeps emitting PROP_SEND/INITIAL on every sweep while        */
+/*      F1_ORIGIN is set (Implementation Note 11); PROP_SEND/ECHO and    */
+/*      PROP_SEND/READY join independently once F1_ECHOED / F1_RDSENT    */
+/*      get set.                                                          */
 /*    - Pump returns 0 on idle (no committed state anywhere).             */
 /*    - Pump's per-origin gate skips proposal Fig1s for BAs decided 0     */
 /*      (post-Step 2 fanout, j excluded from SubSet).                     */

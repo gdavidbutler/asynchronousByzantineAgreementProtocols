@@ -9,29 +9,20 @@
  * No part of this file inspects bkr94acs.c, peeks at private fields
  * via the data[] tail, or otherwise reaches past the public surface.
  *
- * Sections (this file currently covers A and B; C/D/E to follow):
+ * Sections (see in-file "Section X — ..." markers in main() for
+ * the authoritative list):
  *
- *   A. API edges
- *      - Sz / Init contract on a freshly allocated peer
- *      - Propose contract: act shape, ProposalValue round-trip,
- *        idempotency on repeated call
- *      - Defensive nulls and out-of-range origin
- *
- *   B. Lemma 2 Parts A/B/C/D + paper-direct invariants
- *      - All-honest convergence at (n=4, t=1) ordered + shuffled
- *      - All-honest convergence at (n=7, t=2) shuffled
- *      - Identical proposals (degenerate value distribution)
- *      - Multi-byte values
- *      - Lemma 2 Part D anchor: every j in SubSet has an accepted
- *        proposal value visible via bkr94acsProposalValue
- *      - Step-2 trigger uses BA-decision count, not Fig1-ACCEPT count
- *        (regression for the HoneyBadger-style optimization that
- *        diverges from BKR94 — see bkr94acs.h commentary)
- *      - Single input per BA per peer (paper Implementer remark:
- *        "step 1 and step 2 stop touching it" once an input is entered)
- *      - Single COMPLETE per peer; single BA_DECIDED per (peer, origin)
- *      - Honest exclusion is allowed (positive non-test from BKR94ACS.txt:
- *        "SubSet need not contain every honest player")
+ *   A. API edges — Sz/Init, Propose round-trip, defensive nulls.
+ *   B. Lemma 2 Parts A/B/C/D + paper-direct invariants — honest
+ *      convergence at n=4/n=7, identical proposals, multi-byte
+ *      values, step-2 BA-decision trigger, single-input-per-BA,
+ *      single COMPLETE / BA_DECIDED, honest-exclusion allowance.
+ *   C. BPR / Pump — idle-on-fresh, post-Propose self-INITIAL,
+ *      MAX_ACTS bound, CommittedFig1Count monotone, silence-quorum
+ *      signal, drop convergence, silent-Byzantine canary.
+ *   D. EXHAUSTED — single emission + 0xFE sentinel + permanent
+ *      !complete; Pump continues post-EXHAUSTED.
+ *   E. Byzantine — equivocating proposer (Bracha Lemma 2 inheritance).
  *
  * Header encoding convention (CRITICAL):
  *   n parameter is encoded; actual peer count = n + 1
@@ -339,7 +330,8 @@ deliverWire(
 /*  Honest-run simulator: every peer proposes, all messages are       */
 /*  delivered (no drops), drive until the queue is empty.             */
 /*  Pump is not invoked — under no-loss the protocol converges        */
-/*  organically.  Section C/D will add fault injection + Pump.        */
+/*  organically.  Section C drives Pump and fault injection; D adds   */
+/*  EXHAUSTED setup.                                                  */
 /* ------------------------------------------------------------------ */
 
 static int

@@ -12,6 +12,18 @@ Each module boundary matches the paper exactly, so the paper's proofs apply per-
 
 The `bkr94acs` module composes these figures into multi-value agreement: N peers propose arbitrary values, and all honest peers agree on the same common subset of at least n-t proposals. This is Ben-Or/Kelmer/Rabin 1994 Section 4 Figure 3 (Protocol Agreement[Q]).
 
+This README serves two audiences. **If you are integrating the library**, the load-bearing sections are *When to Use What*, *System Model*, *API Overview*, *Examples*, and *Deployment Notes*. **If you are auditing the implementation or porting it to another language**, additionally read *Design Rationale*, *Architecture*, *Bracha Phase Re-emitter*, *Test Coverage*, *Correctness Audit*, *Implementation Notes*, and *Re-Implementing in Another Language*.
+
+## When to Use What
+
+This library provides two application-facing primitives. Pick by the shape of your problem.
+
+**Reliable broadcast — `bracha87Fig1`.** One designated sender announces a value; all correct peers either accept the same value or none do, under up to `t` Byzantine faults at `n > 3t`. Use when you have a known originator per message: configuration distribution from a designated source, single-writer state replication, one-shot dissemination of a signed announcement, or as a reliable-channel building block inside your own outer protocol. See `example/bracha87Fig1.c`.
+
+**Common subset — `bkr94acs`.** N peers each propose a value; all correct peers agree on the same common subset of at least `n-t` proposals. Use when you need leaderless agreement on a batch of contributions: HoneyBadger-style atomic broadcast batching, MPC input bundling, distributed candidate selection — anything shaped as "agree on the set" rather than "agree on a single value." See `example/bkr94acs.c`.
+
+Fig 3 (VALID-set framework) and Fig 4 (binary Byzantine agreement) are exposed for completeness but exist primarily as internal mechanism feeding `bkr94acs`; raw single-bit binary BA has no realistic standalone caller (the seven-year gap between Bracha 1987 and BKR94 1994 is exactly that evidence).
+
 ## The Papers
 
 Gabriel Bracha, "Asynchronous Byzantine Agreement Protocols," *Information and Computation* 75, 130-143 (1987). Implemented in `bracha87.[hc]`.
@@ -59,7 +71,6 @@ For comparison shoppers: the following are absent by design, not by oversight.
 - **No transaction layer, no atomic broadcast wrapper, no application semantics.** BKR94 ACS produces a sorted subset of `n-t` arbitrary byte strings; what those bytes mean is the caller's choice.
 - **No partial-synchrony assumption.** Correctness (safety and termination) holds under arbitrary asynchrony.
 - **No leader, no view change, no pacemaker.** All peers are symmetric.
-- **No async MPC (ASC).** BKR94's continuation past ACS is not implemented because no caller in our stack needs it.
 - **No dynamic allocation, no I/O, no threads.** The library is a pure state machine; the caller provides memory and a transport.
 
 ---
@@ -172,7 +183,14 @@ The pump is exposed at the layer that owns the Fig 1 instances:
 | Fig 4 | none | Round-driven; Fig 4 broadcasts are new Fig 1 instantiations in the caller. |
 | bkr94acs | `bkr94acsPump` | Owns N proposal Fig 1 instances + N×R×N consensus Fig 1 instances + N Fig 4 instances internally; only the bkr94acs pump can reach them. |
 
-`bkr94acsPump` walks an internal cursor over (proposal phase, then consensus phase by origin × round × broadcaster), emits one Fig 1 instance's replays per call (≤ 3 actions), and returns 0 only when a full sweep finds nothing — the application's idle signal. Per-origin gating skips proposal replays for BA instances that decided 0 (the origin is excluded from the common subset and no honest peer needs further evidence); BAs decided 1 keep replaying per Bracha post-decide continuation.
+`bkr94acsPump` walks an internal cursor over (proposal phase, then consensus phase by origin × round × broadcaster), emits one Fig 1 instance's replays per call (≤ 3 actions), and returns 0 only when a full sweep finds nothing — the application's idle signal. Per-origin gating, indexed by `bkr94acsBaDecision(a, origin)`:
+
+- **0xFF (undecided)** — pump; other honest peers may still need our echoes/readys to learn Q(j)=1.
+- **0xFE (EXHAUSTED)** — pump; the local BA can't complete, but other peers may still benefit from our earlier-round echoes/readys.
+- **0 (decided 0, excluded)** — skip; the origin is out of the common subset and no honest peer needs further evidence from us.
+- **1 (decided 1, included)** — pump; Bracha post-decide continuation requires us to keep feeding peers that haven't yet reached n-t.
+
+Only the decided-0 case stops pumping.
 
 ### Application loop
 
@@ -181,6 +199,9 @@ With BPR, the application loop is two operations: drain the network and tick the
 ```c
 struct bkr94acsAct out[BKR94ACS_PUMP_MAX_ACTS];
 struct bkr94acsAct propAct;
+struct bracha87Pump pump;
+
+bracha87PumpInit(&pump);
 
 /* Self-initiation: mark the local proposal Fig 1 as origin and emit
  * one PROP_SEND action (.type = BRACHA87_INITIAL) for the application
@@ -197,8 +218,9 @@ while (!silenceQuorumExit) {
     for (k = 0; k < n; ++k) broadcast_action(actions[k]);
   }
 
-  /* Pump tick: BPR re-emits committed actions. */
-  n = bkr94acsPump(a, out);
+  /* Pump tick: BPR re-emits committed actions.  ONE call per tick
+   * — see the network flood warning in bracha87.h. */
+  n = bkr94acsPump(a, &pump, out);
   for (k = 0; k < n; ++k) broadcast_action(out[k]);
 
   sleep(tickMs);
@@ -217,9 +239,7 @@ while (!silenceQuorumExit) {
 
 ### bracha87 Entry Points
 
-bracha87 exposes two parallel API layers.  The **low-level** entries are paper-vocabulary state-machine operations (one rule cluster each).  The **high-level** entries — added so that Fig 1 / Fig 3 / Fig 4 callers get the same Input + Pump ergonomics as bkr94acs — wrap the cascade and surface rich Act structs tagged with (origin, round, type, value).  Either layer is usable; mixing them on the same instance is permitted but rarely useful.
-
-#### Low-level (paper-faithful state machine)
+bracha87 exposes paper-vocabulary state-machine operations (one rule cluster each), plus a Fig 1 array BPR Pump wrapper (one cursor sweep per call).  Each Fig 1 / Fig 3 / Fig 4 entry point takes the instance plus the rule's natural inputs and returns its actions; cascading across layers is the caller's responsibility (or, for the canonical composition, `bkr94acs`'s responsibility).
 
 | Function | Purpose |
 |---|---|
@@ -238,29 +258,19 @@ bracha87 exposes two parallel API layers.  The **low-level** entries are paper-v
 | `bracha87Fig4Init(...)` | Initialize with initial value, coin function, and closure |
 | `bracha87Fig4Round(f4, round, n_msgs, senders, values)` | Process a completed round; returns action bitmask |
 
-#### High-level (Input + Pump, mirrors bkr94acs ergonomics)
+#### Fig 1 array BPR Pump
 
-All Pump entry points share one cursor type, `struct bracha87Pump`, initialized with `bracha87PumpInit`.  Caller owns the Fig 1 instance array, indexed by `round * (n+1) + origin` for the Fig 3 / Fig 4 layers.
+Wraps the per-instance `bracha87Fig1Bpr` with a cursor that walks an application-owned array of Fig 1 instances.  Useful for reliable-broadcast applications that own multiple Fig 1 instances of any shape (single-broadcast streaming, multi-origin reliable multicast, etc.).  Pump cursor lives in caller storage, initialized with `bracha87PumpInit`.
 
 | Function | Purpose |
 |---|---|
 | `bracha87PumpInit(p)` | Initialize a shared Pump cursor |
 | `bracha87Fig1PumpStep(instances, count, p, out, outCap)` | Walk a caller-owned Fig 1 array; one instance's BPR actions per call; returns 0 on full-sweep idle |
 | `bracha87Fig1CommittedCount(instances, count)` | Count of instances with any committed flag (ORIGIN/ECHOED/RDSENT); for K-sweep cadence |
-| `bracha87Fig3Origin(f3, fig1Array, round, origin, value, out, outCap)` | Self-initiate a Fig 1 broadcast for (round, origin); emits one INITIAL_ALL act |
-| `bracha87Fig3Input(f3, fig1Array, round, origin, type, from, value, out, outCap)` | One inbound message → Fig 1 ladder + Fig 3 cascade + ROUND_COMPLETE acts |
-| `bracha87Fig3Pump(f3, fig1Array, p, out, outCap)` | BPR pump; tags Fig 1 actions with (origin, round); 0 on idle |
-| `bracha87Fig3CommittedFig1Count(f3, fig1Array)` | Same as Fig1 version, scoped to maxRounds × (n+1) |
-| `bracha87Fig4Start(f4, fig1Array, self, out, outCap)` | Self-initiate the round-0 broadcast; emits one INITIAL_ALL act using initialValue |
-| `bracha87Fig4Input(f4, fig1Array, self, round, origin, type, from, value, out, outCap)` | One inbound message → Fig 1 + Fig 3 + Fig 4 cascade + next-round origination |
-| `bracha87Fig4Pump(f4, fig1Array, p, out, outCap)` | BPR pump; tags actions with (origin, round) |
-| `bracha87Fig4CommittedFig1Count(f4, fig1Array)` | Sweep-cadence accessor |
 
-Act structs carry the layer's natural identity:
+`struct bracha87Fig1Act` carries the act: `act` (INITIAL_ALL / ECHO_ALL / READY_ALL), `idx` (array index), `value` (borrowed).
 
-* `struct bracha87Fig1Act` — `act` (INITIAL_ALL / ECHO_ALL / READY_ALL), `idx` (array index), `value` (borrowed)
-* `struct bracha87Fig3Act` — `act` (above + ROUND_COMPLETE), `origin`, `round`, `type`, `value`
-* `struct bracha87Fig4Act` — `act` (above + DECIDE / EXHAUSTED), `origin`, `round`, `type`, `value`, `decision`
+The same `struct bracha87Pump` cursor type is also consumed by `bkr94acsPump` (cursor unification across the library).
 
 ### bkr94acs Entry Points
 
@@ -297,52 +307,9 @@ Test `acs->flags & BKR94ACS_F_COMPLETE` to check if all N BAs have decided (the 
 
 For multi-value agreement, use `bkr94acs` and the application loop shown in the **Bracha Phase Re-emitter (BPR)** section above — it manages all Fig 1 instances internally and provides `bkr94acsPump` for BPR replays. See `example/bkr94acs.c` for a runnable version of this pattern.
 
-For raw binary consensus (Fig 1 + Fig 3 + Fig 4 directly), the high-level Fig 4 entry points collapse the cascade into a single Input call.  The caller owns the Fig 1 array indexed by `round * (n+1) + origin`, sized `maxPhases * BRACHA87_ROUNDS_PER_PHASE * (n+1)` (Fig 4 is keyed by phase per the paper; Fig 1 by round; the constant names the conversion).  See `example/bracha87Fig4.c` for a runnable version.
+For reliable broadcast (Fig 1 only), use `bracha87Fig1Input` per message plus `bracha87Fig1PumpStep` on the caller-owned Fig 1 array per tick. See `example/bracha87Fig1.c` for a runnable version.
 
-```c
-/* Per process: */
-unsigned int maxRounds = maxPhases * BRACHA87_ROUNDS_PER_PHASE;
-struct bracha87Fig1 *fig1[maxRounds * n];  /* one per (origin, round) */
-struct bracha87Fig4 *fig4;                 /* embeds Fig3 as fig4->fig3 */
-struct bracha87Pump pump;
-bracha87PumpInit(&pump);
-
-/* Self-initiation: emit the round-0 INITIAL using initialValue. */
-struct bracha87Fig4Act sact;
-bracha87Fig4Start(fig4, fig1, self, &sact, 1);
-broadcast INITIAL(sact.value) for round=0, origin=self, to all peers
-
-/* On incoming message (round, type, from, origin, value): */
-struct bracha87Fig4Act acts[BRACHA87_FIG4_MAX_ACTS];
-unsigned int n_acts = bracha87Fig4Input(fig4, fig1, self,
-                                        round, origin, type, from, value,
-                                        acts, BRACHA87_FIG4_MAX_ACTS);
-for each act in acts[0..n_acts):
-  switch act.act:
-    case INITIAL_ALL / ECHO_ALL / READY_ALL:
-      broadcast the named message with (act.round, act.origin, act.value)
-    case BRACHA87_FIG4_DECIDE:
-      deliver act.decision
-    case BRACHA87_FIG4_EXHAUSTED:
-      consensus failed within operational limit (abort epoch)
-
-/* Pump tick (BPR): ONE call per tick, paced by the application's    */
-/* sleep(tickMs).  Do NOT loop — see the network flood warning in    */
-/* bracha87.h.  Same pattern at every layer: bracha87Fig1PumpStep,   */
-/* bracha87Fig3Pump, bracha87Fig4Pump, and bkr94acsPump all take a   */
-/* caller-owned struct bracha87Pump cursor.                          */
-struct bracha87Fig4Act pacts[BRACHA87_FIG1_PUMP_MAX_ACTS];
-unsigned int n_pacts;
-n_pacts = bracha87Fig4Pump(fig4, fig1, &pump, pacts,
-                           BRACHA87_FIG1_PUMP_MAX_ACTS);
-for each act in pacts[0..n_pacts):
-  broadcast the named message with (act.round, act.origin, act.value)
-/* Termination is the application's silence-quorum + K-sweep gate     */
-/* — see "Termination policy" below.  One sweep counted across ticks  */
-/* = bracha87Fig*CommittedFig1Count Pump calls.                       */
-```
-
-The same Input + Pump shape applies at Fig 3 (`bracha87Fig3Origin` / `bracha87Fig3Input` / `bracha87Fig3Pump`, with caller-supplied N driving round transitions) and at Fig 1 directly (`bracha87Fig1PumpStep` over a caller-owned array of any shape).
+Direct use of Fig 3 (`bracha87Fig3Accept` / `RoundComplete` / `GetValid`) and Fig 4 (`bracha87Fig4Round`) is supported but those layers exist primarily as internal mechanism feeding `bkr94acs`; the realistic application surfaces are the two above. The low-level Fig 3 and Fig 4 entry points remain public for callers that need them (and for `test_predicates.c`, which exercises the algorithmic predicates beneath the dispatch).
 
 ## Operational Limits
 
@@ -358,7 +325,7 @@ Round indices range from 0 to `BRACHA87_ROUNDS_PER_PHASE * maxPhases - 1` (max 2
 ## Building
 
 ```bash
-make            # build .o and example
+make            # build .o and examples
 make check      # build and run all five test binaries (see Test Coverage below)
 make clean      # remove build artifacts
 make clobber    # remove DTC generated .c files
@@ -375,8 +342,8 @@ Compiler flags: `-std=c89 -pedantic -Wall -Wextra -Os -g`
 | Binary | Scope | What it asserts |
 |---|---|---|
 | `test_predicates` | Algorithmic primitives | Paper-direct correspondence at n=4, t=1: `fig4Nfn` (960 inputs), `fig3IsValid` (165 evaluations), Fig 3 cascade (4 delivery permutations). White-box: `#include`s `bracha87.c` and enumerates inputs against a paper-direct subset-enumeration reference. Anchors the algorithmic primitives that sit below the DTC dispatch. |
-| `test_bracha87` | Protocol white-box (bracha87) | Unit tests on each Bracha rule, composed simulation, lemma assertions inline (Lemmas 1, 2, 3, 4, 9), Theorem 2, shuffled delivery, Byzantine equivocation, post-decide multi-phase + adversarial-majority preservation, value-switch tests, BPR replay invariants (originator INITIAL replay forever, post-accept READY replay), high-level `Fig*Input` / `Fig*Pump` entry-point coverage, defensive null-pointer guards. Reads internal flags directly. |
-| `test_bracha87_blackbox` | Protocol black-box (bracha87) | 234 checks via the public bracha87.h surface only. Validity, agreement, totality, and Lemma-2 invariants at n=4 t=1; precise echo-threshold tests at n=4 and n=7; Fig3Origin / Fig4Start exact emission tuples; malformed-value filtering; post-EXHAUSTED safety. Tests are derived from the header contract and `Bracha87.txt` only — no `bracha87.c` reads. |
+| `test_bracha87` | Protocol white-box (bracha87) | Unit tests on each Bracha rule, composed simulation, lemma assertions inline (Lemmas 1, 2, 3, 4, 9), Theorem 2, shuffled delivery, Byzantine equivocation, post-decide multi-phase + adversarial-majority preservation, value-switch tests, BPR replay invariants (originator INITIAL replay forever, post-accept READY replay), Fig 1 array Pump coverage (`bracha87PumpInit` / `bracha87Fig1PumpStep` / `bracha87Fig1CommittedCount`), defensive null-pointer guards. Reads internal flags directly. |
+| `test_bracha87_blackbox` | Protocol black-box (bracha87) | 153 checks via the public bracha87.h surface only. Validity, agreement, totality, and Lemma-2 invariants at n=4 t=1; precise echo-threshold tests at n=4 and n=7; Fig 1 array Pump cursor walk, sparse-slot skip, multi-act emission; low-level `bracha87Fig4Round` post-EXHAUSTED safety. Tests are derived from the header contract and `Bracha87.txt` only — no `bracha87.c` reads. |
 | `test_bkr94acs` | Protocol white-box (bkr94acs) | All-to-all simulation with shuffled delivery, multi-byte values, identical proposals, larger N, post-decide continuation regression, step-2 trigger regression, BPR pump tests (50% drop end-to-end, cursor coverage, decided-0 skip, Byzantine-silent canary at 50000+ sweeps for pitfall 11, 75%/87.5% drop convergence), EXHAUSTED single-emission + 0xFE sentinel, ProposalValue ACCEPT-gate transition (ECHOED-only → NULL, post-ACCEPT → value, ORIGIN-bit carve-out for self-origin). Reaches into `a->flags & BKR94ACS_F_THRESHOLD`, `a->nDecided`, and the `data[]` layout for setup and assertion. |
 | `test_bkr94acs_blackbox` | Protocol black-box (bkr94acs) | Section A: Sz/Init contract, Propose round-trip + idempotency, defensive nulls. Section B: Lemma 2 Parts A/B/C/D explicit at n=4/n=7, identical proposals, multi-byte values, step-2 trigger uses BA-decision count not Fig1-ACCEPT count, single-input-per-BA-per-peer (paper Implementer remark), honest-exclusion contract. Section C: Pump idle on fresh peer, Pump after Propose, MAX_ACTS bound, CommittedFig1Count monotone, silence-quorum signal, 50% drop convergence, silent-Byzantine canary. Section D: BA_EXHAUSTED single emission + sentinel + permanent !complete, Pump continues post-EXHAUSTED. Section E: equivocating proposer (Bracha Lemma 2 inheritance). Tests derived from `bkr94acs.h`, `bracha87.h`, `BKR94ACS.txt`, `Bracha87.txt`, and the bracha87 black-box style — no `.c` reads. |
 
@@ -386,7 +353,9 @@ The black-box suites stay strict about scope: only `*.h`, paper-extract `.txt`, 
 
 ## Examples
 
-Four runnable examples sit in `example/`, one per independently-usable API surface. Each runs in a single process with a synchronous in-memory queue (no loss, no reordering, no asynchrony) — they exercise the protocol state machines and (where applicable) the BPR pump but do **not** exercise the deployment-time termination policies (silence-quorum + K-sweep gate, abandonment) needed under real asynchronous transport.
+Two runnable examples sit in `example/`, one per application-facing API surface. Each runs in a single process with a synchronous in-memory queue (no loss, no reordering, no asynchrony) — they exercise the protocol state machines and the BPR pump but do **not** exercise the deployment-time termination policies (silence-quorum + K-sweep gate, abandonment) needed under real asynchronous transport.
+
+The low-level Fig 3 and Fig 4 entry points (`bracha87Fig3Accept`, `bracha87Fig4Round`) have no dedicated examples — those layers exist as internal mechanism feeding `bkr94acs`.  Fig 4 (raw single-bit binary BA) has no realistic standalone caller, evidenced by the seven-year gap between Bracha 1987 and BKR94 1994; Fig 3 (the VALID-set framework) exists to feed Fig 4 and inherits the same "no standalone need" through it.  Their behaviour is exercised through `bkr94acs` and through the test suites.
 
 `example/bracha87Fig1.c` — reliable broadcast (Theorem 1). One designated origin broadcasts a multi-byte value; all correct peers either accept the same value or none accept (Lemmas 3 and 4):
 
@@ -395,24 +364,6 @@ Four runnable examples sit in `example/`, one per independently-usable API surfa
 ./example_bracha87Fig1 -s 42 7 2 transactionXYZ # shuffled delivery
 ./example_bracha87Fig1 -b 2 4 1 hello           # Byzantine origin equivocates (split=2 stalls; split=1 or 3 converges)
 ./example_bracha87Fig1 -v -o 1 4 1 ping         # verbose trace, peer 1 is origin
-```
-
-`example/bracha87Fig3.c` — VALID-set framework (Lemmas 5/6/7). Demonstrates the model reduction from Byzantine to crash: a Byzantine peer's only options at the validation layer are conform-to-N or look-silent:
-
-```bash
-./example_bracha87Fig3 4 1                      # honest baseline
-./example_bracha87Fig3 -byz bogus 4 1           # peer 0 injects out-of-range / non-conforming values; rejected
-./example_bracha87Fig3 -byz silent 4 1          # peer 0 silent; n-t still reached via honest majority
-./example_bracha87Fig3 -v -byz bogus 4 1        # verbose: see every Accept call resolved
-```
-
-`example/bracha87Fig4.c` — binary Byzantine agreement (Theorem 2), Fig 1 + Fig 3 + Fig 4 composed:
-
-```bash
-./example_bracha87Fig4 4 1                      # 4 peers, 1 Byzantine fault
-./example_bracha87Fig4 -s 42 7 2                # shuffled delivery
-./example_bracha87Fig4 -b 3 7 2                 # Byzantine peer 0 equivocates
-./example_bracha87Fig4 -v 4 1 0 0 1 1           # verbose trace, split initial values
 ```
 
 `example/bkr94acs.c` — multi-value agreement on arbitrary strings:
@@ -473,9 +424,9 @@ A peer that satisfies `silence quorum AND K sweeps AND !done AND !exhausted` is 
 
 ### Coin choice — caller responsibility
 
-**The library is coin-agnostic.** Both `bracha87Fig4Init` and `bkr94acsInit` take a `bracha87CoinFn` callback plus closure; the caller supplies the coin and owns the consequences of that choice. The bundled examples (`example/bracha87Fig4.c`, `example/bkr94acs.c`) use a **deterministic alternating coin** chosen for reproducible demo runs — the example source explicitly notes this is for demonstration only. This section is reference material to inform the caller's choice.
+**The library is coin-agnostic.** Both `bracha87Fig4Init` and `bkr94acsInit` take a `bracha87CoinFn` callback plus closure; the caller supplies the coin and owns the consequences of that choice. The bundled `example/bkr94acs.c` uses a **deterministic alternating coin** chosen for reproducible demo runs — the example source explicitly notes this is for demonstration only. This section is reference material to inform the caller's choice.
 
-Fig 4 step 3 case (iii) — when neither decision-count rule fires — calls the coin. The coin is how Bracha escapes FLP impossibility: deterministic asynchronous consensus is impossible, and randomization buys probabilistic termination. Bracha's own Theorem 2 bounds the expected number of phases at O(1) under a **common-coin** assumption; under other coin choices the theoretical bound depend on the choice. (This is the same FLP-escape mechanism as other randomized async BFT protocols; partial-synchrony designs like PBFT/Tendermint/HotStuff escape FLP through timing assumptions instead.) Options the caller may supply via `bracha87CoinFn`:
+Fig 4 step 3 case (iii) — when neither decision-count rule fires — calls the coin. The coin is how Bracha escapes FLP impossibility: deterministic asynchronous consensus is impossible, and randomization buys probabilistic termination. Bracha's own Theorem 2 bounds the expected number of phases at O(1) under a **common-coin** assumption; under other coin choices the theoretical bound depends on the choice. (This is the same FLP-escape mechanism as other randomized async BFT protocols; partial-synchrony designs like PBFT/Tendermint/HotStuff escape FLP through timing assumptions instead.) Options the caller may supply via `bracha87CoinFn`:
 
 - **Common coin** (same value across all peers per phase): a verifiable random beacon, a distributed coin protocol, or a threshold-signature-based scheme. Brings additional setup (DKG, threshold keys, etc.) that the library does not require for any other reason.
 - **Local coin** (each peer flips independently): e.g. `arc4random_buf` per peer. The simplest adversarial-safe option; no shared-randomness infrastructure required. Termination is provably constant in expectation when `t = O(√n)` (Ben-Or 1983 Theorem 3, "Another Advantage of Free Choice (Extended Abstract): Completely Asynchronous Agreement Protocols," PODC '83); outside that regime the theoretical bound degrades toward `O(2^(n-t-1))`.
@@ -535,7 +486,7 @@ Each item below is a paper-vs-code divergence that any from-scratch implementati
 
 11. **BPR (initial, v) replay must NOT short-circuit on echoed.** An originator that has locally echoed (via Rule 1 from loopback or via Rule 2 from echoes received from other peers) cannot stop replaying INITIAL. In the n = 3t+1 boundary regime the Rule 2 echo threshold (n+t)/2 + 1 equals the count of honest peers, so any honest peer that missed the bootstrap can leave the cascade one echo short forever — only the originator can break the deadlock. Symmetric with Note 10: both pitfalls reject local-state-as-saturation arguments. Regression check: `testBprByzantineSilent` (n=4 t=1 with one silent Byzantine peer; the original gap-4 design with the `!ECHOED` gate stalled at |SubSet|=1 over 50000+ pump sweeps; the corrected "always replay INITIAL while ORIGIN" rule converges in 1 sweep).
 
-12. **Fig 4 EXHAUSTED is fatal at the BKR94 layer; no unilateral substitute.** When `bracha87Fig4Round` returns `BRACHA87_EXHAUSTED` (probabilistic termination did not converge within the unsigned-char round encoding's 85-phase ceiling), the local BA has no decision. BKR94 Lemma 2 Part B's "all BAs terminate" assumption is violated, and Part C (SubSet agreement) is unrecoverable locally — any unilateral substitute (decide 0 or 1) could disagree with another peer's actual decision (different local-coin sequence or message ordering). The library surfaces `BKR94ACS_ACT_BA_EXHAUSTED`, sets `bkr94acsBaDecision[origin] = 0xFE`, and does NOT increment `nDecided` or `nDecidedOne` (no decision was made); `BKR94ACS_F_COMPLETE` stays clear in `acs->flags`. The application must abort the local epoch and surface this as a distinct outcome (see Abandonment under Deployment Notes). BPR continues pumping replays for that origin so other peers may still benefit from earlier-round echoes/readys. EXHAUSTED is mutually exclusive with DECIDE per Fig 4 semantics, so single emission is structural — no dedup guard needed. Regression check: `testExhausted`.
+12. **Fig 4 EXHAUSTED is fatal at the BKR94 layer; no unilateral substitute.** When `bracha87Fig4Round` returns `BRACHA87_EXHAUSTED` (probabilistic termination did not converge within the unsigned-char round encoding's 85-phase ceiling), the local BA has no decision. BKR94 Lemma 2 Part B's "all BAs terminate" assumption is violated, and Part C (SubSet agreement) is unrecoverable locally — any unilateral substitute (decide 0 or 1) could disagree with another peer's actual decision (different local-coin sequence or message ordering). The library surfaces `BKR94ACS_ACT_BA_EXHAUSTED`, marks the affected origin's BA state as exhausted (`bkr94acsBaDecision(acs, origin)` returns 0xFE thereafter), and does NOT increment `nDecided` or `nDecidedOne` (no decision was made); `BKR94ACS_F_COMPLETE` stays clear in `acs->flags`. The application must abort the local epoch and surface this as a distinct outcome (see Abandonment under Deployment Notes). BPR continues pumping replays for that origin so other peers may still benefit from earlier-round echoes/readys. EXHAUSTED is mutually exclusive with DECIDE per Fig 4 semantics, so single emission is structural — no dedup guard needed. Regression check: `testExhausted`.
 
 ---
 

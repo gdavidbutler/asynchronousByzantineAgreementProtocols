@@ -89,8 +89,9 @@
 /*************************************************************************/
 /*  Output actions                                                       */
 /*                                                                       */
-/*  Returned in struct bkr94acsAct array from bkr94acsInput / Pump /     */
-/*  Propose calls.  Caller sends the described messages on the network.  */
+/*  Returned in struct bkr94acsAct array from bkr94acsProposalInput,     */
+/*  bkr94acsConsensusInput, bkr94acsPump, and bkr94acsPropose calls.     */
+/*  Caller sends the described messages on the network.                  */
 /*************************************************************************/
 
 #define BKR94ACS_ACT_PROP_SEND    1  /* send proposal Fig1 msg: .type, .value, .origin */
@@ -156,8 +157,8 @@ struct bkr94acs {
   unsigned char vLen;       /* proposal value length encoding: actual = vLen + 1 */
   unsigned char maxPhases;  /* per binary consensus instance */
   unsigned char self;       /* this peer's index (needed for consensus routing) */
-  unsigned char nDecidedOne;/* BKR94 Step 2 trigger: count of BAs decided with output 1 */
-  unsigned char nDecided;   /* BKR94 Step 3 trigger: count of BAs that have decided */
+  unsigned char nDecidedOne; /* BKR94 Step 2 trigger: count of BAs decided with output 1 */
+  unsigned char nDecided;    /* BKR94 Step 3 trigger: count of BAs that have decided */
   unsigned char flags;      /* BKR94ACS_F_THRESHOLD / BKR94ACS_F_COMPLETE */
   /*
    * Header is exactly 8 bytes — a multiple of sizeof (void *) on all
@@ -268,7 +269,7 @@ bkr94acsProposalInput(
  * Caller provides out[] with room for BKR94ACS_MAX_ACTS(n, maxPhases) entries.
  *
  * The consensus for each origin is a full Fig1+Fig3+Fig4 pipeline
- * (same structure as example/bracha87Fig4.c), deciding 0 or 1.
+ * driven internally, deciding 0 or 1.
  *
  * On BKR94ACS_ACT_CON_SEND:
  *   Caller sends a consensus message to all peers.
@@ -328,12 +329,15 @@ bkr94acsProposalValue(
  * originator and stores the value to be broadcast.  Returns one
  * action (BKR94ACS_ACT_PROP_SEND with .origin = self,
  * .type = BRACHA87_INITIAL) for the caller to broadcast
- * immediately.  Thereafter bkr94acsPump replays the same
- * PROP_SEND/INITIAL on every tick until the originator's own
- * loopback (or echo / ready cascade derived from peers'
- * messages) sets ECHOED on the proposal Fig1, after which the
- * proposal Fig1's own BPR carries the value via echo / ready
- * replays.
+ * immediately.  Thereafter bkr94acsPump keeps emitting the same
+ * PROP_SEND/INITIAL on every sweep for as long as the F1_ORIGIN
+ * flag is set on the proposal Fig1 (Implementation Note 11);
+ * once the local loopback or peer echoes set F1_ECHOED,
+ * PROP_SEND/ECHO is emitted alongside it; once F1_RDSENT is set,
+ * PROP_SEND/READY joins too.  All three streams replay
+ * independently while their flags hold — BPR's purpose is to
+ * help OTHER peers progress, so stopping any of the streams at
+ * local saturation strands them.
  *
  * Caller reads the value back via bkr94acsProposalValue(self).
  *
@@ -388,7 +392,7 @@ bkr94acsPropose(
 unsigned int
 bkr94acsPump(
   struct bkr94acs *
- ,struct bracha87Pump *    /* cursor */
+ ,struct bracha87Pump *    /* cursor; init with bracha87PumpInit */
  ,struct bkr94acsAct *     /* out: room for BKR94ACS_PUMP_MAX_ACTS */
 );
 
@@ -417,10 +421,9 @@ bkr94acsBaDecision(
 
 /*
  * Number of Fig1 instances currently committed (any of F1_ORIGIN,
- * F1_ECHOED, F1_RDSENT set).  Walks both the N proposal Fig1s
- * and the per-origin consensus pipeline up to each origin's
- * conNextRound (no committed state can exist past the active
- * Fig4 round for that origin).
+ * F1_ECHOED, F1_RDSENT set).  Walks the N proposal Fig1s plus the
+ * per-origin consensus Fig1s up to the active Fig4 round (no
+ * committed state can exist past that round for that origin).
  *
  * Useful for sizing tick cadence: at one Fig1 advance per Pump
  * call, the per-Fig1 replay rate is roughly tick / (count + 1).

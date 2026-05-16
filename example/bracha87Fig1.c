@@ -431,16 +431,16 @@ main(
       qShuffle(&shuffleSeed);
   }
 
-  /*----------------------------------------------------------------------*/
-  /*  Pump tick                                                           */
-  /*                                                                      */
-  /*  In a real deployment, the BPR pump is called once per tick,         */
-  /*  paced by the application's sleep(tickMs).  Looping until idle       */
-  /*  would flood the network — Bracha BPR replays are persistent, so     */
-  /*  every committed Fig 1 always has actions; a tight loop empties      */
-  /*  the cursor as fast as the CPU runs and overruns kernel UDP          */
-  /*  buffers.  The call is shown here as a representative single tick.   */
-  /*----------------------------------------------------------------------*/
+  /*------------------------------------------------------------------*/
+  /*  Pump tick                                                       */
+  /*                                                                  */
+  /*  In a real deployment, the BPR pump is called once per tick,     */
+  /*  paced by the application's sleep(tickMs).  Looping until idle   */
+  /*  would flood the network — Bracha BPR replays are persistent, so */
+  /*  every committed Fig 1 always has actions; a tight loop empties  */
+  /*  the cursor as fast as the CPU runs and overruns kernel buffers. */
+  /*  The call is shown here as a representative single tick.         */
+  /*------------------------------------------------------------------*/
 
   for (i = 0; i < n; ++i) {
     struct bracha87Fig1 *peerArr[1];
