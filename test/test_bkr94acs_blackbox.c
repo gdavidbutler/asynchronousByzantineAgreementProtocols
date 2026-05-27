@@ -19,7 +19,8 @@
  *      single COMPLETE / BA_DECIDED, honest-exclusion allowance.
  *   C. BPR / Pump — idle-on-fresh, post-Propose self-INITIAL,
  *      MAX_ACTS bound, CommittedFig1Count monotone, silence-quorum
- *      signal, drop convergence, silent-Byzantine canary.
+ *      signal, drop convergence, silent-Byzantine canary, Input
+ *      dedup (replayed wire returns 0 acts).
  *   D. EXHAUSTED — single emission + 0xFE sentinel + permanent
  *      !complete; Pump continues post-EXHAUSTED.
  *   E. Byzantine — equivocating proposer (Bracha Lemma 2 inheritance).
@@ -1385,6 +1386,128 @@ main(
       for (j = 0; j < sz; ++j)
         CHECK(subset[j] != 3, "C7: SubSet excludes silent peer");
 
+      freeCluster(peers, n);
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("C8: Input dedup — replayed wire returns 0 acts (silence-quorum invariant)");
+  /* ---------------------------------------------------------------- */
+  {
+    /* Load-bearing invariant for deployment-layer progress-silence
+     * quorum exit (see pthreadChannel/example/brachaAcsPsk.c): the
+     * per-peer progress clock advances only when ProposalInput /
+     * ConsensusInput returns nacts > 0.  BPR Pump replays already-
+     * delivered wires forever while committed flags are set (pitfalls
+     * 10/11); if those re-deliveries returned acts > 0, the silence
+     * timer would never elapse and the exit could never form.
+     *
+     * Drive a small honest cluster to convergence, capturing along
+     * the way one PROPOSAL and one CONSENSUS wire whose FIRST
+     * delivery produced acts.  Then re-deliver each (same args,
+     * same target peer) and assert n == 0. */
+    unsigned int n = 4, t = 1, vLen = 1, mp = 10;
+    unsigned long actsCap;
+    struct bkr94acsAct *out;
+    struct bracha87Pump cursors[MAX_PEERS];
+    struct bkr94acsAct propOut[1];
+    struct bkr94acsAct pumpOut[BKR94ACS_PUMP_MAX_ACTS];
+    struct wire propSample;
+    struct wire conSample;
+    int havePropSample;
+    int haveConSample;
+    struct wire w;
+    unsigned int iter;
+    unsigned int nDeliv;
+    unsigned int nReplay;
+    int allComplete;
+
+    if (allocCluster(peers, n, t, vLen - 1, mp) == 0) {
+      { unsigned int oi; for (oi = 0; oi < MAX_PEERS; ++oi) obsInit(&obs[oi]); }
+      memset(props, 0, sizeof (props));
+      for (i = 0; i < n; ++i)
+        props[i * vLen] = (unsigned char)(0xA0 + i);
+
+      actsCap = BKR94ACS_MAX_ACTS(n - 1, mp);
+      out = (struct bkr94acsAct *)malloc(actsCap * sizeof (*out));
+      if (out) {
+        qReset();
+        for (i = 0; i < n; ++i)
+          bracha87PumpInit(&cursors[i]);
+        havePropSample = 0;
+        haveConSample = 0;
+
+        for (i = 0; i < n; ++i) {
+          nDeliv = bkr94acsPropose(peers[i], props + i * vLen, propOut);
+          observeAndEmit(&obs[i], (unsigned char)i, n, propOut, nDeliv,
+                         vLen, 0, -1);
+        }
+
+        allComplete = 0;
+        for (iter = 0; iter < 5000 && !allComplete; ++iter) {
+          while (qSize() > 0) {
+            qPopHead(&w);
+            if (w.cls == BKR94ACS_CLS_PROPOSAL)
+              nDeliv = bkr94acsProposalInput(peers[w.to], w.origin, w.type,
+                                             w.from, w.value, out);
+            else
+              nDeliv = bkr94acsConsensusInput(peers[w.to], w.origin,
+                                              w.round, w.broadcaster,
+                                              w.type, w.from, w.conValue,
+                                              out);
+            if (nDeliv > 0) {
+              if (w.cls == BKR94ACS_CLS_PROPOSAL && !havePropSample) {
+                propSample = w;
+                havePropSample = 1;
+              } else if (w.cls == BKR94ACS_CLS_CONSENSUS && !haveConSample) {
+                conSample = w;
+                haveConSample = 1;
+              }
+            }
+            observeAndEmit(&obs[w.to], w.to, n, out, nDeliv, vLen, 0, -1);
+          }
+          for (i = 0; i < n; ++i) {
+            nDeliv = bkr94acsPump(peers[i], &cursors[i], pumpOut);
+            observeAndEmit(&obs[i], (unsigned char)i, n, pumpOut, nDeliv,
+                           vLen, 0, -1);
+          }
+          allComplete = 1;
+          for (i = 0; i < n; ++i)
+            if (!(peers[i]->flags & BKR94ACS_F_COMPLETE)) {
+              allComplete = 0;
+              break;
+            }
+        }
+        CHECK(allComplete, "C8: cluster converged");
+        CHECK(havePropSample,
+              "C8: captured a PROPOSAL wire whose first delivery emitted acts");
+        CHECK(haveConSample,
+              "C8: captured a CONSENSUS wire whose first delivery emitted acts");
+
+        /* Replay: identical args, same target peer.  The receiver's
+         * Bracha state has already consumed this exact (origin, type,
+         * sender [+ round, broadcaster, conValue]) tuple; per Fig1
+         * Rule 1/2/3 dedup the dispatch must produce zero acts. */
+        if (havePropSample) {
+          nReplay = bkr94acsProposalInput(peers[propSample.to],
+                                          propSample.origin, propSample.type,
+                                          propSample.from, propSample.value,
+                                          out);
+          CHECK(nReplay == 0,
+                "C8: re-delivered PROPOSAL returns 0 acts (Input dedup)");
+        }
+        if (haveConSample) {
+          nReplay = bkr94acsConsensusInput(peers[conSample.to],
+                                           conSample.origin, conSample.round,
+                                           conSample.broadcaster,
+                                           conSample.type, conSample.from,
+                                           conSample.conValue, out);
+          CHECK(nReplay == 0,
+                "C8: re-delivered CONSENSUS returns 0 acts (Input dedup)");
+        }
+
+        free(out);
+      }
       freeCluster(peers, n);
     }
   }
