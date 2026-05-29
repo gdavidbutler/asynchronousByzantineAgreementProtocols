@@ -103,6 +103,13 @@
 /*
  * struct bkr94acsAct
  *
+ * BA_DECIDED and COMPLETE are success signals — a decision was
+ * reached — and are NOT stop conditions: post-decide continuation
+ * requires the peer to keep broadcasting past both.  BA_EXHAUSTED
+ * is the library's one stop condition, and it is a failure (the BA
+ * cannot decide).  Successful stopping is unspecified by the library
+ * under unbounded latency; it is the application's policy.
+ *
  * Field usage by act:
  *   PROP_SEND     .origin, .type (BRACHA87_INITIAL/ECHO/READY), .value (vLen+1 bytes)
  *   CON_SEND      .origin, .round, .broadcaster, .type, .conValue (binary)
@@ -279,6 +286,8 @@ bkr94acsProposalInput(
  *
  * On BKR94ACS_ACT_COMPLETE:
  *   All N BAs decided. Common subset is final.
+ *   Success signal, not a stop -- do not halt the loop here
+ *   (post-decide continuation).
  *   Query with bkr94acsSubset().
  */
 unsigned int
@@ -370,7 +379,8 @@ bkr94acsPropose(
  *
  * Returns 0 only when a full sweep finds no committed instance —
  * pre-broadcast / shutdown state, not a per-tick termination
- * signal.  Use silence-quorum + K-sweep for termination.
+ * signal.  Termination is an application choice; the library
+ * prescribes no policy (see README.md Deployment Notes).
  *
  * Replaces the application-layer ledger entirely.  Per-record
  * destination masks, per-peer evidence tracking, and pump

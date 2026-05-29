@@ -248,8 +248,8 @@ bracha87Fig1Value(
  * Does NOT short-circuit on accepted: an honest peer that has
  * accepted owes its (ready, v) to peers still below the 2t+1
  * threshold, and replay is the only mechanism Bracha provides
- * for getting it there under loss.  The application's silence-
- * quorum exit is what eventually retires the instance.
+ * for getting it there under loss.  The application's
+ * termination policy is what eventually retires the instance.
  *
  * Returns 0 only when there is nothing committed to replay
  * (a non-origin instance that has not echoed -- the natural
@@ -599,11 +599,23 @@ bracha87Fig4Init(
  * On BRACHA87_BROADCAST: caller reads fig4->value for the broadcast value
  *   and fig4->phase/fig4->subRound for the round number.
  * On BRACHA87_DECIDE: caller reads fig4->decision.
- * On BRACHA87_EXHAUSTED: all phases consumed without decision; terminal.
+ * On BRACHA87_EXHAUSTED: all phases consumed without decision. This is
+ *   the only stop condition this state machine has, and it is a *failure*
+ *   stop — see the success-vs-stop note below.
  *
  * BRACHA87_DECIDE is returned exactly once (the first time >2t d-messages
  * are seen), combined with BRACHA87_BROADCAST. Per the paper, a decided
  * process continues participating so others can reach consensus.
+ *
+ * DECIDE is a success signal, NOT a stop condition.  A decided
+ * process keeps broadcasting (post-decide continuation, above), so
+ * the caller must never treat DECIDE as "done, stop."  The same
+ * holds for Fig 1's BRACHA87_ACCEPT — reliable broadcast has no stop
+ * condition at all (no EXHAUSTED, no phase ceiling).  Under unbounded
+ * latency no peer can know that stopping is safe, so when to stop
+ * after a decision is an application policy, not a library event.
+ * The one stop this library specifies is BRACHA87_EXHAUSTED — a
+ * failure — surfaced upward as BKR94ACS_ACT_BA_EXHAUSTED.
  *
  * BRACHA87_EXHAUSTED is also returned at most once: it is mutually
  * exclusive with BRACHA87_DECIDE (decideV requires !haveDecided;
@@ -619,7 +631,7 @@ bracha87Fig4Init(
  * Byzantine values are filtered structurally: fig3IsValid via fig4Nfn
  * rejects any value outside {0, 1, D_FLAG|0, D_FLAG|1} appropriate for
  * the round, so they are non-events that do not advance phase.  An
- * adversarial schedule can still prevent local termination by
+ * adversarial schedule can still prevent a local decision by
  * preventing n-t honest validations -- this is the asynchronous
  * impossibility result, not a defect.
  *
@@ -662,10 +674,11 @@ bracha87Fig4Round(
 /*  space found no committed instance — pre-broadcast / fully-shutdown   */
 /*  state, NOT a termination signal.                                     */
 /*                                                                       */
-/*  Termination is the application's responsibility, via the silence-    */
-/*  quorum + K-sweep gate from README.md "Termination policy."  Count    */
-/*  Pump calls across ticks; one sweep covers every currently-committed  */
-/*  instance once; K sweeps + silence-quorum from peers ⇒ exit.          */
+/*  Termination is the application's policy, not the library's,          */
+/*  which prescribes none — see README.md "Termination is an             */
+/*  application choice."  Count Pump calls across ticks if a policy      */
+/*  needs sweep coverage; one sweep covers every currently-committed     */
+/*  instance once.                                                       */
 /*                                                                       */
 /*************************************************************************/
 
@@ -734,7 +747,7 @@ bracha87Fig1PumpStep(
  * Count of instances with any committed flag (ORIGIN, ECHOED, or
  * RDSENT) — i.e., the number of instances the pump will visit per
  * sweep.  Useful for sweep-cadence calibration in the caller's
- * silence-quorum K-sweep gate.
+ * termination policy.
  */
 unsigned int
 bracha87Fig1CommittedCount(

@@ -89,7 +89,7 @@ These assumptions are not optional — they are load-bearing requirements of eve
 
 3. **Sender identification.** The receiver must know which process sent each message, and a Byzantine process must not be able to impersonate a correct one. In practice this means authentication bound to process identity.
 
-The protocol's correctness (both safety and termination) does not depend on any timing assumption — that is the asynchronous-BFT model. Pump cadence, silence-quorum exit windows, and any other timing parameters in a deployment are operator-tuning, not protocol invariants.
+The protocol's correctness (both safety and termination) does not depend on any timing assumption — that is the asynchronous-BFT model. Pump cadence, termination-policy windows, and any other timing parameters in a deployment are operator-tuning, not protocol invariants.
 
 The System Model deliberately does **not** require: a distributed key generation (DKG), a trusted setup, threshold signatures, pairing-based crypto, or a verifiable random beacon. Authenticated point-to-point channels (assumption 3 above) suffice — provisioned by whatever mechanism the deployment prefers (HMAC over a pre-shared key, TLS, mutual SSH, Noise, etc.). Setup cost is one symmetric authentication credential per peer pair.
 
@@ -209,7 +209,7 @@ bracha87PumpInit(&pump);
 bkr94acsPropose(a, my_value, &propAct);
 broadcast_action(propAct);
 
-while (!silenceQuorumExit) {
+while (!terminate) {
   /* Drain ingress: Input handles paper rules + cascades. */
   while (network_recv(&msg)) {
     n = (msg.cls == BKR94ACS_CLS_PROPOSAL)
@@ -233,7 +233,7 @@ while (!silenceQuorumExit) {
 - `BKR94ACS_ACT_BA_DECIDED` / `BKR94ACS_ACT_COMPLETE` — observability signals; no wire emission.
 - `BKR94ACS_ACT_BA_EXHAUSTED` — fatal protocol-level event for `act.origin` (no decision within `maxPhases`); the local ACS instance cannot complete. Application aborts; treat as "did not complete" plus a specific cause.
 
-`silenceQuorumExit` is the application's termination policy — see Deployment Notes below.
+`terminate` is the application's termination policy — an application choice, not a library-prescribed one. See Deployment Notes below.
 
 ## API Overview
 
@@ -266,7 +266,7 @@ Wraps the per-instance `bracha87Fig1Bpr` with a cursor that walks an application
 |---|---|
 | `bracha87PumpInit(p)` | Initialize a shared Pump cursor |
 | `bracha87Fig1PumpStep(instances, count, p, out, outCap)` | Walk a caller-owned Fig 1 array; one instance's BPR actions per call; returns 0 on full-sweep idle |
-| `bracha87Fig1CommittedCount(instances, count)` | Count of instances with any committed flag (ORIGIN/ECHOED/RDSENT); for K-sweep cadence |
+| `bracha87Fig1CommittedCount(instances, count)` | Count of instances with any committed flag (ORIGIN/ECHOED/RDSENT); one sweep = this many Pump calls |
 
 `struct bracha87Fig1Act` carries the act: `act` (INITIAL_ALL / ECHO_ALL / READY_ALL), `idx` (array index), `value` (borrowed).
 
@@ -345,7 +345,7 @@ Compiler flags: `-std=c89 -pedantic -Wall -Wextra -Os -g`
 | `test_bracha87` | Protocol white-box (bracha87) | Unit tests on each Bracha rule, composed simulation, lemma assertions inline (Lemmas 1, 2, 3, 4, 9), Theorem 2, shuffled delivery, Byzantine equivocation, post-decide multi-phase + adversarial-majority preservation, value-switch tests, BPR replay invariants (originator INITIAL replay forever, post-accept READY replay), Fig 1 array Pump coverage (`bracha87PumpInit` / `bracha87Fig1PumpStep` / `bracha87Fig1CommittedCount`), defensive null-pointer guards. Reads internal flags directly. |
 | `test_bracha87_blackbox` | Protocol black-box (bracha87) | 153 checks via the public bracha87.h surface only. Validity, agreement, totality, and Lemma-2 invariants at n=4 t=1; precise echo-threshold tests at n=4 and n=7; Fig 1 array Pump cursor walk, sparse-slot skip, multi-act emission; low-level `bracha87Fig4Round` post-EXHAUSTED safety. Tests are derived from the header contract and `Bracha87.txt` only — no `bracha87.c` reads. |
 | `test_bkr94acs` | Protocol white-box (bkr94acs) | All-to-all simulation with shuffled delivery, multi-byte values, identical proposals, larger N, post-decide continuation regression, step-2 trigger regression, BPR pump tests (50% drop end-to-end, cursor coverage, decided-0 skip, Byzantine-silent canary at 50000+ sweeps for pitfall 11, 75%/87.5% drop convergence), EXHAUSTED single-emission + 0xFE sentinel, ProposalValue ACCEPT-gate transition (ECHOED-only → NULL, post-ACCEPT → value, ORIGIN-bit carve-out for self-origin). Reaches into `a->flags & BKR94ACS_F_THRESHOLD`, `a->nDecided`, and the `data[]` layout for setup and assertion. |
-| `test_bkr94acs_blackbox` | Protocol black-box (bkr94acs) | Section A: Sz/Init contract, Propose round-trip + idempotency, defensive nulls. Section B: Lemma 2 Parts A/B/C/D explicit at n=4/n=7, identical proposals, multi-byte values, step-2 trigger uses BA-decision count not Fig1-ACCEPT count, single-input-per-BA-per-peer (paper Implementer remark), honest-exclusion contract. Section C: Pump idle on fresh peer, Pump after Propose, MAX_ACTS bound, CommittedFig1Count monotone, silence-quorum signal, 50% drop convergence, silent-Byzantine canary. Section D: BA_EXHAUSTED single emission + sentinel + permanent !complete, Pump continues post-EXHAUSTED. Section E: equivocating proposer (Bracha Lemma 2 inheritance). Tests derived from `bkr94acs.h`, `bracha87.h`, `BKR94ACS.txt`, `Bracha87.txt`, and the bracha87 black-box style — no `.c` reads. |
+| `test_bkr94acs_blackbox` | Protocol black-box (bkr94acs) | Section A: Sz/Init contract, Propose round-trip + idempotency, defensive nulls. Section B: Lemma 2 Parts A/B/C/D explicit at n=4/n=7, identical proposals, multi-byte values, step-2 trigger uses BA-decision count not Fig1-ACCEPT count, single-input-per-BA-per-peer (paper Implementer remark), honest-exclusion contract. Section C: Pump idle on fresh peer, Pump after Propose, MAX_ACTS bound, CommittedFig1Count monotone, full-sweep idle (0-return) signal, 50% drop convergence, silent-Byzantine canary. Section D: BA_EXHAUSTED single emission + sentinel + permanent !complete, Pump continues post-EXHAUSTED. Section E: equivocating proposer (Bracha Lemma 2 inheritance). Tests derived from `bkr94acs.h`, `bracha87.h`, `BKR94ACS.txt`, `Bracha87.txt`, and the bracha87 black-box style — no `.c` reads. |
 
 The white-box / black-box pairing surfaces a different class of bug at each layer. White-box catches internal-invariant regressions (a state-machine flag set wrong, a ledger field unbumped). Black-box catches API contract drift — header text and code behavior pulling apart over time. Recent contract-drift fix caught by the black-box suite: `bkr94acsProposalValue`'s ACCEPT-gate (header documented "0 if not yet accepted" but pre-fix returned ECHOED-stored bytes, exposing pre-Lemma-2 values to callers).
 
@@ -353,7 +353,7 @@ The black-box suites stay strict about scope: only `*.h`, paper-extract `.txt`, 
 
 ## Examples
 
-Two runnable examples sit in `example/`, one per application-facing API surface. Each runs in a single process with a synchronous in-memory queue (no loss, no reordering, no asynchrony) — they exercise the protocol state machines and the BPR pump but do **not** exercise the deployment-time termination policies (silence-quorum + K-sweep gate, abandonment) needed under real asynchronous transport.
+Two runnable examples sit in `example/`, one per application-facing API surface. Each runs in a single process with a synchronous in-memory queue (no loss, no reordering, no asynchrony) — they exercise the protocol state machines and the BPR pump but do **not** exercise a deployment-time termination policy (when to give up, abandonment) needed under real asynchronous transport.
 
 The low-level Fig 3 and Fig 4 entry points (`bracha87Fig3Accept`, `bracha87Fig4Round`) have no dedicated examples — those layers exist as internal mechanism feeding `bkr94acs`.  Fig 4 (raw single-bit binary BA) has no realistic standalone caller, evidenced by the seven-year gap between Bracha 1987 and BKR94 1994; Fig 3 (the VALID-set framework) exists to feed Fig 4 and inherits the same "no standalone need" through it.  Their behaviour is exercised through `bkr94acs` and through the test suites.
 
@@ -383,44 +383,28 @@ This library is protocol-only. A working deployment needs a transport layer sati
 
 A previous deployment pattern wrapped this library in a per-record ledger: `peerHasPsk[]` / `peerOriginAck[]` / `peerRound[]` evidence tracking, `destMask` per-record bitmaps, a cursor over the record list, per-record `pumpNs` floors. With BPR, that machinery is no longer needed — the library's own `bkr94acsPump` (or `bracha87Fig1Bpr` at the bare-bracha87 layer) is the only mechanism that guarantees eventual delivery, and replay state is intrinsic to the protocol's own committed flags. The application loop is two operations: drain ingress, tick the pump (see the BPR section above for the loop sketch).
 
-### Termination policy
+### Termination is an application choice
 
-A decided peer must keep broadcasting (Implementation Note 1) so others can reach consensus. Two obvious exit mechanisms are both wrong:
+The library does not terminate and does not prescribe when an application should. It **requires** two things, **provides** the signals a policy reads, and leaves the policy itself to the deployment — there is no single right answer.
 
-- Exit on `BKR94ACS_ACT_COMPLETE` — violates post-decide continuation; peers deciding last can be stranded.
-- Broadcast a "DONE" message and exit on a threshold of receipts — the DONE has no retransmit siblings in the typical ledger model; loss of the initial emission strands peers that never hear it before early completers exit.
+The library exposes exactly one **stop** condition — `BKR94ACS_ACT_BA_EXHAUSTED` — and it is a *failure* stop: a BA provably cannot decide, so the ACS instance can never complete. There is no library *success* stop. `BKR94ACS_ACT_COMPLETE` and `BKR94ACS_ACT_BA_DECIDED` report that a decision was reached, but post-decide continuation forbids stopping on them, and under unbounded latency no peer can ever know that stopping is safe. *When* to stop after success is therefore unspecifiable by the library; it is the application's policy (e.g. abandon).
 
-The principled alternative is a **silence-quorum exit gated on a sweep count.** Each peer tracks (a) the local tick at which every other peer last advanced its observable state — Fig 4 round, Fig 1 proposal/consensus phase transition, BA decision — and (b) how many BPR sweeps it has performed. A peer whose state has not advanced for a chosen silence window is "done-silent." Exit when at least `n-t-1` others are done-silent **and** at least K BPR sweeps have completed. The threshold is `n-t-1`, not `n-t` — self is implicit because completion is known locally. Using `n-t` is silently wrong at `t>0` and unreachable at `t=0`.
+**Required:**
 
-Both clauses are load-bearing. The silence clause alone has two failure modes that must be repaired by the sweep clause:
+- **Post-decide continuation** (Implementation Note 1): a decided peer must keep broadcasting so slower peers can decide. Do not stop on `BKR94ACS_ACT_COMPLETE`.
+- **One Pump call per tick** — see the NETWORK FLOOD WARNING in `bracha87.h`. `bkr94acsPump` emits one Fig1's replays per call; do **not** loop it (`while (Pump(...))` empties the committed-instance space onto the wire as fast as the CPU runs, causing the very drops the pump exists to recover from). The application's tick rate is the wire rate limit.
 
-1. **Premature exit cuts post-decide feeding short.** Once a decided peer's local state stops advancing, the natural silence window (a small multiple of declared max RTT, e.g. 8 ticks) is shorter than one full BPR pass — `bkr94acsPump` walks one Fig1 per call, so a single pass through every committed Fig1 takes `bkr94acsCommittedFig1Count(a)` Pump calls, typically dozens to hundreds. If the silence window expires before that pass completes, slow honest peers are stranded with un-emitted committed Fig1s they still need.
-2. **Honest-slow looks like done.** A slow peer's BPR replays of its own committed flags arrive at fast peers as duplicates — `bkr94acsConsensusInput` returns `nacts == 0` for already-known content, so `peerProgressTick[slow_peer]` does not refresh. Without the sweep clause, fast peers conclude the slow peer is silent and exit while the slow peer is still trying to catch up.
+**Provided** (signals a termination policy can build on):
 
-#### What "one sweep" means
+- `bkr94acsPump` returns 0 only on a full-sweep idle — no committed instance found. Not a termination signal by itself; one sweep = `bkr94acsCommittedFig1Count(a)` Pump calls (that count grows as rounds advance).
+- `BKR94ACS_ACT_BA_DECIDED` / `BKR94ACS_ACT_COMPLETE` — *success* signals (a BA decided; all N decided). **Not** stop conditions: post-decide continuation requires broadcasting past both.
+- `BKR94ACS_ACT_BA_EXHAUSTED` — the library's one stop condition, and a *failure* one (the BA gave up). Surfaces Fig 4's `BRACHA87_EXHAUSTED`.
+- Per-input progress: an Input returning `nacts > 0` is a state advance; duplicate replays return 0 (so a progress signal built on `nacts` is stable under retransmission).
 
-One sweep = `bkr94acsCommittedFig1Count(a)` Pump calls. After that many calls, every currently-committed Fig1 instance has been visited and its committed actions emitted at least once. K sweeps gives every committed Fig1 K emissions, so a slow peer's expected received-emissions per Fig1 is `K × (1 − loss)`. K is the deployment knob calibrated against assumed loss rate (NOT against RTT).
+**Two invariants any policy must respect**, whatever its shape:
 
-Recompute the threshold each Pump call: `bkr94acsCommittedFig1Count(a)` grows during the run as new rounds advance, and a peer that picks up new owned Fig1s late must not shortcut the gate.
-
-**Do not measure sweeps by cursor-position wraparound.** The full cursor space is `N + N × maxRounds × N` (with `maxRounds = maxPhases × 3`, default 255). When committed Fig1s are dense — every consensus round each peer reached has its own committed Fig1 per broadcaster — the cursor advances ~1 position per Pump call, and a position-space sweep takes thousands of ticks even at small N. The Pump-count metric is the actual coverage signal; the cursor space is an implementation detail.
-
-#### Symmetric application: pre-decide patience and post-decide feeding
-
-Apply the K-sweep gate symmetrically:
-
-- **Decided peers** (done or exhausted): K sweeps post-decide is the feeding obligation — K retransmissions of every committed Fig1 to slow peers.
-- **Undecided peers**: K sweeps from epoch start is the patience obligation — K opportunities to RECEIVE missing pieces from peers whose own pumps are wrapping at similar rates. Without symmetric patience, an undecided peer with high apparent silence abandons before any peer's first sweep, defeating the post-decide feeding obligation at the receiving end.
-
-Both clauses are the same K; by peer similarity (similar Fig1 counts → similar sweep durations), K of own sweeps ≈ K of every other peer's sweeps.
-
-#### Use `peerProgressTick`, not `lastIngressTick`
-
-Track silence by state-advancing inputs (an Input call returning `nacts > 0`, or an out-of-band first arrival like a key delivery), not by raw incoming bytes. State-advance is the actual progress signal; raw bytes are not. Refreshing on raw bytes also exposes an informed-DoS surface — an attacker sending HMAC-valid garbage at any cadence delays exit indefinitely. The sweep clause makes peerProgressTick safe even under the duplicate-suppression failure mode above (failure mode 2): pre-decide patience holds the loop open until the slow peer can actually catch up.
-
-#### Abandonment
-
-A peer that satisfies `silence quorum AND K sweeps AND !done AND !exhausted` is **abandoned**: no honest quorum is reachable for this epoch. The application must surface abandonment as a distinct outcome from `BKR94ACS_ACT_COMPLETE` and from `BKR94ACS_ACT_BA_EXHAUSTED`, and **must not commit any unilateral decision** — any substitute could disagree with another peer's actual decision (Lemma 2 Part C). The decision membership for the local epoch is empty; the application falls back to a higher-level recovery (next epoch, membership reconfiguration, etc.).
+- A peer that stops without `COMPLETE` must **not** commit a unilateral decision — any substitute could disagree with a peer that did decide (Lemma 2 Part C). Surface "gave up without a decision" as its own outcome, with empty membership.
+- `BKR94ACS_ACT_BA_EXHAUSTED` is a distinct fatal outcome (Implementation Note 12): the local ACS cannot complete; the application must surface it and abort the epoch.
 
 ### Coin choice — caller responsibility
 
@@ -436,7 +420,7 @@ A slow-converging coin drives Fig 4 step 3 case (iii) ties round after round, ad
 
 ### No timing in the protocol
 
-The protocol's correctness — both safety and eventual termination — depends on no timing assumption; this is the asynchronous-BFT model. Any timing parameters in a deployment (retransmit cadence, silence thresholds, pump tick) govern the transport wrapper and termination policy, not the state machines in this library. Correctness holds under arbitrary asynchrony; termination speed depends on the operator's tuning.
+The protocol's correctness — both safety and eventual termination — depends on no timing assumption; this is the asynchronous-BFT model. Any timing parameters in a deployment (retransmit cadence, termination thresholds, pump tick) govern the transport wrapper and termination policy, not the state machines in this library. Correctness holds under arbitrary asynchrony; termination speed depends on the operator's tuning.
 
 ---
 
@@ -486,7 +470,7 @@ Each item below is a paper-vs-code divergence that any from-scratch implementati
 
 11. **BPR (initial, v) replay must NOT short-circuit on echoed.** An originator that has locally echoed (via Rule 1 from loopback or via Rule 2 from echoes received from other peers) cannot stop replaying INITIAL. In the n = 3t+1 boundary regime the Rule 2 echo threshold (n+t)/2 + 1 equals the count of honest peers, so any honest peer that missed the bootstrap can leave the cascade one echo short forever — only the originator can break the deadlock. Symmetric with Note 10: both pitfalls reject local-state-as-saturation arguments. Regression check: `testBprByzantineSilent` (n=4 t=1 with one silent Byzantine peer; the original gap-4 design with the `!ECHOED` gate stalled at |SubSet|=1 over 50000+ pump sweeps; the corrected "always replay INITIAL while ORIGIN" rule converges in 1 sweep).
 
-12. **Fig 4 EXHAUSTED is fatal at the BKR94 layer; no unilateral substitute.** When `bracha87Fig4Round` returns `BRACHA87_EXHAUSTED` (probabilistic termination did not converge within the unsigned-char round encoding's 85-phase ceiling), the local BA has no decision. BKR94 Lemma 2 Part B's "all BAs terminate" assumption is violated, and Part C (SubSet agreement) is unrecoverable locally — any unilateral substitute (decide 0 or 1) could disagree with another peer's actual decision (different local-coin sequence or message ordering). The library surfaces `BKR94ACS_ACT_BA_EXHAUSTED`, marks the affected origin's BA state as exhausted (`bkr94acsBaDecision(acs, origin)` returns 0xFE thereafter), and does NOT increment `nDecided` or `nDecidedOne` (no decision was made); `BKR94ACS_F_COMPLETE` stays clear in `acs->flags`. The application must abort the local epoch and surface this as a distinct outcome (see Abandonment under Deployment Notes). BPR continues pumping replays for that origin so other peers may still benefit from earlier-round echoes/readys. EXHAUSTED is mutually exclusive with DECIDE per Fig 4 semantics, so single emission is structural — no dedup guard needed. Regression check: `testExhausted`.
+12. **Fig 4 EXHAUSTED is fatal at the BKR94 layer; no unilateral substitute.** When `bracha87Fig4Round` returns `BRACHA87_EXHAUSTED` (probabilistic termination did not converge within the unsigned-char round encoding's 85-phase ceiling), the local BA has no decision. BKR94 Lemma 2 Part B's "all BAs terminate" assumption is violated, and Part C (SubSet agreement) is unrecoverable locally — any unilateral substitute (decide 0 or 1) could disagree with another peer's actual decision (different local-coin sequence or message ordering). The library surfaces `BKR94ACS_ACT_BA_EXHAUSTED`, marks the affected origin's BA state as exhausted (`bkr94acsBaDecision(acs, origin)` returns 0xFE thereafter), and does NOT increment `nDecided` or `nDecidedOne` (no decision was made); `BKR94ACS_F_COMPLETE` stays clear in `acs->flags`. The application must abort the local epoch and surface this as a distinct outcome (see Termination under Deployment Notes). BPR continues pumping replays for that origin so other peers may still benefit from earlier-round echoes/readys. EXHAUSTED is mutually exclusive with DECIDE per Fig 4 semantics, so single emission is structural — no dedup guard needed. Regression check: `testExhausted`.
 
 ---
 
