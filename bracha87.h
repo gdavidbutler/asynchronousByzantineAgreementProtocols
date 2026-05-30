@@ -104,16 +104,25 @@
 /*                                                                       */
 /*************************************************************************/
 
-/* Figure 1 message types (input) */
-#define BRACHA87_INITIAL 0
-#define BRACHA87_ECHO    1
-#define BRACHA87_READY   2
+/*
+ * Figure 1 message types (input)
+ * The three types occupy the low two bits (0..2).  An application that
+ * frames its wire format may pack this type into the low bits of a
+ * single class+type byte and recover it with BRACHA87_TYPE_MASK; the
+ * higher bits are free for a caller-chosen message class (see
+ * BKR94ACS_CLS_MASK).  The library itself never serializes; this mask
+ * only documents the value range so packers do not collide.
+ */
+#define BRACHA87_INITIAL   0x00
+#define BRACHA87_ECHO      0x01
+#define BRACHA87_READY     0x02
+#define BRACHA87_TYPE_MASK 0x03
 
 /* Figure 1 output actions */
-#define BRACHA87_INITIAL_ALL 4  /* send (initial, v) to all peers (BPR) */
-#define BRACHA87_ECHO_ALL    1  /* send echo(v) to all peers */
-#define BRACHA87_READY_ALL   2  /* send ready(v) to all peers */
-#define BRACHA87_ACCEPT      3  /* accept(v) */
+#define BRACHA87_INITIAL_ALL 1  /* send (initial, v) to all peers (BPR) */
+#define BRACHA87_ECHO_ALL    2  /* send echo(v) to all peers */
+#define BRACHA87_READY_ALL   3  /* send ready(v) to all peers */
+#define BRACHA87_ACCEPT      4  /* accept(v) */
 
 /* Figure 1 state flags (bitmap) */
 #define BRACHA87_F1_ECHOED   0x01

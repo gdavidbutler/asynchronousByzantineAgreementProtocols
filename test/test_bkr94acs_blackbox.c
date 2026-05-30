@@ -1394,9 +1394,8 @@ main(
   BANNER("C8: Input dedup — replayed wire returns 0 acts (silence-quorum invariant)");
   /* ---------------------------------------------------------------- */
   {
-    /* Load-bearing invariant for deployment-layer progress-silence
-     * quorum exit (see pthreadChannel/example/brachaAcsPsk.c): the
-     * per-peer progress clock advances only when ProposalInput /
+    /* Load-bearing invariant for deployment-layer progress-silence quorum
+     * exit: the per-peer progress clock advances only when ProposalInput /
      * ConsensusInput returns nacts > 0.  BPR Pump replays already-
      * delivered wires forever while committed flags are set (pitfalls
      * 10/11); if those re-deliveries returned acts > 0, the silence

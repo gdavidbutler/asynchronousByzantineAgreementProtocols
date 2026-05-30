@@ -143,6 +143,8 @@ The step-2 trigger is "n-t BAs decided with output 1," not "n-t Fig 1 ACCEPTs." 
 
 Two message classes flow on the network: proposal messages (Fig 1 carrying arbitrary values) and consensus messages (Fig 1 carrying binary values for per-origin BA instances). Consensus messages are routed internally by (origin, round, broadcaster) -- the broadcaster identifies whose Fig 1 broadcast within a consensus round, distinct from the message sender.
 
+Each such message's per-message discriminator -- the Bracha87 type, the class, and (for a consensus message) the binary value plus decision flag -- is valued so it packs bit-disjoint into a single byte, letting an application's wire framer carry the whole thing in one byte and a consensus message carry no payload at all. This is a value-choice the headers guarantee, not a serialization the library performs: the library never puts bytes on a wire, and consumes class structurally (by which entry function the caller invokes) rather than as a stored value. It matters because ACS is message-dense -- N reliable broadcasts plus N binary BAs, each O(phases) of O(n^2) Fig 1 traffic -- so a byte saved per message compounds across the run. The canonical bit layout is documented in `bkr94acs.h`; the example framer,`example/bkr94acs.c`, follows it.
+
 The bkr94acs state machine knows its own peer index (self), which the bracha87 figures do not need. This is because bkr94acs manages internal routing: when Fig 4 says BROADCAST, bkr94acs must tag the outgoing INITIAL with self as the broadcaster.
 
 ## Bracha Phase Re-emitter (BPR)

@@ -79,12 +79,49 @@
  */
 #define BKR94ACS_MAX_PEERS 256
 
-/*************************************************************************/
-/*  Message classes                                                      */
-/*************************************************************************/
+/**************************************************************************/
+/*  Message classes                                                       */
+/*                                                                        */
+/*  CANONICAL PACKED WIRE BYTE.  Every network message carries a Bracha87 */
+/*  type (BRACHA87_INITIAL/ECHO/READY) and one of these two classes.  The */
+/*  constant values are chosen bit-disjoint so an application that frames */
+/*  its own wire format can pack the whole per-message discriminator into */
+/*  ONE byte with no shifts.  The library never serializes -- it consumes */
+/*  class structurally (which entry function the caller invokes), not as  */
+/*  a stored value -- so these positions are a CONTRACT FOR PACKERS, not  */
+/*  a format the library reads or writes.  The bundled example,           */
+/*  example/bkr94acs.c, frame to this layout; new framers should too.     */
+/*                                                                        */
+/*    bit:  7      | 6 5 4 | 3  | 2   | 1 0                               */
+/*          D_FLAG   (app)   cv   cls   type                              */
+/*                                                                        */
+/*  Fixed by library constants:                                           */
+/*    type   bits 0-1  (BRACHA87_TYPE_MASK = 0x03): INITIAL/ECHO/READY.   */
+/*    cls    bit  2    (BKR94ACS_CLS_MASK  = 0x04): PROPOSAL=0x00,        */
+/*                      CONSENSUS=0x04.                                   */
+/*    D_FLAG bit  7    (BRACHA87_D_FLAG = 0x80): on a CONSENSUS message,  */
+/*                      the Fig4 decision-candidate flag.                 */
+/*  Convention (not forced by a constant, but shared by all examples):    */
+/*    cv     bit  3:   a CONSENSUS message's binary value.  Placed        */
+/*                      adjacent to cls.                                  */
+/*    bits 4-6:        free for application message classes.              */
+/*                                                                        */
+/*  Compose / recover a library message:                                  */
+/*    byte = cls | type [ | (cv << 3) | (value & BRACHA87_D_FLAG) ]       */
+/*    type = byte & BRACHA87_TYPE_MASK                                    */
+/*    cls  = byte & BKR94ACS_CLS_MASK                                     */
+/*    consensus value = ((byte >> 3) & 1) | (byte & BRACHA87_D_FLAG)      */
+/*                                                                        */
+/*  A CONSENSUS message's entire payload is just those two live bits      */
+/*  (value + D_FLAG), so folding them into this byte lets a consensus     */
+/*  message carry NO value bytes on the wire -- the dominant message      */
+/*  class in ACS, so the saving compounds.  A PROPOSAL message carries    */
+/*  its vLen+1-byte value as the payload.                                 */
+/**************************************************************************/
 
-#define BKR94ACS_CLS_PROPOSAL  0   /* Fig1 reliable broadcast of proposals */
-#define BKR94ACS_CLS_CONSENSUS 1   /* Fig1 messages for binary consensus */
+#define BKR94ACS_CLS_PROPOSAL  0x00 /* Fig1 reliable broadcast of proposals */
+#define BKR94ACS_CLS_CONSENSUS 0x04 /* Fig1 messages for binary consensus */
+#define BKR94ACS_CLS_MASK      0x04 /* recover class from a packed byte */
 
 /*************************************************************************/
 /*  Output actions                                                       */

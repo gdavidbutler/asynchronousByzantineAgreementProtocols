@@ -1250,10 +1250,8 @@ bracha87PumpInit(
  * replays are persistent (committed flags live forever), so every
  * committed instance always has actions to emit; a tight loop will
  * empty the cursor space onto the wire as fast as the CPU can run,
- * exhausting kernel UDP buffers and causing the very drops the pump
- * is meant to recover from (verified empirically — see brachaAcsPsk.c
- * pump-induced kernel-buffer-overrun fix).  The application's tick
- * rate is the rate limit.
+ * causing the very drops the pump is meant to recover from.
+ * The application's tick rate is the rate limit.
  *
  * Walks the cursor forward from p->pos to the next committed
  * instance and returns its actions.  Returns 0 ONLY when a full

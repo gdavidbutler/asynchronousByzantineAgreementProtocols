@@ -69,17 +69,22 @@
 /*    BKR94ACS_CLS_PROPOSAL  — Fig1 messages carrying proposal values      */
 /*    BKR94ACS_CLS_CONSENSUS — Fig1 messages for per-origin binary        */
 /*                             consensus                                  */
+/*                                                                        */
+/*  Class + Bracha87 type (and, for CONSENSUS, the binary value + D_FLAG) */
+/*  ride in ONE clsType byte per the canonical packed-byte layout in      */
+/*  bkr94acs.h.  qPush composes it; the process loop recovers it.  A      */
+/*  PROPOSAL carries its value in value[]; CONSENSUS folds its payload     */
+/*  into clsType and leaves value[] unused.                               */
 /*------------------------------------------------------------------------*/
 
 struct msg {
-  unsigned char cls;         /* BKR94ACS_CLS_PROPOSAL or BKR94ACS_CLS_CONSENSUS */
+  unsigned char clsType;     /* class|type; +cv,D_FLAG for CONSENSUS (see above) */
   unsigned char origin;      /* which origin */
-  unsigned char round;       /* consensus round (cls=CONSENSUS only) */
+  unsigned char round;       /* consensus round (class=CONSENSUS only) */
   unsigned char broadcaster; /* who initiated this Fig1 broadcast (CONSENSUS) */
-  unsigned char type;        /* BRACHA87_INITIAL, BRACHA87_ECHO, BRACHA87_READY */
   unsigned char from;        /* sender */
   unsigned char to;          /* recipient */
-  unsigned char value[MAX_VLEN];  /* proposal value or binary consensus value */
+  unsigned char value[MAX_VLEN];  /* PROPOSAL value (vLen+1 bytes); unused for CONSENSUS */
 };
 
 static struct msg *MsgQ;
@@ -121,14 +126,26 @@ qPush(
 ){
   if (Qtail >= Qcap)
     return;
-  MsgQ[Qtail].cls = cls;
   MsgQ[Qtail].origin = origin;
   MsgQ[Qtail].round = round;
   MsgQ[Qtail].broadcaster = broadcaster;
-  MsgQ[Qtail].type = type;
   MsgQ[Qtail].from = from;
   MsgQ[Qtail].to = to;
-  memcpy(MsgQ[Qtail].value, value, valueLen);
+  if (cls == BKR94ACS_CLS_CONSENSUS)
+    /*
+     * Consensus payload is two live bits: the binary value (placed at
+     * bit 3) and BRACHA87_D_FLAG (kept at its native bit 7).  Fold both
+     * into the wire byte alongside class and type; no value byte is sent.
+     */
+    MsgQ[Qtail].clsType = (unsigned char)
+      (cls | type
+       | ((value[0] & 1) << 3)
+       | (value[0] & BRACHA87_D_FLAG));
+  else {
+    /* Proposal payload is real bytes; pack only class and type. */
+    MsgQ[Qtail].clsType = (unsigned char)(cls | type);
+    memcpy(MsgQ[Qtail].value, value, valueLen);
+  }
   ++Qtail;
 }
 
@@ -359,9 +376,16 @@ main(
     unsigned int nacts;
     unsigned int k;
     unsigned int oldTail;
+    unsigned char cls;
+    unsigned char type;
+    unsigned char conValue;
 
     m = &MsgQ[Qhead++];
     st = peers[m->to];
+
+    /* Unpack the wire byte back into class and Bracha87 type. */
+    cls = m->clsType & BKR94ACS_CLS_MASK;
+    type = m->clsType & BRACHA87_TYPE_MASK;
 
     /*
      * Do NOT skip messages addressed to locally-complete peers.
@@ -375,24 +399,27 @@ main(
      */
     oldTail = Qtail;
 
-    if (m->cls == BKR94ACS_CLS_PROPOSAL) {
+    if (cls == BKR94ACS_CLS_PROPOSAL) {
       if (verbose)
         printf("peer %u: recv PROP %s(origin=%u) from %u\n",
-               (unsigned)m->to, typeName(m->type),
+               (unsigned)m->to, typeName(type),
                (unsigned)m->origin, (unsigned)m->from);
 
-      nacts = bkr94acsProposalInput(st, m->origin, m->type, m->from,
+      nacts = bkr94acsProposalInput(st, m->origin, type, m->from,
                                     m->value, acts);
     } else {
+      /* Recover the consensus binary value (+D_FLAG) from the wire byte. */
+      conValue = (unsigned char)
+        (((m->clsType >> 3) & 1) | (m->clsType & BRACHA87_D_FLAG));
       if (verbose)
         printf("peer %u: recv CON %s(origin=%u, round=%u, val=%u) from %u\n",
-               (unsigned)m->to, typeName(m->type),
+               (unsigned)m->to, typeName(type),
                (unsigned)m->origin, (unsigned)m->round,
-               (unsigned)m->value[0], (unsigned)m->from);
+               (unsigned)conValue, (unsigned)m->from);
 
       nacts = bkr94acsConsensusInput(st, m->origin, m->round,
-                                     m->broadcaster, m->type,
-                                     m->from, m->value[0], acts);
+                                     m->broadcaster, type,
+                                     m->from, conValue, acts);
     }
 
     /* Enqueue output actions as network messages */
@@ -511,13 +538,17 @@ main(
     struct bkr94acsAct dacts[BKR94ACS_MAX_ACTS(MAX_PEERS, MAX_PHASES)];
 
     m = &MsgQ[Qhead++];
-    if (m->cls == BKR94ACS_CLS_PROPOSAL)
-      bkr94acsProposalInput(peers[m->to], m->origin, m->type, m->from,
+    if ((m->clsType & BKR94ACS_CLS_MASK) == BKR94ACS_CLS_PROPOSAL)
+      bkr94acsProposalInput(peers[m->to], m->origin,
+                            m->clsType & BRACHA87_TYPE_MASK, m->from,
                             m->value, dacts);
     else
       bkr94acsConsensusInput(peers[m->to], m->origin, m->round,
-                             m->broadcaster, m->type,
-                             m->from, m->value[0], dacts);
+                             m->broadcaster, m->clsType & BRACHA87_TYPE_MASK,
+                             m->from,
+                             (unsigned char)(((m->clsType >> 3) & 1)
+                                             | (m->clsType & BRACHA87_D_FLAG)),
+                             dacts);
     /* Replay-induced acts are duplicates; discarded. */
   }
 
