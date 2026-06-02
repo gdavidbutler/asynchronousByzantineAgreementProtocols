@@ -165,34 +165,42 @@ no,"(echo, v)",
 # the paper outputs (which are guaranteed all "no" in its call
 # path).  No discriminator is required inside the dispatch.
 #
-# Saturation.  bracha87Fig1Bpr does NOT short-circuit on
-# "accepted".  Bracha's eventual delivery requires the accepting
-# peer to keep replaying (ready, v) so peers still under the
-# 2t+1 ready threshold can cross it -- the very purpose of
-# replay is helping OTHER peers' progress, not the local
-# peer's.  The application's silence-quorum exit is what
-# eventually frees the instance.
+# Retirement (minimal re-emission).  Each replay stops at the
+# soonest point it is provably no longer owed to any correct
+# peer.  INITIAL and ECHO are bootstrap-only: they exist to
+# drive the system to where t+1 correct peers have sent
+# (ready, v), after which Bracha's ready-amplification
+# (rdCnt >= t+1 -> send ready) is self-sustaining and consumes
+# neither.  "accepted" is the local witness this has passed
+# (>= t+1 of the 2t+1 readys are correct, re-emitted forever),
+# so the wrapper bracha87Fig1Bpr drops the "replay (echo, v)"
+# output when ACCEPTED.  (ready, v) is NOT dropped on accepted:
+# it is exactly what the amplification tail consumes -- an
+# accepted peer still owes its ready to peers under 2t+1, and
+# replay is the only delivery mechanism under loss.  The
+# application's abandon policy frees the instance.
 #
 # Originator (initial, v) replay -- not in this dispatch.
 # A peer that originates a broadcast emits (initial, v) on
-# every Bpr call as long as the origin flag is set, regardless
-# of "have echoed".  The "stop INITIAL replay once we have
-# echoed locally" optimisation is incorrect: in the n = 3t + 1
-# regime, the Rule 2 echo threshold (n+t)/2 + 1 equals the
-# count of honest peers, so any honest peer that missed the
-# bootstrap (initial, v) can leave the cascade one echo short
-# forever -- only the originator can break the deadlock by
-# re-sending.  Symmetric with the "READY replay continues
-# post-accept" rule above (gap 3): both refuse local-state-as-
-# saturation arguments because BPR's purpose is helping OTHER
-# peers, not the local one.  Single-bit guard ("am origin")
-# over a single output with no test-ordering insight; the
-# wrapper bracha87Fig1Bpr emits BRACHA87_INITIAL_ALL as a C
-# early-emit before the dispatch include.  See
+# every Bpr call while the origin flag is set, UNTIL it has
+# accepted OR has observed an echo from every peer
+# (echoSenders == n).  The "stop INITIAL once we have echoed
+# locally" optimisation is incorrect -- in the n = 3t + 1
+# regime the Rule 2 echo threshold (n+t)/2 + 1 equals the
+# count of honest peers, so at local-echo time no readys may
+# exist yet and any honest peer that missed the bootstrap can
+# leave the cascade one echo short forever; only the
+# originator breaks it.  The two retirements above are sound
+# because both are strictly stronger than local-echo:
+# all-echoed leaves no peer to induce; accepted establishes
+# the t+1 correct readys that finish the protocol without any
+# INITIAL.  Flag/count guards ("am origin", "accepted",
+# "echoSenders == n") over a single output with no test-
+# ordering insight; the wrapper emits BRACHA87_INITIAL_ALL as
+# a C early-emit before the dispatch include.  See
 # decisionTableCompiler/README.md "Cross-Domain Bridge Pattern"
-# -- a trivial single-input/single-output guard stays in C;
-# the BPR rules below are the cases that benefit from joint
-# optimisation with the paper rules.
+# -- such guards stay in C; the BPR rules below are the cases
+# that benefit from joint optimisation with the paper rules.
 #
 # Additional outputs introduced by BPR (in this dispatch):
 #   "replay (echo, v)"           { yes, no }

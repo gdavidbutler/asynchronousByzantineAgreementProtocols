@@ -3544,13 +3544,16 @@ testFig1Bpr(
   free(b);
 
   /*
-   * After Rule 6 fires (2t+1 = 3 readys -> ACCEPTED): BPR keeps
-   * replaying ECHO + READY.  Bracha eventual delivery (Lemma 4)
-   * requires the accepting peer to keep helping peers still
-   * below the 2t+1 threshold cross it; replay is the mechanism
-   * for that under fair-loss.  An accepted-implies-silent gate
-   * would strand slower peers (gap 3 of the Apr-26 BPR review).
-   * The application's silence-quorum exit retires the instance.
+   * After Rule 6 fires (2t+1 = 3 readys -> ACCEPTED): BPR replays
+   * READY only.  ACCEPTED is the witness that t+1 correct processes
+   * have sent ready (>= t+1 of the 2t+1 are non-byzantine), so every
+   * remaining correct process reaches accept via ready-amplification
+   * alone -- INITIAL and ECHO are bootstrap-only and provably dead
+   * past this point, so they retire (the minimal-re-emit gate).
+   * READY does NOT retire (pitfall 10): it is exactly what that
+   * amplification tail consumes; an accepted peer still owes its
+   * ready to peers below 2t+1.  The application's abandon policy
+   * retires the instance.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
@@ -3562,18 +3565,15 @@ testFig1Bpr(
         (b->flags & BRACHA87_F1_ACCEPTED));
 
   nout = bracha87Fig1Bpr(b, out);
-  check("BPR post-accept: 2 actions (helping slow peers)", nout == 2);
-  check("BPR post-accept: ECHO_ALL first",
-        nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
-  check("BPR post-accept: READY_ALL second",
-        nout >= 2 && out[1] == BRACHA87_READY_ALL);
+  check("BPR post-accept: 1 action (READY only, ECHO retired)", nout == 1);
+  check("BPR post-accept: READY_ALL",
+        nout >= 1 && out[0] == BRACHA87_READY_ALL);
   for (i = 0; i < 3; ++i) {
     nout = bracha87Fig1Bpr(b, out);
-    check("BPR post-accept: idempotent count", nout == 2);
-    check("BPR post-accept: idempotent ECHO_ALL", out[0] == BRACHA87_ECHO_ALL);
-    check("BPR post-accept: idempotent READY_ALL", out[1] == BRACHA87_READY_ALL);
+    check("BPR post-accept: idempotent count", nout == 1);
+    check("BPR post-accept: idempotent READY_ALL", out[0] == BRACHA87_READY_ALL);
   }
-  printf("    after Rule 6         : %u actions (post-accept ECHO+READY replay)\n", nout);
+  printf("    after Rule 6         : %u action (post-accept READY-only replay)\n", nout);
   free(b);
 
   /*
@@ -3651,23 +3651,25 @@ testFig1Bpr(
   check("BPR interleaved: value matches input",
         memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
   nout = bracha87Fig1Bpr(b, out);
-  check("BPR interleaved: post-accept BPR returns 2 (ECHO+READY)",
-        nout == 2);
+  check("BPR interleaved: post-accept BPR returns 1 (READY only)",
+        nout == 1 && out[0] == BRACHA87_READY_ALL);
   printf("    interleaved          : Input+BPR sequence, accept at expected point\n");
   free(b);
 
   /*
-   * Originator INITIAL replay (gap 4 of the Apr-26 BPR review).
+   * Originator INITIAL replay and its retirement.
    *
    * bracha87Fig1Origin sets BRACHA87_F1_ORIGIN and stores the
-   * value to be broadcast.  Until Rule 1, 2, or 3 sets ECHOED
-   * (loopback or echo / ready cascade), bracha87Fig1Bpr emits
-   * BRACHA87_INITIAL_ALL on every call so the originator's
-   * (initial, v) survives loss to all other honest peers.
-   *
-   * Once ECHOED is set the INITIAL replay drops; ECHO replay
-   * carries the value forward (Rule 2 lets any peer with > (n+t)/2
-   * echoes echo on its own, so origin's INITIAL is redundant).
+   * value.  bracha87Fig1Bpr emits BRACHA87_INITIAL_ALL on every
+   * call while ORIGIN is set, INCLUDING after the origin has echoed
+   * locally -- stopping at ECHOED would strand a peer that missed
+   * the bootstrap (see the byzantine-silent test).  INITIAL retires
+   * only at the strictly-stronger stops: ACCEPTED (t+1 correct
+   * readys now circulate, so ready-amplification finishes without
+   * it) or an echo observed from every peer (echoSenders == n,
+   * nothing left to induce).  The pre-loopback / post-loopback
+   * cases below assert INITIAL survives ECHOED; the accepted and
+   * all-echoed retirements are covered just after.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
@@ -3747,9 +3749,12 @@ testFig1Bpr(
         nout >= 3 && out[2] == BRACHA87_READY_ALL);
   free(b);
 
-  /* Origin + ACCEPTED (Rule 6 fires).  Same outputs: ECHO+READY,
-   * no INITIAL.  Asserts gap 3 fix applies symmetrically to
-   * originator instances. */
+  /* Origin + ACCEPTED (Rule 6 fires).  ACCEPTED retires both INITIAL
+   * and ECHO (bootstrap-only; t+1 correct readys now circulate, so
+   * ready-amplification carries every correct peer to accept with no
+   * initial/echo consumed).  Only READY replays (pitfall 10).  The
+   * accept witness is strictly stronger than the ECHOED gate pitfall
+   * 11 forbids, so retiring here is sound. */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
   bracha87Fig1Origin(b, val);
@@ -3763,24 +3768,58 @@ testFig1Bpr(
         (b->flags & BRACHA87_F1_ACCEPTED));
 
   nout = bracha87Fig1Bpr(b, out);
-  check("BPR origin+accepted: 3 actions (INITIAL+ECHO+READY)", nout == 3);
-  check("BPR origin+accepted: INITIAL_ALL first",
-        nout >= 1 && out[0] == BRACHA87_INITIAL_ALL);
-  check("BPR origin+accepted: ECHO_ALL second",
-        nout >= 2 && out[1] == BRACHA87_ECHO_ALL);
-  check("BPR origin+accepted: READY_ALL third",
-        nout >= 3 && out[2] == BRACHA87_READY_ALL);
+  check("BPR origin+accepted: 1 action (READY only, INITIAL+ECHO retired)",
+        nout == 1);
+  check("BPR origin+accepted: READY_ALL",
+        nout >= 1 && out[0] == BRACHA87_READY_ALL);
   for (i = 0; i < 5; ++i) {
     nout = bracha87Fig1Bpr(b, out);
-    check("BPR origin+accepted: idempotent count", nout == 3);
-    check("BPR origin+accepted: idempotent INITIAL_ALL",
-          out[0] == BRACHA87_INITIAL_ALL);
-    check("BPR origin+accepted: idempotent ECHO_ALL",
-          out[1] == BRACHA87_ECHO_ALL);
+    check("BPR origin+accepted: idempotent count", nout == 1);
     check("BPR origin+accepted: idempotent READY_ALL",
-          out[2] == BRACHA87_READY_ALL);
+          out[0] == BRACHA87_READY_ALL);
   }
-  printf("    origin state matrix  : ORIGIN+RDSENT and ORIGIN+ACCEPTED emit INITIAL+ECHO+READY\n");
+  printf("    origin state matrix  : ORIGIN+RDSENT emits INITIAL+ECHO+READY; ORIGIN+ACCEPTED emits READY only\n");
+  free(b);
+
+  /*
+   * INITIAL retires at echoSenders == n INDEPENDENTLY of accept.
+   * Origin receives an echo from every one of the n=4 peers but no
+   * readys, so it is ECHOED + RDSENT (Rule 2/3 at the 3-echo
+   * threshold) yet NOT ACCEPTED (accept needs 2t+1 readys, none
+   * arrived).  All peers have echoed, so INITIAL has nothing left to
+   * induce and retires; ECHO + READY still replay (not accepted).
+   * This pins the all-echoed gate as distinct from the accept gate.
+   */
+  check("BPR all-echoed: NULL guard", bracha87Fig1AllEchoed(0) == 0);
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Origin(b, val);
+  check("BPR all-echoed: 0 with no echoes", bracha87Fig1AllEchoed(b) == 0);
+  /* Feed echoes one at a time; AllEchoed stays 0 until the n-th sender. */
+  for (i = 0; i < 4; ++i) {
+    bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val, out);
+    if (i < 3)
+      check("BPR all-echoed: 0 while echoSenders < n",
+            bracha87Fig1AllEchoed(b) == 0);
+  }
+  check("BPR all-echoed: 1 when echoSenders == n",
+        bracha87Fig1AllEchoed(b) == 1);
+  check("BPR origin all-echoed: ECHOED set", (b->flags & BRACHA87_F1_ECHOED));
+  check("BPR origin all-echoed: NOT accepted",
+        !(b->flags & BRACHA87_F1_ACCEPTED));
+  nout = bracha87Fig1Bpr(b, out);
+  check("BPR origin all-echoed: INITIAL retired (no INITIAL_ALL)",
+        nout >= 1 && out[0] != BRACHA87_INITIAL_ALL);
+  {
+    unsigned int gi, sawInit = 0, sawReady = 0;
+    for (gi = 0; gi < nout; ++gi) {
+      if (out[gi] == BRACHA87_INITIAL_ALL) sawInit = 1;
+      if (out[gi] == BRACHA87_READY_ALL)   sawReady = 1;
+    }
+    check("BPR origin all-echoed: INITIAL_ALL absent", !sawInit);
+    check("BPR origin all-echoed: READY_ALL still replays", sawReady);
+  }
+  printf("    all-echoed gate      : bracha87Fig1AllEchoed 0->1 at echoSenders==n, retires INITIAL without accept\n");
   free(b);
 
   /*
@@ -3957,6 +3996,134 @@ testFig1EvenNplusT(
   printf("    n=8 t=2 equivoc 3:5   : accept %u/8", a);
   if (a > 0) printf(" value=%c%c%c%c", aval[0], aval[1], aval[2], aval[3]);
   printf("\n");
+}
+
+/*************************************************************************/
+/*  BPR large-n reliable broadcast (n >> 3t)                             */
+/*                                                                       */
+/*  The rest of the suite runs at the n = 3t+1 boundary, where           */
+/*  2t+1 == n-t, so a peer accepts exactly when all n-t correct peers    */
+/*  have readied -- the regime where minimal re-emission's accept-retire */
+/*  of INITIAL/ECHO is trivially safe (nobody is behind at accept).      */
+/*  This pins the OTHER regime, the one the pthreadChannel deployments   */
+/*  actually run (local coin => Ben-Or t < sqrt(n) => n >> 3t; up to     */
+/*  37/6 on a laptop): here 2t+1 << n-t, so peers cross the accept        */
+/*  threshold at widely different times.  Early accepters retire their   */
+/*  INITIAL/ECHO replay (bracha87Fig1Bpr) while many correct peers are   */
+/*  still far below 2t+1 readys; the never-retired READY replay plus      */
+/*  Rule-3 amplification (t+1 readys -> send ready, 2t+1 -> accept) must  */
+/*  still carry EVERY correct peer to ACCEPT.  If the accept-retire cut   */
+/*  something a laggard needed, a laggard would stall and never accept.   */
+/*  Pure Fig1 reliable broadcast (no Fig3/Fig4, no coin, no consensus     */
+/*  pipeline), so n=37 is a few KB.  All n peers are honest; the only     */
+/*  adversity is HETEROGENEOUS per-receiver loss (a "fast" group on good  */
+/*  links, a "slow" group on bad links) -- a uniform-loss synchronous     */
+/*  pump converges in lockstep and would never stagger acceptance.  The   */
+/*  fast group (sized above the (n+t)/2+1 echo threshold so it bootstraps */
+/*  itself) accepts first and retires INITIAL/ECHO; the slow group, still */
+/*  far below 2t+1 readys, is carried to ACCEPT solely by the fast        */
+/*  group's never-retired READY replay (receiving 2t+1 readys accepts     */
+/*  directly, no echo needed).                                            */
+/*************************************************************************/
+
+static void
+testBprLargeN(
+  void
+){
+  enum { LN_N = 37, LN_T = 6, LN_FAST = 25 };
+  struct bracha87Fig1 *f1[LN_N];
+  unsigned char out[3];
+  unsigned char dout[3];
+  unsigned char val[1];
+  unsigned long sz;
+  unsigned int rng;
+  unsigned int tick;
+  unsigned int i;
+  unsigned int j;
+  unsigned int k;
+  unsigned int accepted;
+  unsigned int firstAcceptCnt;
+  unsigned int firstAcceptTick;
+
+  printf("\n  BPR large-n reliable broadcast (n=%u t=%u, n >> 3t):\n",
+         (unsigned)LN_N, (unsigned)LN_T);
+
+  sz = bracha87Fig1Sz(LN_N - 1, 0);
+  for (i = 0; i < LN_N; ++i) {
+    f1[i] = (struct bracha87Fig1 *)calloc(1, sz);
+    bracha87Fig1Init(f1[i], LN_N - 1, LN_T, 0);
+  }
+  val[0] = 1;
+
+  /* Peer 0 originates and self-feeds its own INITIAL (Rule 1 -> ECHOED),
+   * the realistic bootstrap; thereafter everything rides the BPR pump. */
+  bracha87Fig1Origin(f1[0], val);
+  bracha87Fig1Input(f1[0], BRACHA87_INITIAL, 0, val, out);
+
+  rng = 0xC0FFEEu;
+  firstAcceptCnt = 0;
+  firstAcceptTick = 0;
+  for (tick = 0; tick < 100000u; ++tick) {
+    accepted = 0;
+    for (i = 0; i < LN_N; ++i)
+      if (f1[i]->flags & BRACHA87_F1_ACCEPTED)
+        ++accepted;
+    if (accepted && !firstAcceptCnt) {
+      firstAcceptCnt = accepted;
+      firstAcceptTick = tick;
+    }
+    if (accepted == LN_N)
+      break;
+
+    /* One BPR sweep: every peer re-emits its committed actions.  Drop
+     * per receiver: fast group (j < LN_FAST) 25%, slow group 80%. */
+    for (i = 0; i < LN_N; ++i) {
+      const unsigned char *vi;
+      unsigned int nacts;
+
+      nacts = bracha87Fig1Bpr(f1[i], out);
+      if (!nacts)
+        continue;
+      vi = bracha87Fig1Value(f1[i]);
+      for (k = 0; k < nacts; ++k) {
+        unsigned char type;
+
+        type = (out[k] == BRACHA87_INITIAL_ALL) ? BRACHA87_INITIAL
+             : (out[k] == BRACHA87_ECHO_ALL)    ? BRACHA87_ECHO
+             :                                    BRACHA87_READY;
+        for (j = 0; j < LN_N; ++j) {
+          unsigned int dropPct;
+
+          dropPct = (j < LN_FAST) ? 25u : 80u;
+          rng = rng * 1103515245u + 12345u;
+          if ((rng >> 16) % 100u < dropPct)
+            continue;                    /* dropped this delivery */
+          (void)bracha87Fig1Input(f1[j], type, (unsigned char)i, vi, dout);
+        }
+      }
+    }
+  }
+
+  accepted = 0;
+  for (i = 0; i < LN_N; ++i)
+    if (f1[i]->flags & BRACHA87_F1_ACCEPTED)
+      ++accepted;
+
+  /* The property: every correct peer accepts, despite early accepters
+   * having retired INITIAL/ECHO mid-run. */
+  check("BPR large-n: all n peers ACCEPT under heterogeneous loss",
+        accepted == LN_N);
+  /* Witness that the staggered regime was actually exercised -- when the
+   * first accept landed, the rest were still behind (else the test would
+   * be vacuous, not stressing the early-retire-while-laggards path). */
+  check("BPR large-n: acceptance was staggered (early-retire regime real)",
+        firstAcceptCnt > 0 && firstAcceptCnt < LN_N);
+  printf("    %u/%u accepted; first accept at tick %u with only %u/%u done\n",
+         accepted, (unsigned)LN_N, firstAcceptTick, firstAcceptCnt,
+         (unsigned)LN_N);
+
+  for (i = 0; i < LN_N; ++i)
+    free(f1[i]);
 }
 
 
@@ -4421,6 +4588,7 @@ main(
   testPostDecideMultiPhase();
   testFig1ValueSwitch();
   testFig1Bpr();
+  testBprLargeN();
 
   /*
    * Fig 1 array Pump coverage: bracha87PumpInit, Fig 1 array pump,

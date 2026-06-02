@@ -179,6 +179,30 @@ fig1RdCnt(
 }
 
 /*
+ * Count distinct senders recorded in a from-bitmap (echo or ready).
+ * Value-agnostic by design: a peer that has echoed/readied ANY value
+ * has crossed the corresponding gate for good (Rule 2 echo and Rule 3
+ * ready each fire at most once per peer), so the bitmap -- not the
+ * per-value tally -- is the authoritative "has this peer moved past
+ * the point where it consumes the replay" record the BPR retire gates
+ * need.  O(N/8); only the once-per-tick Bpr slow path calls it.
+ */
+static unsigned int
+fig1FromCnt(
+  const unsigned char *from
+ ,unsigned int N
+){
+  unsigned int cnt;
+  unsigned int j;
+
+  cnt = 0;
+  for (j = 0; j < N; ++j)
+    if (BIT_TST(from, j))
+      ++cnt;
+  return (cnt);
+}
+
+/*
  * Record that peer 'from' sent echo with value v.
  */
 static void
@@ -352,31 +376,50 @@ bracha87Fig1Bpr(
   nout = 0;
 
   /*
-   * Origin-side INITIAL replay: an originator replays
-   * (initial, v) on every Bpr call, whether or not it has
-   * locally echoed.  Stopping at ECHOED would assume the cascade
-   * is self-sustaining via Rule 2 once enough peers have
-   * echoed -- but Rule 2's echo threshold is (n+t)/2+1 and at
-   * the boundary regime n = 3t+1 with t honest peers
-   * occluded by drop or byzantine silence, the threshold is
-   * exactly the count of honest peers.  Any honest peer that
-   * missed the bootstrap INITIAL can leave the cascade one
-   * echo short forever; only the originator can break the
-   * deadlock by re-sending INITIAL.
+   * INITIAL / ECHO are bootstrap-only.  Their sole purpose is to
+   * drive the system to the point where t+1 CORRECT processes have
+   * sent (ready, v); past that point Bracha's ready-amplification
+   * rule (rdCnt >= t+1 -> send ready, no echo threshold required)
+   * is self-sustaining and needs no further initials or echoes.
    *
-   * The "always replay INITIAL when ORIGIN" rule is symmetric
-   * with the "always replay READY when RDSENT" rule in the
-   * dispatch (gap 3): both reject local-state-as-saturation
-   * arguments because the load-bearing case is helping
-   * OTHER peers, not the local one.  Application's silence-
-   * quorum exit retires the instance.
+   * ACCEPTED is the locally-observable proof that this point has
+   * passed: accept requires 2t+1 distinct readys, of which at most
+   * t are byzantine, so >= t+1 came from correct processes.  Those
+   * correct processes have RDSENT and re-emit (ready, v) forever
+   * (READY never retires), so under fair loss every correct process
+   * eventually collects t+1 of them, amplifies, sends ready, and --
+   * once n-t >= 2t+1 correct readys circulate -- accepts.  No
+   * INITIAL or ECHO is consumed anywhere in that tail.  So once THIS
+   * instance has ACCEPTED, its INITIAL and ECHO replays are provably
+   * dead weight: retire them.
    *
-   * Single-bit guard, captured in C rather than as a DTC
+   * This is NOT the forbidden local-saturation gate.  Pitfall 11
+   * forbids retiring INITIAL at merely ECHOED -- correct, because at
+   * local-echo time no readys may exist yet, so the rescue set is
+   * not established and the bootstrap is still load-bearing.
+   * ACCEPTED is strictly stronger: it is the witness that the t+1
+   * correct readys now exist.  (Pitfall 10's ban on retiring READY
+   * at accept is untouched -- READY is exactly what the amplification
+   * tail consumes; see the READY emit below.)  Retiring AT accept
+   * also sidesteps the Input accept-guard's bitmap freeze: nothing
+   * downstream of accept is counted, but nothing needs to be.
+   *
+   * INITIAL carries a second, independent retire: echoSenders == n.
+   * INITIAL induces only echoes (Rule 1/2); once every peer has
+   * echoed there is nothing left to induce.  Trivially sound,
+   * value-agnostic, monotone-latched, and fires before accept for a
+   * fast origin -- so emit only while NEITHER condition holds.
+   * Under <= t byzantine-silent peers echoSenders cannot reach n, so
+   * that path self-disables and ACCEPTED carries the retirement.
+   *
+   * Single-input guards, captured in C rather than as a DTC
    * sub-table (see decisionTableCompiler/README.md
-   * "Cross-Domain Bridge Pattern" -- a single boundary-input
-   * gate with no ordering insight stays in C).
+   * "Cross-Domain Bridge Pattern" -- guards with no ordering
+   * insight stay in C).
    */
-  if (b->flags & BRACHA87_F1_ORIGIN)
+  if ((b->flags & BRACHA87_F1_ORIGIN)
+   && !(b->flags & BRACHA87_F1_ACCEPTED)
+   && fig1FromCnt(F1_ECFROM(b), B_N(b)) < B_N(b))
     out[nout++] = BRACHA87_INITIAL_ALL;
 
   /*
@@ -417,12 +460,29 @@ bracha87Fig1Bpr(
     (void)sendReady;
     (void)acceptV;
 
-    if (replayEcho)
+    /*
+     * ECHO retires at ACCEPTED for the same reason as INITIAL: once
+     * t+1 correct readys exist (witnessed by this instance's accept),
+     * every correct process reaches accept on readys alone, via
+     * amplification, with no echo consumed.  READY does NOT retire
+     * (pitfall 10) -- it is precisely what that amplification tail
+     * consumes, so it replays forever until application abandonment.
+     */
+    if (replayEcho && !(b->flags & BRACHA87_F1_ACCEPTED))
       out[nout++] = BRACHA87_ECHO_ALL;
     if (replayReady)
       out[nout++] = BRACHA87_READY_ALL;
   }
   return (nout);
+}
+
+unsigned int
+bracha87Fig1AllEchoed(
+  const struct bracha87Fig1 *b
+){
+  if (!b)
+    return (0);
+  return (fig1FromCnt(F1_ECFROM(b), B_N(b)) == B_N(b));
 }
 
 /*************************************************************************/

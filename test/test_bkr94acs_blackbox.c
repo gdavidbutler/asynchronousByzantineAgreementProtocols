@@ -1101,6 +1101,20 @@ main(
           "B6: NO premature step-2 fanout on Fig1-ACCEPT count "
           "(BKR94 Part A Case (i) regression)");
 
+    /* bkr94acsProposalAllEchoed contract: origins 0/1/2 each received an
+     * ECHO from all n peers before any READY, so the bit latched at n
+     * before ACCEPT and holds; origin 3 received nothing.  Plus the
+     * documented null / out-of-range guards. */
+    CHECK(bkr94acsProposalAllEchoed(p0, 0) == 1,
+          "B6: AllEchoed 1 for fully-echoed origin 0 (latched across accept)");
+    CHECK(bkr94acsProposalAllEchoed(p0, 1) == 1, "B6: AllEchoed 1 for origin 1");
+    CHECK(bkr94acsProposalAllEchoed(p0, 2) == 1, "B6: AllEchoed 1 for origin 2");
+    CHECK(bkr94acsProposalAllEchoed(p0, 3) == 0,
+          "B6: AllEchoed 0 for un-echoed origin 3");
+    CHECK(bkr94acsProposalAllEchoed(0, 0) == 0, "B6: AllEchoed NULL -> 0");
+    CHECK(bkr94acsProposalAllEchoed(p0, 200) == 0,
+          "B6: AllEchoed out-of-range origin -> 0");
+
     free(p0);
   }
   b6_done: ;
@@ -1341,10 +1355,11 @@ main(
      * This is the regression for pitfall 11: the originator INITIAL
      * replay must NOT short-circuit on local ECHOED.  Each honest
      * peer is an originator of its own proposal; their Pumps must
-     * keep replaying INITIAL forever.  At the n=3t+1 boundary,
-     * Bracha's echo threshold ((n+t)/2+1) equals the honest count,
-     * so any peer that missed the bootstrap depends on the
-     * originator's continued INITIAL replay to complete its echo
+     * keep replaying INITIAL until that proposal is accepted (the
+     * sound stop), NOT merely until they echoed locally.  At the
+     * n=3t+1 boundary Bracha's echo threshold ((n+t)/2+1) equals the
+     * honest count, so any peer that missed the bootstrap depends on
+     * the originator's continued INITIAL replay to complete its echo
      * count.  The original gap-4 design (`ORIGIN && !ECHOED → emit`)
      * stalled at |SubSet|=1 in this setup. */
     unsigned int n = 4, t = 1, vLen = 1, mp = 10;
@@ -1396,10 +1411,11 @@ main(
   {
     /* Load-bearing invariant for deployment-layer progress-silence quorum
      * exit: the per-peer progress clock advances only when ProposalInput /
-     * ConsensusInput returns nacts > 0.  BPR Pump replays already-
-     * delivered wires forever while committed flags are set (pitfalls
-     * 10/11); if those re-deliveries returned acts > 0, the silence
-     * timer would never elapse and the exit could never form.
+     * ConsensusInput returns nacts > 0.  BPR Pump keeps replaying
+     * un-retired actions (READY forever; INITIAL/ECHO until accept)
+     * onto already-delivered wires (pitfalls 10/11); if those
+     * re-deliveries returned acts > 0, the silence timer would never
+     * elapse and the exit could never form.
      *
      * Drive a small honest cluster to convergence, capturing along
      * the way one PROPOSAL and one CONSENSUS wire whose FIRST

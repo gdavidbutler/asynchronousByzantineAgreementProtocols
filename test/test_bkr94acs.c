@@ -1041,17 +1041,20 @@ testBpr(
   }
 
   /* Loopback our own INITIAL through ProposalInput -> Rule 1 fires,
-   * ECHOED is set on propF1(0), and PROP_SEND/INITIAL replay stops. */
+   * ECHOED is set on propF1(0).  INITIAL replay does NOT stop here:
+   * retiring at local ECHOED would strand a peer that missed the
+   * bootstrap (pitfall 11). */
   {
     struct bkr94acsAct iout[BKR94ACS_MAX_ACTS(4, 4)];
     bkr94acsProposalInput(a, 0, BRACHA87_INITIAL, 0, val, iout);
   }
 
-  /* Post-loopback, the proposal Fig1 is ORIGIN+ECHOED.  Per gap-3
-   * symmetry, INITIAL replay continues alongside ECHO replay so
-   * honest peers that missed the bootstrap can still catch up.
-   * The pump emits both; verify the cursor surfaces both for
-   * origin = self. */
+  /* Post-loopback, the proposal Fig1 is ORIGIN+ECHOED but not yet
+   * accepted and echoSenders < n, so INITIAL replay continues
+   * alongside ECHO replay -- honest peers that missed the bootstrap
+   * can still catch up.  The pump emits both; verify the cursor
+   * surfaces both for origin = self.  (Both retire once self
+   * accepts; this instance has not.) */
   {
     int seenInitial;
     int seenEcho;
@@ -1357,6 +1360,63 @@ testBprCursorCoverage(
 
   for (p = 0; p < 4; ++p)
     free(peers[p]);
+}
+
+/*------------------------------------------------------------------------*/
+/*  bkr94acsProposalAllEchoed white-box                                   */
+/*                                                                        */
+/*  Drives one peer's view of origin 0's proposal Fig1 with ECHO from     */
+/*  every peer BEFORE any READY, so the echo bitmap reaches n before any  */
+/*  ACCEPT could freeze it.  The accessor must read 0 until the n-th      */
+/*  distinct echo sender, 1 thereafter, and survive the post-accept       */
+/*  freeze (it latched at n).  This is the application's retirement gate   */
+/*  for an INITIAL-paired side channel (PSK / signature) -- it must NOT    */
+/*  retire at the proposal's ACCEPTED.                                     */
+/*------------------------------------------------------------------------*/
+
+static void
+testProposalAllEchoed(
+  void
+){
+  struct bkr94acs *a;
+  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4, 4)];
+  unsigned char val[1];
+  unsigned long sz;
+  unsigned int from;
+
+  printf("\n  bkr94acsProposalAllEchoed:\n");
+
+  sz = bkr94acsSz(3, 0, 4);
+  a = (struct bkr94acs *)calloc(1, sz);
+  if (!a) {
+    check("alloc bkr94acs instance", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+  val[0] = 1;
+
+  check("AllEchoed: NULL state -> 0", bkr94acsProposalAllEchoed(0, 0) == 0);
+  check("AllEchoed: out-of-range origin -> 0",
+        bkr94acsProposalAllEchoed(a, 200) == 0);
+  check("AllEchoed: fresh proposal -> 0", bkr94acsProposalAllEchoed(a, 0) == 0);
+
+  bkr94acsProposalInput(a, 0, BRACHA87_INITIAL, 0, val, acts);
+  /* ECHO from every peer, no readys: echoSenders climbs to n with no
+   * ACCEPT (which needs 2t+1 readys) to freeze it short. */
+  for (from = 0; from < 4; ++from) {
+    bkr94acsProposalInput(a, 0, BRACHA87_ECHO, (unsigned char)from, val, acts);
+    check("AllEchoed: 1 exactly when echoSenders == n",
+          bkr94acsProposalAllEchoed(a, 0) == (from == 3));
+  }
+
+  /* Drive to ACCEPT via readys; the latched all-echoed bit holds. */
+  for (from = 0; from < 4; ++from)
+    bkr94acsProposalInput(a, 0, BRACHA87_READY, (unsigned char)from, val, acts);
+  check("AllEchoed: survives post-accept freeze",
+        bkr94acsProposalAllEchoed(a, 0) == 1);
+  printf("    0 until echoSenders==n, latched 1 across accept\n");
+
+  free(a);
 }
 
 /*------------------------------------------------------------------------*/
@@ -2080,6 +2140,7 @@ main(
   testStepTwoTrigger();
   testBpr();
   testBprCursorCoverage();
+  testProposalAllEchoed();
   testBprOriginGate();
   testBprByzantineSilent();
   testBprHighDrop();

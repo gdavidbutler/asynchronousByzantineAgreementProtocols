@@ -467,6 +467,30 @@ bkr94acsBaDecision(
 );
 
 /*
+ * Returns 1 iff proposal Fig1[origin] has recorded an echo from all n
+ * peers (distinct echo senders == n), else 0 (and 0 on null state or
+ * out-of-range origin).
+ *
+ * Application use: an origin that pairs a side-channel payload (e.g. a
+ * PSK or a signature) with its own proposal, and whose receivers gate
+ * their ECHO of that proposal on validating the payload, must keep
+ * re-emitting the payload until this returns 1 for origin == self.
+ * All-echoed implies every peer validated the payload (the receiver
+ * holds echo until it does), which is strictly stronger than the
+ * proposal's own ACCEPTED -- ACCEPTED can be reached at 2t+1 readys
+ * (up to t byzantine, t un-validated above the n=3t+1 boundary) while
+ * correct peers still lack the payload.  Pinning the side channel to
+ * ACCEPTED would strand them; pinning it here does not.  Under <= t
+ * silent peers this never returns 1, so the payload replays until the
+ * application abandons -- the conservative, correct default.
+ */
+unsigned int
+bkr94acsProposalAllEchoed(
+  const struct bkr94acs *
+ ,unsigned char            /* origin */
+);
+
+/*
  * Number of Fig1 instances currently committed (any of F1_ORIGIN,
  * F1_ECHOED, F1_RDSENT set).  Walks the N proposal Fig1s plus the
  * per-origin consensus Fig1s up to the active Fig4 round (no

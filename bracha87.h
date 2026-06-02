@@ -178,15 +178,18 @@ bracha87Fig1Init(
  * fires from the receipt of (initial, v) via bracha87Fig1Input).
  *
  * BPR replays BRACHA87_INITIAL_ALL on every bracha87Fig1Bpr
- * call as long as ORIGIN is set, regardless of ECHOED state.
- * Stopping INITIAL replay at "we ECHOED locally" leaves a
- * stall-able boundary case: in the n = 3t + 1 regime, the
- * (n+t)/2+1 echo threshold equals the count of honest peers,
- * so any honest peer that missed the bootstrap INITIAL can
- * leave the cascade one echo short forever.  Symmetric with
- * the "READY replay continues post-accept" rule (gap 3 above)
- * -- both refuse local-state-as-saturation arguments because
- * BPR's purpose is helping OTHER peers, not the local one.
+ * call while ORIGIN is set and the instance has neither ACCEPTED
+ * nor observed an echo from every peer.  Stopping at "we ECHOED
+ * locally" would be wrong -- in the n = 3t + 1 regime the
+ * (n+t)/2+1 echo threshold equals the count of honest peers, so
+ * any honest peer that missed the bootstrap INITIAL can leave the
+ * cascade one echo short forever, and only the originator can
+ * break it.  The two retirements above are the sound stops:
+ * echoSenders == n means there is no un-echoed peer left to
+ * induce; ACCEPTED means t+1 correct readys now circulate, so
+ * ready-amplification carries every correct peer to accept with
+ * no INITIAL consumed.  Both are strictly stronger than the
+ * forbidden ECHOED gate.
  *
  * Caller emits BRACHA87_INITIAL_ALL once at origin time and
  * relies on BPR thereafter.
@@ -243,26 +246,39 @@ bracha87Fig1Value(
  * "still owed" predicate lives at the Bracha endpoint, so
  * retransmission is placed here.
  *
- * Re-emit the broadcast actions this instance has committed to
- * (initial if origin and not yet echoed, echo if echoed, ready
- * if rdSent) so eventual delivery holds under fair-loss without
- * an application-layer ledger.  Returns the number of actions
- * (0..3) for the caller to broadcast.
+ * Re-emit the broadcast actions this instance is still owed under
+ * fair-loss, so eventual delivery holds without an application-
+ * layer ledger.  Returns the number of actions (0..3) to broadcast.
  *
  * Reactive: rules fire only when called.  No wall-clock predicate
  * appears anywhere; the application's pump tick IS the event, so
  * asynchrony is preserved.  The rate of pump calls bounds replay
  * volume.
  *
- * Does NOT short-circuit on accepted: an honest peer that has
- * accepted owes its (ready, v) to peers still below the 2t+1
- * threshold, and replay is the only mechanism Bracha provides
- * for getting it there under loss.  The application's
- * termination policy is what eventually retires the instance.
+ * Minimal re-emission -- each action retires at the soonest point
+ * it is provably no longer owed to ANY correct peer:
+ *   INITIAL (origin only): retires at ACCEPTED, or once an echo has
+ *     been observed from every peer (echoSenders == n).  INITIAL
+ *     only induces echoes, so all-echoed leaves nothing to induce;
+ *     ACCEPTED witnesses t+1 correct readys, after which ready-
+ *     amplification needs no initial.
+ *   ECHO (echoed): retires at ACCEPTED, for the same amplification
+ *     reason -- past t+1 correct readys no peer consumes an echo.
+ *   READY (rdSent): never retires on local state.  It is exactly
+ *     what the amplification tail consumes; an accepted peer still
+ *     owes its (ready, v) to peers below 2t+1, and replay is the
+ *     only delivery mechanism under loss.  The application's
+ *     termination policy retires the instance.
+ * INITIAL and ECHO are bootstrap-only; ACCEPTED is the local
+ * witness (>= t+1 of 2t+1 readys are correct) that the bootstrap
+ * is complete.  These stops are strictly stronger than the
+ * "stop once locally echoed/accepted-so-stop-ready" gates that
+ * would strand slow peers -- those remain forbidden.
  *
- * Returns 0 only when there is nothing committed to replay
- * (a non-origin instance that has not echoed -- the natural
- * "idle" signal at the Fig1 level).
+ * Returns 0 only when there is nothing committed to replay (a
+ * non-origin instance that has not echoed -- the natural "idle"
+ * signal at the Fig1 level).  An instance that has sent ready
+ * always emits at least READY, so it never idles to 0.
  *
  * Out actions reuse BRACHA87_INITIAL_ALL / BRACHA87_ECHO_ALL /
  * BRACHA87_READY_ALL; the committed value is read via
@@ -273,6 +289,28 @@ unsigned int
 bracha87Fig1Bpr(
   struct bracha87Fig1 *
  ,unsigned char *          /* out: actions, room for 3 */
+);
+
+/*
+ * Returns 1 iff this instance has recorded an echo from every one of
+ * the n peers (distinct echo senders == n), else 0 (and 0 for a null
+ * pointer).
+ *
+ * This is the same monotone quantity that retires INITIAL replay (see
+ * bracha87Fig1Bpr): once every peer has echoed there is nothing left
+ * for (initial, v) to induce.  It is exposed because an application
+ * that pairs a side-channel payload with the broadcast -- and gates
+ * its own ECHO on having validated that payload -- needs all-echoed,
+ * NOT the proposal's ACCEPTED, as the retirement point for the side
+ * channel: all-echoed implies every peer validated the payload, which
+ * ACCEPTED (2t+1 readys, of which up to t may be byzantine and t the
+ * un-validated tail above the n=3t+1 boundary) does not.  Under <= t
+ * silent peers this never reaches 1, so such a side channel replays
+ * until the application abandons -- the conservative, correct default.
+ */
+unsigned int
+bracha87Fig1AllEchoed(
+  const struct bracha87Fig1 *
 );
 
 /*************************************************************************/

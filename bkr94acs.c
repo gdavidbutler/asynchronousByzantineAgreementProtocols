@@ -1033,6 +1033,16 @@ bkr94acsBaDecision(
 }
 
 unsigned int
+bkr94acsProposalAllEchoed(
+  const struct bkr94acs *a
+ ,unsigned char origin
+){
+  if (!a || origin > a->n)
+    return (0);
+  return (bracha87Fig1AllEchoed(propF1((struct bkr94acs *)a, origin)));
+}
+
+unsigned int
 bkr94acsCommittedFig1Count(
   const struct bkr94acs *a
 ){

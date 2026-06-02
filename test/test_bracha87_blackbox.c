@@ -571,7 +571,10 @@ main(int argc, char **argv)
     for (i = 0; i < N_ACT; ++i)
       (void) bracha87Fig1Input(b, BRACHA87_READY, (unsigned char) i, v, buf);
     CHECK((b->flags & BRACHA87_F1_ACCEPTED) != 0, "ACCEPTED");
-    /* BPR continues post-ACCEPT (header gap-3 rule). */
+    /* Post-ACCEPT contract: INITIAL and ECHO retire (bootstrap-only;
+     * accept witnesses t+1 correct readys, so amplification completes
+     * the protocol without them), READY continues (it is what the
+     * amplification tail consumes -- pitfall 10). */
     act_count = bracha87Fig1Bpr(b, actions);
     {
       int saw_init = 0, saw_echo = 0, saw_ready = 0;
@@ -580,14 +583,26 @@ main(int argc, char **argv)
         if (actions[i] == BRACHA87_ECHO_ALL)    saw_echo = 1;
         if (actions[i] == BRACHA87_READY_ALL)   saw_ready = 1;
       }
-      CHECK(saw_init, "BPR INITIAL post-ACCEPT");
-      CHECK(saw_echo, "BPR ECHO post-ACCEPT");
+      CHECK(act_count == 1, "BPR post-ACCEPT: READY only");
+      CHECK(!saw_init, "BPR INITIAL retired post-ACCEPT");
+      CHECK(!saw_echo, "BPR ECHO retired post-ACCEPT");
       CHECK(saw_ready, "BPR READY post-ACCEPT");
     }
 
     /* Non-origin, non-echoed instance: BPR returns 0 */
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
     CHECK(bracha87Fig1Bpr(b, actions) == 0, "Bpr 0 on fresh non-origin");
+
+    /* bracha87Fig1AllEchoed contract: 0 on null, 0 until an echo has
+     * been recorded from every one of the n peers, 1 thereafter. */
+    CHECK(bracha87Fig1AllEchoed(0) == 0, "AllEchoed: NULL -> 0");
+    bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
+    CHECK(bracha87Fig1AllEchoed(b) == 0, "AllEchoed: fresh -> 0");
+    for (i = 0; i < N_ACT; ++i) {
+      (void) bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, buf);
+      CHECK(bracha87Fig1AllEchoed(b) == (i + 1 == N_ACT),
+            "AllEchoed: 1 exactly when echoSenders == n");
+    }
   }
 
   /* ---------------------------------------------------------------- */
