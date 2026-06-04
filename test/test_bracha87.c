@@ -3864,6 +3864,130 @@ testFig1Bpr(
   free(b);
 }
 
+/* Bit test on a returned suppress mask (peer j skipped iff bit j set). */
+
+/*
+ * Per-peer BPR suppression: bracha87Fig1Skip masks +
+ * bracha87Fig1PeerAccepted + the all-accepted READY quiescence gate.
+ *
+ * The skip mask names peers that provably no longer consume an action
+ * (echoed -> INITIAL, readied -> ECHO, accepted -> READY); the caller's
+ * broadcast skips them.  Verified by bit CONTENTS, not pointer identity
+ * (the F1_* layout macros are private to bracha87.c).  n=4, t=1.
+ */
+static void
+testFig1SkipAccept(
+  void
+){
+  struct bracha87Fig1 *b;
+  unsigned long sz;
+  unsigned char out[3];
+  unsigned int nout;
+  unsigned char val[VLEN];
+  const unsigned char *m;
+  unsigned int gi;
+  unsigned int sawReady;
+
+  printf("\n  Fig1 BPR per-peer skip / accept tests:\n");
+  memcpy(val, "AAAA", VLEN);
+  sz = bracha87Fig1Sz(3, VLEN - 1);
+
+  /* Accessor guards. */
+  check("Skip: NULL instance -> 0",
+        bracha87Fig1Skip(0, BRACHA87_READY_ALL) == 0);
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  check("Skip: ACCEPT act (non-replay) -> 0",
+        bracha87Fig1Skip(b, BRACHA87_ACCEPT) == 0);
+  check("Skip: INITIAL_ALL -> non-null mask",
+        bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL) != 0);
+
+  /* INITIAL skip = echoed peers (value-agnostic).  Echo from 0 and 2. */
+  bracha87Fig1Input(b, BRACHA87_ECHO, 0, val, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val, out);
+  m = bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL);
+  check("Skip INITIAL: bit 0 set (echoed)", BRACHA87_SKIP_TST(m, 0));
+  check("Skip INITIAL: bit 1 clear (no echo)", !BRACHA87_SKIP_TST(m, 1));
+  check("Skip INITIAL: bit 2 set (echoed)", BRACHA87_SKIP_TST(m, 2));
+  free(b);
+
+  /*
+   * ECHO skip = READIED peers, NOT merely echoed -- an echoed-but-not-
+   * readied peer is still collecting echoes toward Rule 4 and DOES
+   * consume our echo.  Echo from 1 (not suppressed), ready from 3.
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);
+  m = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
+  check("Skip ECHO: bit 1 clear (echoed-not-readied still consumes echo)",
+        !BRACHA87_SKIP_TST(m, 1));
+  check("Skip ECHO: bit 3 set (readied)", BRACHA87_SKIP_TST(m, 3));
+  free(b);
+
+  /* READY skip = accepted peers, set ONLY via PeerAccepted (accept is
+   * wire-silent; readied != accepted). */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
+  m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+  check("Skip READY: bit 2 clear (readied != accepted)", !BRACHA87_SKIP_TST(m, 2));
+  bracha87Fig1PeerAccepted(b, 2);
+  m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+  check("Skip READY: bit 2 set after PeerAccepted", BRACHA87_SKIP_TST(m, 2));
+  /* Idempotent + guards. */
+  bracha87Fig1PeerAccepted(b, 2);
+  check("PeerAccepted idempotent: bit 2 still set",
+        BRACHA87_SKIP_TST(bracha87Fig1Skip(b, BRACHA87_READY_ALL), 2));
+  bracha87Fig1PeerAccepted(0, 0);        /* NULL b: no crash */
+  bracha87Fig1PeerAccepted(b, 99);       /* from > n: ignored, no clobber */
+  m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+  check("PeerAccepted range guard: bit 1 still clear", !BRACHA87_SKIP_TST(m, 1));
+  free(b);
+
+  /*
+   * READY quiescence: an RDSENT instance keeps emitting READY until
+   * EVERY peer (all n, self included) is recorded accepted -- then no
+   * peer consumes a ready anywhere and Bpr stops emitting it.  This is
+   * the remote-all-accepted gate (sound: full coverage requires every
+   * correct peer's true accept), distinct from the forbidden local-
+   * accept gate (pitfall 10).
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);  /* RDSENT via Rule 5 */
+  check("Quiescence setup: RDSENT, not accepted",
+        (b->flags & BRACHA87_F1_RDSENT)
+        && !(b->flags & BRACHA87_F1_ACCEPTED));
+  nout = bracha87Fig1Bpr(b, out);
+  sawReady = 0;
+  for (gi = 0; gi < nout; ++gi)
+    if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
+  check("Quiescence: READY emitted while not all accepted", sawReady);
+  /* 3 of 4 accepted: still owed to the 4th. */
+  bracha87Fig1PeerAccepted(b, 0);
+  bracha87Fig1PeerAccepted(b, 1);
+  bracha87Fig1PeerAccepted(b, 2);
+  nout = bracha87Fig1Bpr(b, out);
+  sawReady = 0;
+  for (gi = 0; gi < nout; ++gi)
+    if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
+  check("Quiescence: READY still emitted at 3/4 accepted", sawReady);
+  /* 4th (self) accepted: all n -> READY retires. */
+  bracha87Fig1PeerAccepted(b, 3);
+  nout = bracha87Fig1Bpr(b, out);
+  sawReady = 0;
+  for (gi = 0; gi < nout; ++gi)
+    if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
+  check("Quiescence: READY retired when all n accepted", !sawReady);
+  printf("    skip/accept/quiescence: INITIAL=echoed ECHO=readied READY=accepted; all-accepted retires READY\n");
+  free(b);
+}
+
+
 /*
  * Test echo threshold with even n+t.
  *
@@ -4588,6 +4712,7 @@ main(
   testPostDecideMultiPhase();
   testFig1ValueSwitch();
   testFig1Bpr();
+  testFig1SkipAccept();
   testBprLargeN();
 
   /*

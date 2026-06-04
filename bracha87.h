@@ -264,11 +264,24 @@ bracha87Fig1Value(
  *     amplification needs no initial.
  *   ECHO (echoed): retires at ACCEPTED, for the same amplification
  *     reason -- past t+1 correct readys no peer consumes an echo.
- *   READY (rdSent): never retires on local state.  It is exactly
+ *   READY (rdSent): never retires on LOCAL state.  It is exactly
  *     what the amplification tail consumes; an accepted peer still
  *     owes its (ready, v) to peers below 2t+1, and replay is the
- *     only delivery mechanism under loss.  The application's
- *     termination policy retires the instance.
+ *     only delivery mechanism under loss.  It DOES retire on the
+ *     REMOTE fact that every peer has accepted (acFrom count == n),
+ *     after which no peer consumes a ready anywhere -- genuine
+ *     quiescence, where the application's termination policy would
+ *     otherwise carry the never-retired tail.  Below that, the
+ *     per-peer suppress mask (bracha87Fig1Skip) still drops READY to
+ *     the peers already known accepted.
+ *
+ * Per-peer suppression: every replay action carries a suppress mask
+ * (bracha87Fig1Skip; on the array path, struct bracha87Fig1Act.skip)
+ * naming peers that provably no longer consume it -- echoed peers for
+ * INITIAL, readied peers for ECHO, accepted peers for READY.  The
+ * caller's broadcast skips them.  This is the individual-peer refinement
+ * of the all-or-nothing retires above: a fast peer is dropped from the
+ * recipient set the moment IT crosses, not when the last peer does.
  * INITIAL and ECHO are bootstrap-only; ACCEPTED is the local
  * witness (>= t+1 of 2t+1 readys are correct) that the bootstrap
  * is complete.  These stops are strictly stronger than the
@@ -312,6 +325,54 @@ unsigned int
 bracha87Fig1AllEchoed(
   const struct bracha87Fig1 *
 );
+
+/*
+ * Record that peer 'from' has ACCEPTED this instance (idempotent,
+ * value-agnostic).  Drives the READY suppress mask and the all-accepted
+ * READY quiescence gate.  'from' is the announcing peer -- the sender of
+ * a (ready, v) carrying the ACCEPTED annotation, already fed through
+ * bracha87Fig1Input -- or the local index, supplied by the caller for
+ * self-accept (a Fig1 instance does not know its own peer index).
+ * Out-of-range 'from' and a null instance are ignored.
+ */
+void
+bracha87Fig1PeerAccepted(
+  struct bracha87Fig1 *
+ ,unsigned char            /* from: announcing peer, or self */
+);
+
+/*
+ * BPR per-peer suppress mask for one replay action: a bitmap of peers
+ * that provably no longer consume it, so the caller's broadcast skips
+ * them (peer p skipped iff bit p set).  INITIAL_ALL -> echoed peers,
+ * ECHO_ALL -> readied peers, READY_ALL -> accepted peers; 0 for a null
+ * instance or non-replay act (broadcast to all).  Borrowed pointer into
+ * library state, valid until the next mutating call on this instance.
+ * The array Pump fills struct bracha87Fig1Act.skip from this.
+ */
+const unsigned char *
+bracha87Fig1Skip(
+  const struct bracha87Fig1 *
+ ,unsigned char            /* act: BRACHA87_INITIAL_ALL/ECHO_ALL/READY_ALL */
+);
+
+/*
+ * Test a BPR suppress mask -- the bitmap returned by bracha87Fig1Skip
+ * (or carried on struct bracha87Fig1Act.skip / bkr94acsAct.skip):
+ * non-zero iff peer 'p' is to be skipped.  This names the mask's bit
+ * convention (a little-endian per-peer bitmap, BIT_SZ(n) bytes) so a
+ * broadcast loop reads it without re-deriving the layout:
+ *
+ *   for (p = 0; p < n; ++p)
+ *     if (p != self && !(skip && BRACHA87_SKIP_TST(skip, p)))
+ *       send_to(p, ...);
+ *
+ * Macro, not a function, so it inlines in the per-peer loop; 'mask' is
+ * evaluated once, 'p' twice (pass a simple expression).  A null mask
+ * means "broadcast to all" -- guard with `skip &&` as above.
+ */
+#define BRACHA87_SKIP_TST(mask, p) \
+  ((mask)[(unsigned int)(p) >> 3] & (1 << ((unsigned int)(p) & 7)))
 
 /*************************************************************************/
 /*                                                                       */
@@ -767,6 +828,9 @@ struct bracha87Fig1Act {
   unsigned char act;
   unsigned int  idx;
   const unsigned char *value;
+  const unsigned char *skip;  /* BPR per-peer suppress mask, or 0 = all;
+                               * see bracha87Fig1Skip.  Borrowed, valid
+                               * until the next mutating call. */
 };
 
 /*

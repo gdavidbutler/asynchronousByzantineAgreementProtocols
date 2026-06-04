@@ -414,17 +414,27 @@ main(
         continue;
       }
 
-      /* ECHO_ALL or READY_ALL: relay the committed value to all peers. */
+      /* ECHO_ALL or READY_ALL: relay the committed value to all peers,
+       * minus the BPR per-peer suppress set (peers that have already
+       * echoed/readied/accepted no longer consume this action). */
       if (verbose) {
         printf("peer %u: -> %s value=", (unsigned)m->to,
                (out[k] == BRACHA87_ECHO_ALL) ? "ECHO_ALL" : "READY_ALL");
         printValue(cv);
         printf("\n");
       }
-      for (j = 0; j < n; ++j)
-        qPush((out[k] == BRACHA87_ECHO_ALL)
-                ? BRACHA87_ECHO : BRACHA87_READY,
-              m->to, (unsigned char)j, cv);
+      {
+        const unsigned char *skip;
+
+        skip = bracha87Fig1Skip(f1, out[k]);
+        for (j = 0; j < n; ++j) {
+          if (skip && BRACHA87_SKIP_TST(skip, j))
+            continue;
+          qPush((out[k] == BRACHA87_ECHO_ALL)
+                  ? BRACHA87_ECHO : BRACHA87_READY,
+                m->to, (unsigned char)j, cv);
+        }
+      }
     }
 
     if (shuffleSeed && Qtail > oldTail)
@@ -457,11 +467,14 @@ main(
     n_pacts = bracha87Fig1PumpStep(peerArr, 1, &pump, pacts,
                                    BRACHA87_FIG1_PUMP_MAX_ACTS);
     for (p = 0; p < n_pacts; ++p)
-      for (j = 0; j < n; ++j)
+      for (j = 0; j < n; ++j) {
+        if (pacts[p].skip && BRACHA87_SKIP_TST(pacts[p].skip, j))
+          continue;
         qPush(pacts[p].act == BRACHA87_INITIAL_ALL ? BRACHA87_INITIAL
             : pacts[p].act == BRACHA87_ECHO_ALL    ? BRACHA87_ECHO
             :                                        BRACHA87_READY,
               (unsigned char)i, (unsigned char)j, pacts[p].value);
+      }
   }
 
   /*----------------------------------------------------------------------*/

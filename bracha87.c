@@ -50,6 +50,15 @@
  *   ecVal[N * L]         echo value per peer
  *   rdFrom[BS]           ready bitmap
  *   rdVal[N * L]         ready value per peer
+ *   acFrom[BS]           accepted bitmap (per-peer "has accepted v")
+ *
+ * acFrom records peers known to have ACCEPTED this instance, learned
+ * from the ACCEPTED annotation an accepted peer rides on its (ready, v)
+ * re-emits (bracha87Fig1PeerAccepted).  It is the suppress mask that
+ * retires READY replay per peer (bracha87Fig1Skip): an accepted peer
+ * has its 2t+1 readys and consumes no further one (Rule 6 already
+ * fired), so re-emitting READY to it is dead weight.  acFrom carries no
+ * value (accept is value-determined by Lemma 2) -- only the bitmap.
  */
 
 #define B_N(b)       ((unsigned int)(b)->n + 1)
@@ -59,6 +68,7 @@
 #define F1_ECVAL(b)  ((b)->data + F1_VLEN(b) + BIT_SZ(B_N(b)))
 #define F1_RDFROM(b) ((b)->data + F1_VLEN(b) + BIT_SZ(B_N(b)) + (unsigned long)B_N(b) * F1_VLEN(b))
 #define F1_RDVAL(b)  ((b)->data + F1_VLEN(b) + BIT_SZ(B_N(b)) + (unsigned long)B_N(b) * F1_VLEN(b) + BIT_SZ(B_N(b)))
+#define F1_ACFROM(b) ((b)->data + F1_VLEN(b) + BIT_SZ(B_N(b)) + (unsigned long)B_N(b) * F1_VLEN(b) + BIT_SZ(B_N(b)) + (unsigned long)B_N(b) * F1_VLEN(b))
 
 unsigned long
 bracha87Fig1Sz(
@@ -81,7 +91,8 @@ bracha87Fig1Sz(
     + BIT_SZ(N)               /* ecFrom bitmap */
     + (unsigned long)N * L    /* ecVal */
     + BIT_SZ(N)               /* rdFrom bitmap */
-    + (unsigned long)N * L);  /* rdVal */
+    + (unsigned long)N * L    /* rdVal */
+    + BIT_SZ(N));             /* acFrom bitmap */
 }
 
 void
@@ -470,7 +481,21 @@ bracha87Fig1Bpr(
      */
     if (replayEcho && !(b->flags & BRACHA87_F1_ACCEPTED))
       out[nout++] = BRACHA87_ECHO_ALL;
-    if (replayReady)
+    /*
+     * READY never retires on LOCAL state (pitfall 10): an accepted peer
+     * still owes (ready, v) to peers below 2t+1.  But it DOES retire on
+     * the REMOTE fact that every peer has accepted -- then no peer
+     * consumes a ready anywhere and the instance is quiescent.  acFrom
+     * records peers' own accepts (bracha87Fig1PeerAccepted, fed from the
+     * ACCEPTED annotation on their ready re-emits, self included via the
+     * caller).  Reaching N requires every CORRECT peer's true accept --
+     * a byzantine peer's forged ACCEPTED only marks itself, never
+     * strands a correct laggard -- so the gate is byzantine-safe.  Below
+     * N, the per-peer suppress mask (bracha87Fig1Skip) still drops READY
+     * to the already-accepted peers; this guard only avoids emitting an
+     * all-suppressed action at full coverage.
+     */
+    if (replayReady && fig1FromCnt(F1_ACFROM(b), B_N(b)) < B_N(b))
       out[nout++] = BRACHA87_READY_ALL;
   }
   return (nout);
@@ -483,6 +508,71 @@ bracha87Fig1AllEchoed(
   if (!b)
     return (0);
   return (fig1FromCnt(F1_ECFROM(b), B_N(b)) == B_N(b));
+}
+
+/*
+ * Record that peer 'from' has ACCEPTED this instance.  Idempotent and
+ * value-agnostic (Lemma 2: all correct accepts agree).  Sets the acFrom
+ * bit consumed by bracha87Fig1Skip(READY) and the READY quiescence gate.
+ *
+ * 'from' is the peer that announced its accept -- on the wire this is
+ * the sender of a (ready, v) carrying the ACCEPTED annotation, so the
+ * caller has already fed that ready through bracha87Fig1Input (setting
+ * rdFrom[from]) before calling this; acFrom is thus a subset of rdFrom.
+ * Pass the local index for self-accept so the quiescence count can reach
+ * n (a Fig1 instance does not know its own peer index -- the caller,
+ * which routes by it, supplies it).
+ */
+void
+bracha87Fig1PeerAccepted(
+  struct bracha87Fig1 *b
+ ,unsigned char from
+){
+  if (!b || from > b->n)
+    return;
+  BIT_SET(F1_ACFROM(b), from);
+}
+
+/*
+ * BPR per-peer suppress mask for a replay action: the set of peers that
+ * provably no longer consume that action, so the caller's broadcast
+ * skips them (a peer p is skipped iff bit p is set).  Returns 0 for a
+ * null instance or a non-replay act (caller then broadcasts to all).
+ * The returned pointer is borrowed library state, valid until the next
+ * mutating call on this instance.
+ *
+ *   INITIAL_ALL -> ecFrom : INITIAL only induces an echo (Rule 1); a
+ *     peer that has echoed will never echo again, so it induces nothing.
+ *   ECHO_ALL    -> rdFrom : ECHO feeds Rule 2 (-> echo) and Rule 4
+ *     (-> ready); a peer that has sent ready satisfies neither again,
+ *     and accept (Rule 6) consumes readys, not echoes.
+ *   READY_ALL   -> acFrom : READY feeds Rules 3/5/6; only after a peer
+ *     ACCEPTS (Rule 6 fired on 2t+1 readys) does it consume no further
+ *     ready.  Accept is wire-silent in base Bracha, so this mask is
+ *     populated from the ACCEPTED annotation peers ride on their ready
+ *     re-emits (bracha87Fig1PeerAccepted).
+ *
+ * Each mask uses only the soonest sound evidence: ecFrom (not rdFrom)
+ * would under-suppress INITIAL; rdFrom (not ecFrom) would over-suppress
+ * ECHO to peers still collecting echoes toward Rule 4.
+ */
+const unsigned char *
+bracha87Fig1Skip(
+  const struct bracha87Fig1 *b
+ ,unsigned char act
+){
+  if (!b)
+    return (0);
+  switch (act) {
+  case BRACHA87_INITIAL_ALL:
+    return (F1_ECFROM(b));
+  case BRACHA87_ECHO_ALL:
+    return (F1_RDFROM(b));
+  case BRACHA87_READY_ALL:
+    return (F1_ACFROM(b));
+  default:
+    return (0);
+  }
 }
 
 /*************************************************************************/
@@ -1361,6 +1451,7 @@ bracha87Fig1PumpStep(
           out[i].act = acts[i];
           out[i].idx = idx;
           out[i].value = v;
+          out[i].skip = bracha87Fig1Skip(instances[idx], acts[i]);
         }
         p->sweepActs += n;
         return (n);

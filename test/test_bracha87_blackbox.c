@@ -606,6 +606,60 @@ main(int argc, char **argv)
   }
 
   /* ---------------------------------------------------------------- */
+  BANNER("Fig1 BPR per-peer skip / accept");
+  /* ---------------------------------------------------------------- */
+  /* Header: bracha87Fig1Skip returns the suppress bitmap (peer p       */
+  /* skipped iff bit p set) -- INITIAL_ALL=echoed, ECHO_ALL=readied,    */
+  /* READY_ALL=accepted, 0 for null/non-replay.  bracha87Fig1PeerAccept */
+  /* sets the accepted bit; all-n-accepted retires READY replay.        */
+  {
+    struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
+    static const unsigned char v[1] = { 1 };
+    const unsigned char *m;
+    unsigned int saw_ready;
+
+    bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
+    CHECK(bracha87Fig1Skip(0, BRACHA87_READY_ALL) == 0, "Skip: NULL -> 0");
+    CHECK(bracha87Fig1Skip(b, BRACHA87_ACCEPT) == 0, "Skip: non-replay act -> 0");
+    CHECK(bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL) != 0, "Skip: INITIAL non-null");
+
+    /* INITIAL skip = echoed peers; ECHO skip = readied (not merely echoed). */
+    (void) bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, buf);   /* peer 0 echoes */
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, buf);  /* peer 2 readies */
+    m = bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL);
+    CHECK(BRACHA87_SKIP_TST(m, 0) && !BRACHA87_SKIP_TST(m, 1), "Skip INITIAL: echoed peer only");
+    m = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
+    CHECK(BRACHA87_SKIP_TST(m, 2) && !BRACHA87_SKIP_TST(m, 0), "Skip ECHO: readied (not echoed) peer");
+
+    /* READY skip = accepted peers, set only via PeerAccepted; guards. */
+    m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    CHECK(!BRACHA87_SKIP_TST(m, 2), "Skip READY: readied != accepted");
+    bracha87Fig1PeerAccepted(0, 0);                 /* NULL: no crash */
+    bracha87Fig1PeerAccepted(b, (unsigned char)(N_ACT + 9));  /* range: ignored */
+    bracha87Fig1PeerAccepted(b, 2);
+    m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    CHECK(BRACHA87_SKIP_TST(m, 2), "Skip READY: accepted peer set after PeerAccepted");
+
+    /* All-n-accepted READY quiescence. */
+    bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
+    (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, buf);
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 1, v, buf);
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, buf); /* RDSENT */
+    act_count = bracha87Fig1Bpr(b, actions);
+    saw_ready = 0;
+    for (i = 0; i < act_count; ++i)
+      if (actions[i] == BRACHA87_READY_ALL) saw_ready = 1;
+    CHECK(saw_ready, "Quiescence: READY emitted before all accepted");
+    for (i = 0; i < N_ACT; ++i)
+      bracha87Fig1PeerAccepted(b, (unsigned char) i);
+    act_count = bracha87Fig1Bpr(b, actions);
+    saw_ready = 0;
+    for (i = 0; i < act_count; ++i)
+      if (actions[i] == BRACHA87_READY_ALL) saw_ready = 1;
+    CHECK(!saw_ready, "Quiescence: READY retired when all n accepted");
+  }
+
+  /* ---------------------------------------------------------------- */
   BANNER("Fig2 receive / dedup / ROUND_COMPLETE / GetReceived");
   /* ---------------------------------------------------------------- */
   /* Header: "Returns BRACHA87_ROUND_COMPLETE if this causes n-t       */

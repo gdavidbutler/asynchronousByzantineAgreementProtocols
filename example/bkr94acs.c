@@ -435,10 +435,19 @@ main(
           printf("peer %u: -> PROP %s(origin=%u)\n",
                  (unsigned)m->to, typeName(acts[k].type),
                  (unsigned)acts[k].origin);
-        for (p = 0; p < n; ++p)
+        for (p = 0; p < n; ++p) {
+          /* BPR per-peer suppression: a transport skips recipients the
+           * action is provably no longer owed to (echoed -> INITIAL,
+           * readied -> ECHO, accepted -> READY).  Sound under loss; here
+           * (no loss) it merely trims redundant replays.  The READY
+           * suppress mask is fed by the ACCEPTED wire bit -- exercised
+           * end-to-end under loss in test_bkr94acs_blackbox.c. */
+          if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
+            continue;
           qPush(BKR94ACS_CLS_PROPOSAL, acts[k].origin, 0, 0,
                 acts[k].type, m->to, (unsigned char)p,
                 acts[k].value, vLen);
+        }
         break;
 
       case BKR94ACS_ACT_CON_SEND:
@@ -448,11 +457,14 @@ main(
                  (unsigned)acts[k].origin, (unsigned)acts[k].round,
                  (unsigned)acts[k].broadcaster,
                  (unsigned)acts[k].conValue);
-        for (p = 0; p < n; ++p)
+        for (p = 0; p < n; ++p) {
+          if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
+            continue;
           qPush(BKR94ACS_CLS_CONSENSUS, acts[k].origin, acts[k].round,
                 acts[k].broadcaster, acts[k].type,
                 m->to, (unsigned char)p,
                 &acts[k].conValue, 1);
+        }
         break;
 
       case BKR94ACS_ACT_BA_DECIDED:
@@ -508,17 +520,23 @@ main(
       switch (pacts[k].act) {
       case BKR94ACS_ACT_PROP_SEND:
         if (!pacts[k].value) break;
-        for (p = 0; p < n; ++p)
+        for (p = 0; p < n; ++p) {
+          if (pacts[k].skip && BRACHA87_SKIP_TST(pacts[k].skip, p))
+            continue;
           qPush(BKR94ACS_CLS_PROPOSAL, pacts[k].origin, 0, 0,
                 pacts[k].type, (unsigned char)i, (unsigned char)p,
                 pacts[k].value, vLen);
+        }
         break;
       case BKR94ACS_ACT_CON_SEND:
-        for (p = 0; p < n; ++p)
+        for (p = 0; p < n; ++p) {
+          if (pacts[k].skip && BRACHA87_SKIP_TST(pacts[k].skip, p))
+            continue;
           qPush(BKR94ACS_CLS_CONSENSUS, pacts[k].origin, pacts[k].round,
                 pacts[k].broadcaster, pacts[k].type,
                 (unsigned char)i, (unsigned char)p,
                 &pacts[k].conValue, 1);
+        }
         break;
       default:
         /* BA_DECIDED / COMPLETE / BA_EXHAUSTED don't appear in pump

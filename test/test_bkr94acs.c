@@ -2117,6 +2117,116 @@ testProposalValueGate(
   free(a);
 }
 
+/* Bit test on a returned suppress mask (peer j skipped iff bit j set). */
+
+/*
+ * Sweep the pump up to a full cursor cycle; capture the first PROP_SEND
+ * READY for 'origin' (its skip mask + accepted flag).  Returns 1 if seen.
+ */
+static int
+findPropReady(
+  struct bkr94acs *a
+ ,struct bracha87Pump *pump
+ ,unsigned char origin
+ ,const unsigned char **skipOut
+ ,int *acceptedOut
+){
+  struct bkr94acsAct out[BKR94ACS_PUMP_MAX_ACTS];
+  unsigned int call;
+  unsigned int budget;
+
+  budget = 4 + 4 * 12 * 4 + 50;   /* > one full sweep (N + N*mr*N) */
+  for (call = 0; call < budget; ++call) {
+    unsigned int n;
+    unsigned int k;
+
+    n = bkr94acsPump(a, pump, out);
+    for (k = 0; k < n; ++k)
+      if (out[k].act == BKR94ACS_ACT_PROP_SEND
+       && out[k].origin == origin
+       && out[k].type == BRACHA87_READY) {
+        *skipOut = out[k].skip;
+        *acceptedOut = out[k].accepted;
+        return (1);
+      }
+  }
+  return (0);
+}
+
+/*
+ * Per-peer BPR suppression at the bkr94acs layer: the ACCEPTED wire bit,
+ * the egress .skip / .accepted fields on pump actions, the ingress
+ * accept setters, and all-accepted READY quiescence.  n=4 t=1, self=0.
+ */
+static void
+testBprSkipAccept(
+  void
+){
+  struct bkr94acs *a;
+  struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4, 4)];
+  struct bracha87Pump pump;
+  unsigned char val[1];
+  unsigned long sz;
+  const unsigned char *skip;
+  int accepted;
+  int seen;
+
+  printf("\n  BPR per-peer skip / ACCEPTED wire bit:\n");
+  check("ACCEPTED wire bit value is 0x10", BKR94ACS_ACCEPTED == 0x10);
+
+  sz = bkr94acsSz(3, 0, 4);
+  a = (struct bkr94acs *)calloc(1, sz);
+  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);   /* self = 0 */
+  bracha87PumpInit(&pump);
+
+  val[0] = 1;
+  /* Origin 2's proposal to RDSENT (NOT accepted): INITIAL + 2 readys. */
+  bkr94acsProposalInput(a, 2, BRACHA87_INITIAL, 2, val, iact);
+  bkr94acsProposalInput(a, 2, BRACHA87_READY, 1, val, iact);
+  bkr94acsProposalInput(a, 2, BRACHA87_READY, 3, val, iact);
+
+  /* Egress before accept: READY carries a non-null skip mask, accepted=0. */
+  skip = 0; accepted = -1;
+  seen = findPropReady(a, &pump, 2, &skip, &accepted);
+  check("Egress: origin-2 proposal READY surfaced", seen);
+  check("Egress: READY carries non-null skip mask", skip != 0);
+  check("Egress: READY accepted=0 before accept", accepted == 0);
+
+  /* Ingress: peer 1 announces accept of origin-2 proposal; peer 3 does
+   * not.  The next READY skip marks 1 only -- a single peer's accept
+   * touches only its own bit (byzantine-false-accept is thus contained). */
+  bkr94acsProposalAccepted(a, 2, 1);
+  skip = 0; accepted = -1;
+  seen = findPropReady(a, &pump, 2, &skip, &accepted);
+  check("Ingress: READY still emitted (not all accepted)", seen);
+  check("Ingress: skip marks peer 1 (announced accept)",
+        skip && BRACHA87_SKIP_TST(skip, 1));
+  check("Ingress: skip leaves peer 3 clear (no accept announced)",
+        skip && !BRACHA87_SKIP_TST(skip, 3));
+
+  /* Drive origin-2 proposal to ACCEPT (3rd ready): self-accept is
+   * recorded, so egress .accepted flips to 1 and self's skip bit sets. */
+  bkr94acsProposalInput(a, 2, BRACHA87_READY, 0, val, iact);
+  skip = 0; accepted = -1;
+  seen = findPropReady(a, &pump, 2, &skip, &accepted);
+  check("Egress: origin-2 READY still surfaced post-accept", seen);
+  check("Egress: READY accepted=1 after self-accept", accepted == 1);
+  check("Egress: skip marks self (index 0) after self-accept",
+        skip && BRACHA87_SKIP_TST(skip, 0));
+
+  /* Quiescence: mark the remaining peers (2, 3) accepted.  With self(0)
+   * + 1 + 2 + 3 all accepted, origin-2's proposal READY retires. */
+  bkr94acsProposalAccepted(a, 2, 2);
+  bkr94acsProposalAccepted(a, 2, 3);
+  skip = 0; accepted = -1;
+  seen = findPropReady(a, &pump, 2, &skip, &accepted);
+  check("Quiescence: origin-2 proposal READY retired at all-accepted",
+        !seen);
+  printf("    egress skip/accepted, ingress setters, all-accepted quiescence\n");
+  free(a);
+}
+
+
 int
 main(
   void
@@ -2142,6 +2252,7 @@ main(
   testBprCursorCoverage();
   testProposalAllEchoed();
   testBprOriginGate();
+  testBprSkipAccept();
   testBprByzantineSilent();
   testBprHighDrop();
   testExhausted();

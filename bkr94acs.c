@@ -361,12 +361,14 @@ bkr94acsVote(
   }
 
   out->value = 0;
+  out->skip = 0;            /* fresh origination: nothing to suppress yet */
   out->act = BKR94ACS_ACT_CON_SEND;
   out->origin = (unsigned char)origin;
   out->round = 0;
   out->type = BRACHA87_INITIAL;
   out->conValue = vote;
   out->broadcaster = a->self;
+  out->accepted = 0;
   return (1);
 }
 
@@ -422,6 +424,7 @@ bkr94acsProposalInput(
   for (k = 0; k < nf1; ++k) {
     if (f1out[k] == BRACHA87_ECHO_ALL || f1out[k] == BRACHA87_READY_ALL) {
       out[nact].value = bracha87Fig1Value(f1);
+      out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
       out[nact].act = BKR94ACS_ACT_PROP_SEND;
       out[nact].origin = origin;
       out[nact].round = 0;
@@ -429,8 +432,17 @@ bkr94acsProposalInput(
                        ? BRACHA87_ECHO : BRACHA87_READY;
       out[nact].conValue = 0;
       out[nact].broadcaster = 0;
+      out[nact].accepted = (f1out[k] == BRACHA87_READY_ALL
+                         && (f1->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
       ++nact;
     } else if (f1out[k] == BRACHA87_ACCEPT) {
+      /*
+       * Self-accept: record our own accept in the proposal Fig1's
+       * acFrom so the READY quiescence count can reach n (the Fig1
+       * does not know self; bkr94acs routes by it).  bkr94acsProposal-
+       * Accepted feeds peers' accepts here from the wire ACCEPTED bit.
+       */
+      bracha87Fig1PeerAccepted(f1, a->self);
       /*
        * BKR94 Step 1: "For each Pj for whom you (Pi) know Q(j) = 1,
        * participate in BA_j with input 1."  Q(j) = 1 is carried by
@@ -548,6 +560,13 @@ bkr94acsConsensusInput(
         continue;
 
       /*
+       * Self-accept: record our own accept in this consensus Fig1's
+       * acFrom (round, broadcaster) so its READY quiescence count can
+       * reach n.  Peers' accepts arrive via bkr94acsConsensusAccepted.
+       */
+      bracha87Fig1PeerAccepted(f1, a->self);
+
+      /*
        * Fig3 sender is the broadcaster (whose broadcast was accepted).
        * validCount-out parameter is 0: the cascade work it would gate
        * is internal to bracha87Fig3Accept; bracha87Fig3RoundComplete
@@ -574,12 +593,14 @@ bkr94acsConsensusInput(
            * BKR94 rules, just an observability signal). */
           bkr94acsDecision(a)[origin] = f4->decision;
           out[nact].value = 0;
+          out[nact].skip = 0;
           out[nact].act = BKR94ACS_ACT_BA_DECIDED;
           out[nact].origin = origin;
           out[nact].round = 0;
           out[nact].type = 0;
           out[nact].conValue = f4->decision;
           out[nact].broadcaster = 0;
+          out[nact].accepted = 0;
           ++nact;
           ++a->nDecided;
           if (f4->decision == 1)
@@ -621,12 +642,14 @@ bkr94acsConsensusInput(
           if (doOutputSubset) {
             a->flags |= BKR94ACS_F_COMPLETE;
             out[nact].value = 0;
+            out[nact].skip = 0;
             out[nact].act = BKR94ACS_ACT_COMPLETE;
             out[nact].origin = 0;
             out[nact].round = 0;
             out[nact].type = 0;
             out[nact].conValue = 0;
             out[nact].broadcaster = 0;
+            out[nact].accepted = 0;
             ++nact;
           }
         }
@@ -653,12 +676,14 @@ bkr94acsConsensusInput(
           }
 
           out[nact].value = 0;
+          out[nact].skip = 0;     /* fresh origination: nothing to suppress */
           out[nact].act = BKR94ACS_ACT_CON_SEND;
           out[nact].origin = origin;
           out[nact].round = *nextRound;
           out[nact].type = BRACHA87_INITIAL;
           out[nact].conValue = f4->value;
           out[nact].broadcaster = a->self;
+          out[nact].accepted = 0;
           ++nact;
         }
 
@@ -697,12 +722,14 @@ bkr94acsConsensusInput(
            */
           bkr94acsDecision(a)[origin] = 0xFE;
           out[nact].value = 0;
+          out[nact].skip = 0;
           out[nact].act = BKR94ACS_ACT_BA_EXHAUSTED;
           out[nact].origin = origin;
           out[nact].round = 0;
           out[nact].type = 0;
           out[nact].conValue = 0;
           out[nact].broadcaster = 0;
+          out[nact].accepted = 0;
           ++nact;
         }
       }
@@ -724,6 +751,7 @@ bkr94acsConsensusInput(
         continue;
 
       out[nact].value = 0;
+      out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
       out[nact].act = BKR94ACS_ACT_CON_SEND;
       out[nact].origin = origin;
       out[nact].round = round;
@@ -731,6 +759,8 @@ bkr94acsConsensusInput(
         ? BRACHA87_ECHO : BRACHA87_READY;
       out[nact].conValue = cv[0];
       out[nact].broadcaster = broadcaster;
+      out[nact].accepted = (f1out[k] == BRACHA87_READY_ALL
+                         && (f1->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
       ++nact;
     }
   }
@@ -816,12 +846,14 @@ bkr94acsPropose(
   bracha87Fig1Origin(propF1(a, a->self), value);
 
   out->value = bracha87Fig1Value(propF1(a, a->self));
+  out->skip = 0;            /* fresh origination: nothing to suppress yet */
   out->act = BKR94ACS_ACT_PROP_SEND;
   out->origin = a->self;
   out->round = 0;
   out->type = BRACHA87_INITIAL;
   out->conValue = 0;
   out->broadcaster = 0;
+  out->accepted = 0;
   return (1);
 }
 
@@ -898,6 +930,7 @@ bkr94acsPumpEmitProposal(
   nact = 0;
   for (k = 0; k < n; ++k) {
     out[nact].value = cv;
+    out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
     out[nact].act = BKR94ACS_ACT_PROP_SEND;
     out[nact].origin = (unsigned char)origin;
     out[nact].round = 0;
@@ -908,6 +941,8 @@ bkr94acsPumpEmitProposal(
                    :   BRACHA87_READY;
     out[nact].conValue = 0;
     out[nact].broadcaster = 0;
+    out[nact].accepted = (f1out[k] == BRACHA87_READY_ALL
+                       && (f1->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
     ++nact;
   }
   return (nact);
@@ -939,6 +974,7 @@ bkr94acsPumpEmitConsensus(
   nact = 0;
   for (k = 0; k < n; ++k) {
     out[nact].value = 0;
+    out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
     out[nact].act = BKR94ACS_ACT_CON_SEND;
     out[nact].origin = (unsigned char)origin;
     out[nact].round = (unsigned char)round;
@@ -949,6 +985,8 @@ bkr94acsPumpEmitConsensus(
                    :   BRACHA87_READY;
     out[nact].conValue = cv[0];
     out[nact].broadcaster = (unsigned char)broadcaster;
+    out[nact].accepted = (f1out[k] == BRACHA87_READY_ALL
+                       && (f1->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
     ++nact;
   }
   return (nact);
@@ -1019,6 +1057,42 @@ bkr94acsPump(
 }
 
 /*------------------------------------------------------------------------*/
+/*  ACCEPTED-annotation ingress (BPR per-peer READY retire)               */
+/*                                                                        */
+/*  The transport decodes the BKR94ACS_ACCEPTED wire bit off a received   */
+/*  READY and routes it here: 'from' (the message sender) has accepted    */
+/*  the named Fig1 instance, so this peer retires its per-peer READY      */
+/*  replay to 'from' (bracha87Fig1Skip(READY) = acFrom).  Call AFTER the  */
+/*  matching bkr94acs*Input for the same READY (which records rdFrom);    */
+/*  acFrom is then a subset of rdFrom.  Out-of-range indices are ignored. */
+/*------------------------------------------------------------------------*/
+
+void
+bkr94acsProposalAccepted(
+  struct bkr94acs *a
+ ,unsigned char origin
+ ,unsigned char from
+){
+  if (!a || origin > a->n || from > a->n)
+    return;
+  bracha87Fig1PeerAccepted(propF1(a, origin), from);
+}
+
+void
+bkr94acsConsensusAccepted(
+  struct bkr94acs *a
+ ,unsigned char origin
+ ,unsigned char round
+ ,unsigned char broadcaster
+ ,unsigned char from
+){
+  if (!a || origin > a->n || round >= maxRounds(a)
+   || broadcaster > a->n || from > a->n)
+    return;
+  bracha87Fig1PeerAccepted(conF1(a, origin, round, broadcaster), from);
+}
+
+/*------------------------------------------------------------------------*/
 /*  Diagnostic accessors                                                  */
 /*------------------------------------------------------------------------*/
 
@@ -1040,6 +1114,17 @@ bkr94acsProposalAllEchoed(
   if (!a || origin > a->n)
     return (0);
   return (bracha87Fig1AllEchoed(propF1((struct bkr94acs *)a, origin)));
+}
+
+const unsigned char *
+bkr94acsProposalSkip(
+  const struct bkr94acs *a
+ ,unsigned char origin
+){
+  if (!a || origin > a->n)
+    return (0);
+  return (bracha87Fig1Skip(propF1((struct bkr94acs *)a, origin),
+                           BRACHA87_INITIAL_ALL));
 }
 
 unsigned int

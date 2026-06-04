@@ -92,8 +92,8 @@
 /*  a format the library reads or writes.  The bundled example,           */
 /*  example/bkr94acs.c, frame to this layout; new framers should too.     */
 /*                                                                        */
-/*    bit:  7      | 6 5 4 | 3  | 2   | 1 0                               */
-/*          D_FLAG   (app)   cv   cls   type                              */
+/*    bit:  7      | 6 5 | 4        | 3  | 2   | 1 0                       */
+/*          D_FLAG   (app)  ACCEPTED   cv   cls   type                    */
 /*                                                                        */
 /*  Fixed by library constants:                                           */
 /*    type   bits 0-1  (BRACHA87_TYPE_MASK = 0x03): INITIAL/ECHO/READY.   */
@@ -101,10 +101,17 @@
 /*                      CONSENSUS=0x04.                                   */
 /*    D_FLAG bit  7    (BRACHA87_D_FLAG = 0x80): on a CONSENSUS message,  */
 /*                      the Fig4 decision-candidate flag.                 */
+/*    ACCEPTED bit 4  (BKR94ACS_ACCEPTED = 0x10): on a READY message,    */
+/*                      the sender has accepted this Fig1 instance, so    */
+/*                      the receiver retires its per-peer READY replay    */
+/*                      to the sender (BPR; struct bkr94acsAct.accepted   */
+/*                      on egress, bkr94acs*Accepted on ingress).  Unlike */
+/*                      D_FLAG it is class-independent -- valid on a       */
+/*                      PROPOSAL or CONSENSUS READY (every Fig1 accepts).  */
 /*  Convention (not forced by a constant, but shared by all examples):    */
 /*    cv     bit  3:   a CONSENSUS message's binary value.  Placed        */
 /*                      adjacent to cls.                                  */
-/*    bits 4-6:        free for application message classes.              */
+/*    bits 5-6:        free for application message classes.              */
 /*                                                                        */
 /*  Compose / recover a library message:                                  */
 /*    byte = cls | type [ | (cv << 3) | (value & BRACHA87_D_FLAG) ]       */
@@ -122,6 +129,8 @@
 #define BKR94ACS_CLS_PROPOSAL  0x00 /* Fig1 reliable broadcast of proposals */
 #define BKR94ACS_CLS_CONSENSUS 0x04 /* Fig1 messages for binary consensus */
 #define BKR94ACS_CLS_MASK      0x04 /* recover class from a packed byte */
+#define BKR94ACS_ACCEPTED      0x10 /* on a READY: sender accepted this Fig1
+                                     * instance (BPR per-peer READY retire) */
 
 /*************************************************************************/
 /*  Output actions                                                       */
@@ -179,12 +188,20 @@
  */
 struct bkr94acsAct {
   const unsigned char *value; /* PROP_SEND: vLen+1 bytes; otherwise 0 */
+  const unsigned char *skip;  /* PROP_SEND/CON_SEND: BPR per-peer suppress
+                               * mask (peer p skipped iff bit p set), or 0 =
+                               * broadcast to all; bracha87Fig1Skip.  Borrowed,
+                               * valid until the next mutating library call. */
   unsigned char act;          /* BKR94ACS_ACT_* */
   unsigned char origin;       /* which origin this relates to */
   unsigned char round;        /* consensus round (CON_SEND only) */
   unsigned char type;         /* BRACHA87_INITIAL/ECHO/READY (PROP_SEND, CON_SEND) */
   unsigned char conValue;     /* binary value (CON_SEND, BA_DECIDED) */
   unsigned char broadcaster;  /* who initiated this Fig1 broadcast (CON_SEND) */
+  unsigned char accepted;     /* PROP_SEND/CON_SEND READY: 1 = set the
+                               * BKR94ACS_ACCEPTED wire bit (this instance has
+                               * accepted); 0 otherwise.  The receiving peer
+                               * feeds it back via bkr94acs*Accepted. */
 };
 
 /*************************************************************************/
@@ -340,6 +357,39 @@ bkr94acsConsensusInput(
 );
 
 /*
+ * ACCEPTED-annotation ingress (BPR per-peer READY retire).
+ *
+ * When a received READY carries the BKR94ACS_ACCEPTED wire bit, its
+ * sender 'from' has accepted the named Fig1 instance and consumes no
+ * further (ready, v) from us.  These route that fact to the right Fig1's
+ * acFrom, retiring our per-peer READY replay to 'from' (and, once every
+ * peer has accepted, the instance's READY replay entirely).
+ *
+ * Call AFTER the matching bkr94acs{Proposal,Consensus}Input for the same
+ * READY (so rdFrom is recorded first; acFrom stays a subset of rdFrom).
+ * Idempotent; out-of-range indices ignored.  No output actions.
+ *
+ * Byzantine-safe: a forged ACCEPTED only marks its own sender, so it can
+ * only retire OUR replay to that liar -- never strand a correct laggard,
+ * whose acFrom bit is set solely by its own true accept.
+ */
+void
+bkr94acsProposalAccepted(
+  struct bkr94acs *
+ ,unsigned char            /* origin: whose proposal */
+ ,unsigned char            /* from: sender that announced accept */
+);
+
+void
+bkr94acsConsensusAccepted(
+  struct bkr94acs *
+ ,unsigned char            /* origin: which origin's consensus */
+ ,unsigned char            /* round: consensus round */
+ ,unsigned char            /* broadcaster: who initiated this Fig1 broadcast */
+ ,unsigned char            /* from: sender that announced accept */
+);
+
+/*
  * Query: get the decided common subset.
  * Returns count of included origins.
  * Fills origins[] with the included origin indices (caller provides n entries).
@@ -486,6 +536,27 @@ bkr94acsBaDecision(
  */
 unsigned int
 bkr94acsProposalAllEchoed(
+  const struct bkr94acs *
+ ,unsigned char            /* origin */
+);
+
+/*
+ * Per-peer suppress mask for a side channel paired with origin's
+ * proposal INITIAL -- the per-peer refinement of bkr94acsProposalAllEchoed.
+ * Returns the proposal Fig1's INITIAL skip mask (its echoed-peer bitmap;
+ * peer p skipped iff bit p set, test with BRACHA87_SKIP_TST), or 0 for a
+ * null/out-of-range argument.
+ *
+ * Where bkr94acsProposalAllEchoed is the all-or-nothing stop (retire the
+ * side channel once EVERY peer has echoed), this drops each peer from the
+ * side channel's recipient set the moment IT echoes.  An application that
+ * gates its ECHO on validating the paired payload (signature / PSK) thereby
+ * stops re-sending the payload to a peer as soon as that peer proves -- by
+ * echoing -- it already validated and holds it.  Same borrowed-pointer
+ * lifetime as bracha87Fig1Skip (valid until the next mutating library call).
+ */
+const unsigned char *
+bkr94acsProposalSkip(
   const struct bkr94acs *
  ,unsigned char            /* origin */
 );

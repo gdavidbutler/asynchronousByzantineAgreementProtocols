@@ -112,6 +112,7 @@ struct wire {
   unsigned char from;         /* wire sender */
   unsigned char to;           /* recipient */
   unsigned char conValue;     /* CONSENSUS only (binary) */
+  unsigned char accepted;     /* READY only: BKR94ACS_ACCEPTED wire bit */
   unsigned char value[MAX_VLEN]; /* PROPOSAL only (vLen bytes) */
 };
 
@@ -240,6 +241,11 @@ observeAndEmit(
       for (j = 0; j < nAct; ++j) {
         if (silentPeer >= 0 && (int)j == silentPeer)
           continue;
+        /* BPR per-peer suppress mask: skip recipients that provably no
+         * longer consume this action.  Sound under loss -- the mask is
+         * built only from messages already received from j. */
+        if (acts[i].skip && BRACHA87_SKIP_TST(acts[i].skip, j))
+          continue;
         if (dropPercent > 0 && (rngNext() % 100) < dropPercent)
           continue;
         memset(&w, 0, sizeof (w));
@@ -248,6 +254,7 @@ observeAndEmit(
         w.type = acts[i].type;
         w.from = self;
         w.to = (unsigned char)j;
+        w.accepted = acts[i].accepted;
         if (acts[i].value && vBytes <= sizeof (w.value))
           memcpy(w.value, acts[i].value, vBytes);
         qPush(&w);
@@ -273,6 +280,8 @@ observeAndEmit(
       for (j = 0; j < nAct; ++j) {
         if (silentPeer >= 0 && (int)j == silentPeer)
           continue;
+        if (acts[i].skip && BRACHA87_SKIP_TST(acts[i].skip, j))
+          continue;
         if (dropPercent > 0 && (rngNext() % 100) < dropPercent)
           continue;
         memset(&w, 0, sizeof (w));
@@ -284,6 +293,7 @@ observeAndEmit(
         w.from = self;
         w.to = (unsigned char)j;
         w.conValue = acts[i].conValue;
+        w.accepted = acts[i].accepted;
         qPush(&w);
       }
       break;
@@ -584,13 +594,21 @@ runWithPump(
        * skipped them). */
       if (silentPeer >= 0 && (int)w.to == silentPeer)
         continue;
-      if (w.cls == BKR94ACS_CLS_PROPOSAL)
+      if (w.cls == BKR94ACS_CLS_PROPOSAL) {
         n = bkr94acsProposalInput(peers[w.to], w.origin, w.type, w.from,
                                   w.value, out);
-      else
+        /* BPR ACCEPTED annotation rides on a READY; feed it AFTER Input
+         * (which records rdFrom) so acFrom stays a subset of rdFrom. */
+        if (w.accepted)
+          bkr94acsProposalAccepted(peers[w.to], w.origin, w.from);
+      } else {
         n = bkr94acsConsensusInput(peers[w.to], w.origin, w.round,
                                    w.broadcaster, w.type, w.from,
                                    w.conValue, out);
+        if (w.accepted)
+          bkr94acsConsensusAccepted(peers[w.to], w.origin, w.round,
+                                    w.broadcaster, w.from);
+      }
       observeAndEmit(&obs[w.to], w.to, nAct, out, n, vLen,
                      dropPercent, silentPeer);
     }
@@ -1114,6 +1132,27 @@ main(
     CHECK(bkr94acsProposalAllEchoed(0, 0) == 0, "B6: AllEchoed NULL -> 0");
     CHECK(bkr94acsProposalAllEchoed(p0, 200) == 0,
           "B6: AllEchoed out-of-range origin -> 0");
+
+    /* bkr94acsProposalSkip is the per-peer refinement of the same gate:
+     * the proposal's echoed-peer mask.  Origin 0 (fully echoed) -> every
+     * bit set (all peers suppressed, == AllEchoed); origin 3 (no echoes)
+     * -> empty mask (nobody suppressed).  Null / out-of-range -> 0. */
+    {
+      const unsigned char *sk0;
+      const unsigned char *sk3;
+
+      sk0 = bkr94acsProposalSkip(p0, 0);
+      sk3 = bkr94acsProposalSkip(p0, 3);
+      CHECK(sk0 != 0, "B6: ProposalSkip non-null for valid origin 0");
+      CHECK(sk0 && BRACHA87_SKIP_TST(sk0, 0) && BRACHA87_SKIP_TST(sk0, 1)
+            && BRACHA87_SKIP_TST(sk0, 2) && BRACHA87_SKIP_TST(sk0, 3),
+            "B6: ProposalSkip all bits set for fully-echoed origin 0");
+      CHECK(sk3 && !BRACHA87_SKIP_TST(sk3, 0) && !BRACHA87_SKIP_TST(sk3, 1),
+            "B6: ProposalSkip empty for un-echoed origin 3");
+      CHECK(bkr94acsProposalSkip(0, 0) == 0, "B6: ProposalSkip NULL -> 0");
+      CHECK(bkr94acsProposalSkip(p0, 200) == 0,
+            "B6: ProposalSkip out-of-range origin -> 0");
+    }
 
     free(p0);
   }
