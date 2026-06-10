@@ -218,15 +218,21 @@ struct bkr94acs {
   unsigned char vLen;       /* proposal value length encoding: actual = vLen + 1 */
   unsigned char maxPhases;  /* per binary consensus instance */
   unsigned char self;       /* this peer's index (needed for consensus routing) */
-  unsigned char nDecidedOne; /* BKR94 Step 2 trigger: count of BAs decided with output 1 */
-  unsigned char nDecided;    /* BKR94 Step 3 trigger: count of BAs that have decided */
   unsigned char flags;      /* BKR94ACS_F_THRESHOLD / BKR94ACS_F_COMPLETE */
   /*
-   * Header is exactly 8 bytes — a multiple of sizeof (void *) on all
-   * common 32- and 64-bit ABIs — so data[] starts at the alignment
-   * required by the function-pointer fields in the Fig1/Fig4
-   * instances carved out of it.  No pad needed.
+   * The BKR94 step-2 / step-3 decision counts are not stored: a
+   * stored counter is a denormalization of baDecision[] (and, as the
+   * unsigned char it once was, wrapped on the 256th decision so
+   * BKR94ACS_ACT_COMPLETE could never fire at 256 peers).  They are
+   * derived by scanning baDecision[] at each BA decision — a rare
+   * event (see bkr94acsConsensusInput).
+   *
+   * pad puts data[] at offset 8 — a multiple of sizeof (void *) on
+   * all common 32- and 64-bit ABIs — so data[] starts at the
+   * alignment required by the function-pointer fields in the
+   * Fig1/Fig4 instances carved out of it.
    */
+  unsigned char pad[2];
   unsigned char data[1];    /* variable: see bkr94acsSz */
 };
 
@@ -564,8 +570,11 @@ bkr94acsProposalSkip(
 /*
  * Number of Fig1 instances currently committed (any of F1_ORIGIN,
  * F1_ECHOED, F1_RDSENT set).  Walks the N proposal Fig1s plus the
- * per-origin consensus Fig1s up to the active Fig4 round (no
- * committed state can exist past that round for that origin).
+ * full consensus Fig1 space — committed state is NOT bounded by
+ * this peer's own BA progress: a faster peer's INITIAL for a round
+ * this peer's Fig4 has not yet entered fires Rule 1 here, leaving
+ * that ahead-round Fig1 ECHOED (and pump-replayed) while the local
+ * conNextRound lags.
  *
  * Useful for sizing tick cadence: at one Fig1 advance per Pump
  * call, the per-Fig1 replay rate is roughly tick / (count + 1).

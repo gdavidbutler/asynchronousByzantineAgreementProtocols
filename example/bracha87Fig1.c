@@ -387,6 +387,18 @@ main(
     if (m->to >= n || m->from >= n)
       continue;
 
+    /*
+     * INITIAL sender obligation (bracha87Fig1Input header, pitfall
+     * 17): the bare Fig 1 entry does not know its designated
+     * broadcaster, so the CALLER must drop any INITIAL whose
+     * authenticated sender is not it — a forged non-origin INITIAL
+     * would ride the echo cascade to a false ACCEPT.  bkr94acs
+     * enforces this inside its Input entries; a bare-layer caller
+     * filters here.
+     */
+    if (m->type == BRACHA87_INITIAL && m->from != origin)
+      continue;
+
     f1 = fig1[m->to];
     oldTail = Qtail;
 
@@ -494,6 +506,8 @@ main(
     m = &MsgQ[Qhead++];
     if (byzSplit && m->to == origin) continue;
     if (m->to >= n || m->from >= n) continue;
+    /* Same caller-side INITIAL filter as the main loop (pitfall 17). */
+    if (m->type == BRACHA87_INITIAL && m->from != origin) continue;
     f1 = fig1[m->to];
     nout = bracha87Fig1Input(f1, m->type, m->from, m->value, out);
     for (k = 0; k < nout; ++k) {

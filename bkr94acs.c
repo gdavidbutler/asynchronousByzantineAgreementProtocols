@@ -272,12 +272,16 @@ bkr94acsInit(
    * out-of-range maxPhases by returning 0; if bkr94acsInit proceeded
    * past these checks it would memcpy into fields beyond the
    * allocation and the Fig4 step 3 path would crash on the missing
-   * coin.  Bracha also requires actual_N > 3t (asserted in each
-   * Fig*Init below, but checking here gives a cleaner failure mode).
+   * coin.  An out-of-range self would index consensus Fig1s past the
+   * allocation on the first vote (conF1 broadcaster = self).  Bracha
+   * also requires actual_N > 3t (asserted in each Fig*Init below,
+   * but checking here gives a cleaner failure mode).
    */
   if (!coin)
     return;
   if (!maxPhases || maxPhases > BRACHA87_MAX_PHASES)
+    return;
+  if (self > n)
     return;
   assert((unsigned int)n + 1 > 3u * (unsigned int)t);
 
@@ -410,9 +414,9 @@ bkr94acsProposalInput(
    * A blanket complete-guard causes classic post-decide stalls
    * where the fastest peer strands the slowest.  The per-action
    * emission blocks below (BA_DECIDED on Fig4 DECIDE, COMPLETE on
-   * nDecided crossing N, votes via bkr94acsVote's voted-state
-   * dedup) are idempotent, so continuing after complete cannot
-   * emit duplicate terminal actions.
+   * the decided count crossing N, votes via bkr94acsVote's
+   * voted-state dedup) are idempotent, so continuing after complete
+   * cannot emit duplicate terminal actions.
    */
   if (!a || origin > a->n || from > a->n || !value || !out)
     return (0);
@@ -555,8 +559,9 @@ bkr94acsConsensusInput(
    *    echoes and readys to cross n-t thresholds.  Dropping inputs
    *    after local complete strands lagging peers — a classic
    *    post-decide stall.  BKR94ACS_ACT_COMPLETE emission is gated
-   *    by nDecided crossing N, which happens once; continuing past
-   *    complete cannot emit a second BKR94ACS_ACT_COMPLETE.
+   *    by the decided count crossing N, which happens once;
+   *    continuing past complete cannot emit a second
+   *    BKR94ACS_ACT_COMPLETE.
    *    Application exit is a separate concern (see progress-silence
    *    quorum).
    */
@@ -614,6 +619,11 @@ bkr94acsConsensusInput(
         ++*nextRound;
 
         if (act & BRACHA87_DECIDE) {
+          const unsigned char *dec;
+          unsigned int nDecided;
+          unsigned int nDecidedOne;
+          unsigned int j;
+
           /* BA-decided notification (always emitted; not part of
            * BKR94 rules, just an observability signal). */
           bkr94acsDecision(a)[origin] = f4->decision;
@@ -627,19 +637,36 @@ bkr94acsConsensusInput(
           out[nact].broadcaster = 0;
           out[nact].accepted = 0;
           ++nact;
-          ++a->nDecided;
-          if (f4->decision == 1)
-            ++a->nDecidedOne;
+
+          /*
+           * Post-output decision counts, derived from baDecision[]
+           * (the decision just recorded above included).  Derived,
+           * not stored: a stored counter is a denormalization of
+           * baDecision[], and as an unsigned char it wrapped on the
+           * 256th decision, suppressing COMPLETE at 256 peers.  Only
+           * 0 and 1 match — the 0xFF (undecided) and 0xFE (exhausted)
+           * sentinels fall out of the scan with no separate rule.
+           * One O(N) pass per BA decision, a rare event.
+           */
+          dec = bkr94acsDecision(a);
+          nDecided = 0;
+          nDecidedOne = 0;
+          for (j = 0; j < A_N(a); ++j)
+            if (dec[j] <= 1) {
+              ++nDecided;
+              if (dec[j] == 1)
+                ++nDecidedOne;
+            }
 
           /*
            * BKR94 Steps 2 and 3 dispatch.  The bridge maps "post-
-           * output BA-output-1 count >= n-t" to nDecidedOne >= n-t
-           * (post-increment); "post-output BA-output count == n" to
-           * nDecided >= n.  Step 2's threshold-firing rule (vote 0
-           * to all unvoted BAs once when count reaches n-t) and
-           * Step 3's all-decided rule (output SubSet) are both
-           * guarded by their respective post-output predicates and
-           * by acsEvent's branching on BA_1 vs BA_0.  Lemma 2 Part A
+           * output BA-output-1 count >= n-t" to nDecidedOne >= n-t;
+           * "post-output BA-output count == n" to nDecided >= n.
+           * Step 2's threshold-firing rule (vote 0 to all unvoted
+           * BAs once when count reaches n-t) and Step 3's
+           * all-decided rule (output SubSet) are both guarded by
+           * their respective post-output predicates and by
+           * acsEvent's branching on BA_1 vs BA_0.  Lemma 2 Part A
            * case (i) requires Step 2's trigger to be a BA decide of
            * 1, not a Fig1 accept; the .dtc carries that exactly.
            */
@@ -648,8 +675,8 @@ bkr94acsConsensusInput(
             : BKR94ACS_ACS_EVENT_BA0;
           inputToBAj = bkr94acsVoted(a)[origin];
           fanoutTriggered = (a->flags & BKR94ACS_F_THRESHOLD) ? 1 : 0;
-          postCountOneAtNT = a->nDecidedOne >= A_N(a) - a->t;
-          postCountAllN = a->nDecided >= A_N(a);
+          postCountOneAtNT = nDecidedOne >= A_N(a) - a->t;
+          postCountAllN = nDecided >= A_N(a);
           doInput1 = 0;
           doInput0Fanout = 0;
           doOutputSubset = 0;
@@ -658,8 +685,6 @@ bkr94acsConsensusInput(
            * still resolves doInput1 to 0 at every leaf. */
           (void)doInput1;
           if (doInput0Fanout) {
-            unsigned int j;
-
             a->flags |= BKR94ACS_F_THRESHOLD;
             for (j = 0; j < A_N(a); ++j)
               nact += bkr94acsVote(a, j, 0, &out[nact]);
@@ -724,13 +749,14 @@ bkr94acsConsensusInput(
            * Mutually exclusive with BRACHA87_DECIDE (decideV requires
            * !haveDecided, EXHAUSTED requires sub=2 of last phase with
            * !haveDecided && !decideV), so Step 2 / Step 3 dispatch
-           * above did not fire.  We do NOT increment nDecided /
-           * nDecidedOne (no decision was made), do NOT enter the
-           * rules dispatch (no BA-output event to feed it), do NOT
-           * substitute a value into bkr94acsDecision[origin] -- any
-           * unilateral substitute could disagree with another peer's
-           * actual decision and break SubSet agreement (Lemma 2
-           * Part C).
+           * above did not fire.  The 0xFE sentinel written below does
+           * not match the decided-count scan's <= 1 predicate, so an
+           * exhausted BA never counts as decided (no decision was
+           * made); we do NOT enter the rules dispatch (no BA-output
+           * event to feed it), do NOT substitute a value into
+           * bkr94acsDecision[origin] -- any unilateral substitute
+           * could disagree with another peer's actual decision and
+           * break SubSet agreement (Lemma 2 Part C).
            *
            * baDecision[origin] = 0xFE marks the BA as exhausted so
            * bkr94acsBaDecision can report the state and the
@@ -1163,7 +1189,6 @@ bkr94acsCommittedFig1Count(
   unsigned int bcast;
   unsigned int count;
   unsigned char committedMask;
-  const unsigned char *nextRound;
   const struct bracha87Fig1 *f1;
 
   if (!a)
@@ -1181,7 +1206,6 @@ bkr94acsCommittedFig1Count(
 
   N = A_N(a);
   mr = maxRounds(a);
-  nextRound = bkr94acsConNextRound(a);
   count = 0;
 
   for (origin = 0; origin < N; ++origin) {
@@ -1191,19 +1215,15 @@ bkr94acsCommittedFig1Count(
   }
 
   /*
-   * Consensus Fig1s are committed only at rounds the BA has
-   * actually entered (round < conNextRound[origin]).  Past that,
-   * no Fig1Input has run; flags are zero by calloc.  Walking
-   * the full mr * N space is correct but wasteful; we cap on
-   * conNextRound to keep this O(active).
+   * Walk the full round space, not just rounds below this peer's
+   * conNextRound[origin]: a faster peer's INITIAL for a round this
+   * peer's BA has not yet entered fires Rule 1 here, so ahead-round
+   * Fig1s can be ECHOED (committed) while conNextRound lags.  The
+   * pump replays them; capping the count on conNextRound would
+   * undercount the very sweep this accessor is meant to size.
    */
   for (origin = 0; origin < N; ++origin) {
-    unsigned int activeRounds;
-
-    activeRounds = nextRound[origin];
-    if (activeRounds > mr)
-      activeRounds = mr;
-    for (round = 0; round < activeRounds; ++round) {
+    for (round = 0; round < mr; ++round) {
       for (bcast = 0; bcast < N; ++bcast) {
         f1 = conF1((struct bkr94acs *)a,
                    (unsigned char)origin,

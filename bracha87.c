@@ -580,21 +580,24 @@ bracha87Fig1Skip(
 /*************************************************************************/
 
 /*
- * Layout:
+ * Layout (data[] is unsigned short so the leading counts are aligned):
+ *   recvCount[maxRounds]       unsigned short received count per round
+ *                              (must hold 256: a full house of senders
+ *                              would wrap an unsigned char)
  *   complete[(maxRounds+7)/8]  round-complete bitmap
  *   Per round (maxRounds rounds):
- *     recvCount                (unsigned char)
  *     received[(N+7)/8]        bitmap per peer
  *     values[N]                value per peer
  */
 
-#define F2_CBMP(b)    ((b)->data)
-#define F2_RDATA(b)   ((b)->data + BIT_SZ((unsigned int)(b)->maxRounds))
-#define F2_RSZ(n)     (1 + BIT_SZ((unsigned int)(n) + 1) + (unsigned int)(n) + 1)
+#define F2_RCNT(b, k) ((b)->data[k])
+#define F2_BYTES(b)   ((unsigned char *)((b)->data + (b)->maxRounds))
+#define F2_CBMP(b)    (F2_BYTES(b))
+#define F2_RDATA(b)   (F2_BYTES(b) + BIT_SZ((unsigned int)(b)->maxRounds))
+#define F2_RSZ(n)     (BIT_SZ((unsigned int)(n) + 1) + (unsigned int)(n) + 1)
 #define F2_REC(b, k)  (F2_RDATA(b) + (unsigned long)(k) * F2_RSZ((b)->n))
-#define F2_RCNT(b, k) (*(F2_REC((b), (k))))
-#define F2_RECV(b, k) (F2_REC((b), (k)) + 1)
-#define F2_VALS(b, k) (F2_REC((b), (k)) + 1 + BIT_SZ(B_N(b)))
+#define F2_RECV(b, k) (F2_REC((b), (k)))
+#define F2_VALS(b, k) (F2_REC((b), (k)) + BIT_SZ(B_N(b)))
 
 unsigned long
 bracha87Fig2Sz(
@@ -604,9 +607,10 @@ bracha87Fig2Sz(
   unsigned int N;
 
   N = n + 1;
-  return (sizeof (struct bracha87Fig2) - 1
+  return (sizeof (struct bracha87Fig2) - sizeof (unsigned short)
+    + (unsigned long)maxRounds * sizeof (unsigned short)
     + BIT_SZ(maxRounds)
-    + (unsigned long)maxRounds * (1 + BIT_SZ(N) + N));
+    + (unsigned long)maxRounds * (BIT_SZ(N) + N));
 }
 
 void
@@ -696,23 +700,28 @@ bracha87Fig2GetReceived(
 /*************************************************************************/
 
 /*
- * Layout:
+ * Layout (data[] is unsigned short so the leading counts are aligned):
+ *   validCount[maxRounds]      unsigned short VALID^k count per round
+ *                              (must hold 256: a full house validating
+ *                              would wrap an unsigned char to 0 and
+ *                              permanently stall the next round's
+ *                              validation and the cascade gate)
  *   complete[(maxRounds+7)/8]  round-complete bitmap
  *   Per round (maxRounds rounds):
- *     validCount               (unsigned char)
  *     arrived[(N+7)/8]         bitmap per peer
  *     valid[(N+7)/8]           bitmap per peer
  *     values[N]                value per peer
  */
 
-#define F3_CBMP(b)    ((b)->data)
-#define F3_RDATA(b)   ((b)->data + BIT_SZ((unsigned int)(b)->maxRounds))
-#define F3_RSZ(n)     (1 + 2 * BIT_SZ((unsigned int)(n) + 1) + (unsigned int)(n) + 1)
+#define F3_VCNT(b, k) ((b)->data[k])
+#define F3_BYTES(b)   ((unsigned char *)((b)->data + (b)->maxRounds))
+#define F3_CBMP(b)    (F3_BYTES(b))
+#define F3_RDATA(b)   (F3_BYTES(b) + BIT_SZ((unsigned int)(b)->maxRounds))
+#define F3_RSZ(n)     (2 * BIT_SZ((unsigned int)(n) + 1) + (unsigned int)(n) + 1)
 #define F3_REC(b, k)  (F3_RDATA(b) + (unsigned long)(k) * F3_RSZ((b)->n))
-#define F3_VCNT(b, k) (*(F3_REC((b), (k))))
-#define F3_ARVD(b, k) (F3_REC((b), (k)) + 1)
-#define F3_VALD(b, k) (F3_REC((b), (k)) + 1 + BIT_SZ(B_N(b)))
-#define F3_VALS(b, k) (F3_REC((b), (k)) + 1 + 2 * BIT_SZ(B_N(b)))
+#define F3_ARVD(b, k) (F3_REC((b), (k)))
+#define F3_VALD(b, k) (F3_REC((b), (k)) + BIT_SZ(B_N(b)))
+#define F3_VALS(b, k) (F3_REC((b), (k)) + 2 * BIT_SZ(B_N(b)))
 
 unsigned long
 bracha87Fig3Sz(
@@ -722,9 +731,10 @@ bracha87Fig3Sz(
   unsigned int N;
 
   N = n + 1;
-  return (sizeof (struct bracha87Fig3) - 1
+  return (sizeof (struct bracha87Fig3) - sizeof (unsigned short)
+    + (unsigned long)maxRounds * sizeof (unsigned short)
     + BIT_SZ(maxRounds)
-    + (unsigned long)maxRounds * (1 + 2 * BIT_SZ(N) + N));
+    + (unsigned long)maxRounds * (2 * BIT_SZ(N) + N));
 }
 
 void
@@ -835,11 +845,11 @@ bracha87Fig3Accept(
  ,unsigned char value
  ,unsigned int *validCount
 ){
-  unsigned char *rec;
-  unsigned int bs;
+  unsigned short *vcnt;
   unsigned char *arvd;
   unsigned char *vald;
   unsigned char *vals;
+  unsigned int bs;
   unsigned char haveStored;
   unsigned char validKHolds;
   unsigned char roundKComplete;
@@ -852,12 +862,12 @@ bracha87Fig3Accept(
   if (!b || k >= b->maxRounds || sender > b->n)
     return (0);
 
-  /* Cache record pointer — avoids repeated F3_REC multiplication */
+  /* Cache record pointers — avoids repeated F3_REC multiplication */
   bs = BIT_SZ(B_N(b));
-  rec = F3_REC(b, k);
-  arvd = rec + 1;
-  vald = rec + 1 + bs;
-  vals = rec + 1 + 2 * bs;
+  vcnt = &F3_VCNT(b, k);
+  arvd = F3_REC(b, k);
+  vald = arvd + bs;
+  vals = arvd + 2 * bs;
 
   /* Boundary inputs.  fig3IsValid is short-circuited on duplicate:
    * the dispatch zeros every output when haveStored is 1 anyway, and
@@ -865,7 +875,7 @@ bracha87Fig3Accept(
   haveStored = BIT_TST(arvd, sender) ? 1 : 0;
   validKHolds = !haveStored && fig3IsValid(b, k, value);
   roundKComplete = BIT_TST(F3_CBMP(b), k) ? 1 : 0;
-  postMarkAtNT = (*rec + validKHolds) >= B_N(b) - b->t;
+  postMarkAtNT = (*vcnt + validKHolds) >= B_N(b) - b->t;
 
   doStore = 0;
   doMarkValid = 0;
@@ -881,7 +891,7 @@ bracha87Fig3Accept(
   }
   if (doMarkValid) {
     BIT_SET(vald, sender);
-    ++*rec;
+    ++*vcnt;
   }
   if (doSignalComplete) {
     BIT_SET(F3_CBMP(b), k);
@@ -975,7 +985,7 @@ bracha87Fig3Accept(
   }
 
   if (validCount)
-    *validCount = *rec;
+    *validCount = *vcnt;
   return (doMarkValid ? BRACHA87_VALIDATED : 0);
 }
 
@@ -1298,9 +1308,17 @@ bracha87Fig4Round(
   }
   dmax = (dc[1] > dc[0]) ? 1 : 0;
 
-  /* Boundary inputs.  At-most-one of dc[0]/dc[1] can exceed t (and
-   * therefore 2t), since their sum is bounded by n_msgs <= n-t and
-   * 2t+2 > n-t when n > 3t -- so dmax disambiguates safely. */
+  /* Boundary inputs.  At most one of dc[0]/dc[1] can exceed t (and
+   * therefore 2t), so dmax disambiguates safely.  NOT because n_msgs
+   * is bounded by n-t (the validated set grows past n-t; the
+   * permissive paths in fig4Nfn exist exactly for that): the set
+   * holds one value per sender (Fig 3 dedup) and at most t senders
+   * are byzantine, so dc[v] > t requires a CORRECT sender of (d, v)
+   * -- and correct (d, 0) and (d, 1) senders cannot coexist in one
+   * round.  Each requires >n/2 of its peers' round-(3i+1) values,
+   * those values are per-sender globally consistent (Fig 1 accept,
+   * Lemma 2), and the two supporter camps are disjoint, so two >n/2
+   * camps would need more than n senders. */
   subRound    = (unsigned char)sub;
   haveDecided = (b->flags & BRACHA87_F4_DECIDED) ? 1 : 0;
   n2Half      = (cnt[0] * 2 > B_N(b)) || (cnt[1] * 2 > B_N(b));
@@ -1397,18 +1415,20 @@ bracha87PumpInit(
  *
  * NETWORK FLOOD WARNING.  This entry is meant to be called ONCE per
  * application tick.  It must NOT be invoked in a loop.  Bracha BPR
- * replays are persistent (committed flags live forever), so every
- * committed instance always has actions to emit; a tight loop will
- * empty the cursor space onto the wire as fast as the CPU can run,
- * causing the very drops the pump is meant to recover from.
- * The application's tick rate is the rate limit.
+ * replays persist until their retire gates close (ACCEPTED /
+ * all-echoed / all-n-accepted; committed flags live forever), so
+ * until convergence every committed instance has actions to emit; a
+ * tight loop will empty the cursor space onto the wire as fast as
+ * the CPU can run, causing the very drops the pump is meant to
+ * recover from.  The application's tick rate is the rate limit.
  *
- * Walks the cursor forward from p->pos to the next committed
- * instance and returns its actions.  Returns 0 ONLY when a full
- * sweep across the entire array found nothing committed (no Fig 1
- * has ORIGIN / ECHOED / RDSENT) — pre-broadcast / fully-shutdown
- * state, NOT a per-tick termination signal.  In healthy operation
- * this never returns 0.
+ * Walks the cursor forward from p->pos to the next instance with
+ * replay actions and returns them.  Returns 0 ONLY when a full
+ * sweep across the entire array found no actions — either nothing
+ * committed (no Fig 1 has ORIGIN / ECHOED / RDSENT; pre-broadcast /
+ * fully-shutdown state) or every committed instance has quiesced
+ * (all replays retired).  Neither is a per-tick termination signal
+ * by itself.
  *
  * Termination is the application's responsibility: count PumpStep
  * calls across ticks; one sweep = (bracha87Fig1CommittedCount

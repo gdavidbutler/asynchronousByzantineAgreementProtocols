@@ -74,11 +74,15 @@
 /*  ride in ONE clsType byte per the canonical packed-byte layout in      */
 /*  bkr94acs.h.  qPush composes it; the process loop recovers it.  A      */
 /*  PROPOSAL carries its value in value[]; CONSENSUS folds its payload     */
-/*  into clsType and leaves value[] unused.                               */
+/*  into clsType and leaves value[] unused.  A READY also carries the     */
+/*  BKR94ACS_ACCEPTED bit (bit 4, class-independent): egress sets it from */
+/*  the act's .accepted flag, ingress routes it to bkr94acs*Accepted --   */
+/*  the BPR per-peer READY retire and the all-n quiescence gate.          */
 /*------------------------------------------------------------------------*/
 
 struct msg {
-  unsigned char clsType;     /* class|type; +cv,D_FLAG for CONSENSUS (see above) */
+  unsigned char clsType;     /* class|type; +ACCEPTED on a READY;
+                              * +cv,D_FLAG for CONSENSUS (see above) */
   unsigned char origin;      /* which origin */
   unsigned char round;       /* consensus round (class=CONSENSUS only) */
   unsigned char broadcaster; /* who initiated this Fig1 broadcast (CONSENSUS) */
@@ -119,6 +123,7 @@ qPush(
  ,unsigned char round
  ,unsigned char broadcaster
  ,unsigned char type
+ ,unsigned char accepted /* READY only: act's .accepted -> wire bit 4 */
  ,unsigned char from
  ,unsigned char to
  ,const unsigned char *value
@@ -135,15 +140,19 @@ qPush(
     /*
      * Consensus payload is two live bits: the binary value (placed at
      * bit 3) and BRACHA87_D_FLAG (kept at its native bit 7).  Fold both
-     * into the wire byte alongside class and type; no value byte is sent.
+     * into the wire byte alongside class, type, and the ACCEPTED
+     * annotation; no value byte is sent.
      */
     MsgQ[Qtail].clsType = (unsigned char)
       (cls | type
+       | (accepted ? BKR94ACS_ACCEPTED : 0)
        | ((value[0] & 1) << 3)
        | (value[0] & BRACHA87_D_FLAG));
   else {
-    /* Proposal payload is real bytes; pack only class and type. */
-    MsgQ[Qtail].clsType = (unsigned char)(cls | type);
+    /* Proposal payload is real bytes; pack class, type, ACCEPTED. */
+    MsgQ[Qtail].clsType = (unsigned char)
+      (cls | type
+       | (accepted ? BKR94ACS_ACCEPTED : 0));
     memcpy(MsgQ[Qtail].value, value, valueLen);
   }
   ++Qtail;
@@ -358,7 +367,8 @@ main(
       continue;
     for (j = 0; j < n; ++j)
       qPush(BKR94ACS_CLS_PROPOSAL, propAct.origin, 0, 0,
-            BRACHA87_INITIAL, (unsigned char)i, (unsigned char)j,
+            BRACHA87_INITIAL, propAct.accepted,
+            (unsigned char)i, (unsigned char)j,
             (const unsigned char *)proposals[i], vLen);
   }
 
@@ -416,6 +426,14 @@ main(
 
       nacts = bkr94acsProposalInput(st, m->origin, type, m->from,
                                     m->value, acts);
+      /*
+       * ACCEPTED-annotation ingress: bit 4 on a READY says its sender
+       * has accepted this Fig1 and consumes no further (ready, v) from
+       * us.  Route it AFTER the matching Input above, so rdFrom is
+       * recorded first and acFrom stays a subset of rdFrom.
+       */
+      if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
+        bkr94acsProposalAccepted(st, m->origin, m->from);
     } else {
       /* Recover the consensus binary value (+D_FLAG) from the wire byte. */
       conValue = (unsigned char)
@@ -429,6 +447,10 @@ main(
       nacts = bkr94acsConsensusInput(st, m->origin, m->round,
                                      m->broadcaster, type,
                                      m->from, conValue, acts);
+      /* Same ACCEPTED ingress as the proposal class (Input first). */
+      if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
+        bkr94acsConsensusAccepted(st, m->origin, m->round,
+                                  m->broadcaster, m->from);
     }
 
     /* Enqueue output actions as network messages */
@@ -449,12 +471,14 @@ main(
            * action is provably no longer owed to (echoed -> INITIAL,
            * readied -> ECHO, accepted -> READY).  Sound under loss; here
            * (no loss) it merely trims redundant replays.  The READY
-           * suppress mask is fed by the ACCEPTED wire bit -- exercised
-           * end-to-end under loss in test_bkr94acs_blackbox.c. */
+           * suppress mask is fed by the ACCEPTED wire bit this loop
+           * round-trips (egress .accepted -> bit 4 -> ingress
+           * bkr94acs*Accepted); the same round-trip is exercised under
+           * loss in test_bkr94acs_blackbox.c. */
           if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
             continue;
           qPush(BKR94ACS_CLS_PROPOSAL, acts[k].origin, 0, 0,
-                acts[k].type, m->to, (unsigned char)p,
+                acts[k].type, acts[k].accepted, m->to, (unsigned char)p,
                 acts[k].value, vLen);
         }
         break;
@@ -470,7 +494,7 @@ main(
           if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
             continue;
           qPush(BKR94ACS_CLS_CONSENSUS, acts[k].origin, acts[k].round,
-                acts[k].broadcaster, acts[k].type,
+                acts[k].broadcaster, acts[k].type, acts[k].accepted,
                 m->to, (unsigned char)p,
                 &acts[k].conValue, 1);
         }
@@ -533,7 +557,8 @@ main(
           if (pacts[k].skip && BRACHA87_SKIP_TST(pacts[k].skip, p))
             continue;
           qPush(BKR94ACS_CLS_PROPOSAL, pacts[k].origin, 0, 0,
-                pacts[k].type, (unsigned char)i, (unsigned char)p,
+                pacts[k].type, pacts[k].accepted,
+                (unsigned char)i, (unsigned char)p,
                 pacts[k].value, vLen);
         }
         break;
@@ -542,7 +567,7 @@ main(
           if (pacts[k].skip && BRACHA87_SKIP_TST(pacts[k].skip, p))
             continue;
           qPush(BKR94ACS_CLS_CONSENSUS, pacts[k].origin, pacts[k].round,
-                pacts[k].broadcaster, pacts[k].type,
+                pacts[k].broadcaster, pacts[k].type, pacts[k].accepted,
                 (unsigned char)i, (unsigned char)p,
                 &pacts[k].conValue, 1);
         }
@@ -565,17 +590,26 @@ main(
     struct bkr94acsAct dacts[BKR94ACS_MAX_ACTS(MAX_PEERS, MAX_PHASES)];
 
     m = &MsgQ[Qhead++];
-    if ((m->clsType & BKR94ACS_CLS_MASK) == BKR94ACS_CLS_PROPOSAL)
+    if ((m->clsType & BKR94ACS_CLS_MASK) == BKR94ACS_CLS_PROPOSAL) {
       bkr94acsProposalInput(peers[m->to], m->origin,
                             m->clsType & BRACHA87_TYPE_MASK, m->from,
                             m->value, dacts);
-    else
+      /* Same ACCEPTED ingress as the main loop (Input first). */
+      if ((m->clsType & BRACHA87_TYPE_MASK) == BRACHA87_READY
+       && (m->clsType & BKR94ACS_ACCEPTED))
+        bkr94acsProposalAccepted(peers[m->to], m->origin, m->from);
+    } else {
       bkr94acsConsensusInput(peers[m->to], m->origin, m->round,
                              m->broadcaster, m->clsType & BRACHA87_TYPE_MASK,
                              m->from,
                              (unsigned char)(((m->clsType >> 3) & 1)
                                              | (m->clsType & BRACHA87_D_FLAG)),
                              dacts);
+      if ((m->clsType & BRACHA87_TYPE_MASK) == BRACHA87_READY
+       && (m->clsType & BKR94ACS_ACCEPTED))
+        bkr94acsConsensusAccepted(peers[m->to], m->origin, m->round,
+                                  m->broadcaster, m->from);
+    }
     /* Replay-induced acts are duplicates; discarded. */
   }
 

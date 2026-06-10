@@ -311,10 +311,13 @@ bracha87Fig1Value(
  * "stop once locally echoed/accepted-so-stop-ready" gates that
  * would strand slow peers -- those remain forbidden.
  *
- * Returns 0 only when there is nothing committed to replay (a
- * non-origin instance that has not echoed -- the natural "idle"
- * signal at the Fig1 level).  An instance that has sent ready
- * always emits at least READY, so it never idles to 0.
+ * Returns 0 when there is nothing committed to replay (a non-origin
+ * instance that has not echoed -- the natural "idle" signal at the
+ * Fig1 level), or when every committed action has hit its retire
+ * gate above: INITIAL and ECHO at ACCEPTED (INITIAL also at
+ * all-echoed), READY at all-n-accepted.  An RDSENT instance
+ * therefore emits at least READY until the all-n-accepted gate
+ * closes; past that it is quiescent and returns 0.
  *
  * Out actions reuse BRACHA87_INITIAL_ALL / BRACHA87_ECHO_ALL /
  * BRACHA87_READY_ALL; the committed value is read via
@@ -429,10 +432,16 @@ struct bracha87Fig2 {
   unsigned char n;        /* process count encoding: actual = n + 1 */
   unsigned char t;        /* max Byzantine (n + 1 > 3t) */
   unsigned char maxRounds;
-  unsigned char data[1];  /* variable: see bracha87Fig2Sz */
+  unsigned short data[1]; /* variable: see bracha87Fig2Sz */
 };
 
-/* data[] is the variable tail; see bracha87.c for layout. */
+/*
+ * data[] is the variable tail; see bracha87.c for layout.  It is
+ * typed unsigned short because it begins with the per-round received
+ * counts, which must hold 256 (an unsigned char would wrap when all
+ * 256 senders of a full house are received); the member type also
+ * carries the alignment those counts require.
+ */
 
 /* Size in bytes needed for a Fig2 instance */
 unsigned long
@@ -548,10 +557,17 @@ struct bracha87Fig3 {
   unsigned char n;
   unsigned char t;
   unsigned char maxRounds;
-  unsigned char data[1];   /* variable: see bracha87Fig3Sz */
+  unsigned short data[1];  /* variable: see bracha87Fig3Sz */
 };
 
-/* data[] is the variable tail; see bracha87.c for layout. */
+/*
+ * data[] is the variable tail; see bracha87.c for layout.  It is
+ * typed unsigned short because it begins with the per-round VALID^k
+ * counts, which must hold 256 (an unsigned char would wrap when all
+ * 256 senders of a full house validate in one round, permanently
+ * stalling validation of the next round); the member type also
+ * carries the alignment those counts require.
+ */
 
 unsigned long
 bracha87Fig3Sz(
@@ -793,17 +809,20 @@ bracha87Fig4Round(
 /*  bracha87Fig1PumpStep below, or bkr94acsPump (bkr94acs.h).            */
 /*                                                                       */
 /*  NETWORK FLOOD WARNING.  Every Pump consumer is one-call-per-tick.    */
-/*  Do NOT loop.  BPR replays are persistent (committed flags live       */
-/*  forever), so every committed instance always has actions; a          */
-/*  `while (Pump(...))` loop empties the cursor space onto the wire as   */
-/*  fast as the CPU runs, burning through kernel buffers and causing     */
-/*  the very drops the pump exists to recover from.  The application's   */
-/*  tick rate is the rate limit.  In healthy operation a Pump consumer   */
-/*  returns >0 on every call.                                            */
+/*  Do NOT loop.  BPR replays persist until their retire gates close     */
+/*  (ACCEPTED / all-echoed / all-n-accepted; committed flags live        */
+/*  forever), so until convergence every committed instance has          */
+/*  actions; a `while (Pump(...))` loop empties the cursor space onto    */
+/*  the wire as fast as the CPU runs, burning through kernel buffers     */
+/*  and causing the very drops the pump exists to recover from.  The     */
+/*  application's tick rate is the rate limit.  In healthy operation a   */
+/*  Pump consumer returns >0 on every call until quiescence.             */
 /*                                                                       */
 /*  The 0 return appears only when a full sweep across the whole cursor  */
-/*  space found no committed instance — pre-broadcast / fully-shutdown   */
-/*  state, NOT a termination signal.                                     */
+/*  space found no actions: either no committed instance exists yet      */
+/*  (pre-broadcast / fully-shutdown state) or every committed instance   */
+/*  has retired all its replays (quiescence — every peer announced       */
+/*  accepted).  Neither is a termination signal by itself.               */
 /*                                                                       */
 /*  Termination is the application's policy, not the library's,          */
 /*  which prescribes none — see README.md "Termination is an             */
@@ -872,8 +891,9 @@ struct bracha87Fig1Act {
  * the next committed instance and returns its actions.
  *
  * Call ONCE per application tick.  Do NOT loop — see the network
- * flood warning above.  In healthy operation this never returns 0;
- * 0 means a full sweep found nothing committed.
+ * flood warning above.  0 means a full sweep found no actions:
+ * nothing committed yet, or every committed instance has quiesced
+ * (all replays retired — see the warning block above).
  *
  * Null entries in instances[] are skipped (useful when the
  * application's array is sparse — e.g. one slot per (origin, round)

@@ -772,11 +772,12 @@ testPostDecideContinuation(
 
   /*
    * Simulate prior decide of BA_0: baDecision[0] is the (N+0)th byte
-   * of a->data (voted[N] precedes baDecision[N]).  We also bump
-   * nDecided so internal bookkeeping stays consistent.
+   * of a->data (voted[N] precedes baDecision[N]).  The decided
+   * counts are derived by scanning baDecision[] at each decision
+   * event, so this single write is the whole simulation -- no
+   * parallel bookkeeping to keep consistent.
    */
   a->data[N + 0] = 1;
-  ++a->nDecided;
 
   /*
    * Feed a round-0 consensus INITIAL for origin 0 from peer 1.
