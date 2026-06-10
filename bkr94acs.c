@@ -417,6 +417,21 @@ bkr94acsProposalInput(
   if (!a || origin > a->n || from > a->n || !value || !out)
     return (0);
 
+  /*
+   * INITIAL is the designated broadcaster's message: only the origin
+   * may send (initial, v) for its own proposal.  ECHO/READY arrive
+   * legitimately from any peer (from != origin is normal and is
+   * sender-deduped in bracha87Fig1Input), but a non-origin INITIAL is
+   * a forged proposal -- a Byzantine peer injecting a value the correct
+   * origin never broadcast, which the (n+t)/2+1 echo cascade would then
+   * carry to a false ACCEPT.  Authenticated channels bind 'from' to the
+   * true sender but do NOT bind the message's origin field to it (origin
+   * != from is a valid ECHO/READY), so this is a protocol-semantic check
+   * that must live here, not in the transport.  Drop the message.
+   */
+  if (type == BRACHA87_INITIAL && from != origin)
+    return (0);
+
   f1 = propF1(a, origin);
   nf1 = bracha87Fig1Input(f1, type, from, value, f1out);
   nact = 0;
@@ -510,6 +525,16 @@ bkr94acsConsensusInput(
   if (!a || origin > a->n || broadcaster > a->n || from > a->n || !out)
     return (0);
   if (round >= maxRounds(a))
+    return (0);
+
+  /*
+   * Consensus INITIAL is the broadcaster's message: only 'broadcaster'
+   * may send (initial, v) for the (origin, round, broadcaster) Fig1.
+   * Same forged-proposal defense as bkr94acsProposalInput -- a non-
+   * broadcaster INITIAL would steer this BA toward a value the correct
+   * broadcaster never proposed.  ECHO/READY from any peer are normal.
+   */
+  if (type == BRACHA87_INITIAL && from != broadcaster)
     return (0);
 
   /*

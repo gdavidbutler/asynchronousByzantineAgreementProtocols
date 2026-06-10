@@ -840,6 +840,68 @@ main(
   a4_done: ;
 
   /* ---------------------------------------------------------------- */
+  BANNER("A5: forged INITIAL rejection (Note 14 / pitfall 17)");
+  /* ---------------------------------------------------------------- */
+  {
+    unsigned long sz;
+    struct bkr94acs *a;
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, 10)];
+    unsigned char v[1];
+    unsigned int n;
+
+    /*
+     * Contract: an INITIAL is the designated broadcaster's message.
+     * bkr94acsProposalInput requires from == origin; bkr94acsConsensus-
+     * Input requires from == broadcaster.  A mismatched INITIAL is a
+     * forged broadcast and must be dropped (0 actions).  ECHO/READY
+     * from any sender remain valid.  n=4, t=1, self=0.
+     */
+    sz = bkr94acsSz(3, 0, 10);
+    a = (struct bkr94acs *)calloc(1, sz);
+    if (!a) goto a5_done;
+    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
+
+    v[0] = 0x42;
+
+    /* Proposal INITIAL with from != origin: dropped. */
+    n = bkr94acsProposalInput(a, /*origin=*/1, BRACHA87_INITIAL,
+                              /*from=*/2, v, out);
+    CHECK(n == 0, "forged proposal INITIAL (from != origin): 0 acts");
+    CHECK(bkr94acsProposalValue(a, 1) == 0,
+          "forged proposal INITIAL: origin 1 stays unaccepted");
+
+    /* Proposal INITIAL with from == origin: echoes (1 act). */
+    n = bkr94acsProposalInput(a, /*origin=*/1, BRACHA87_INITIAL,
+                              /*from=*/1, v, out);
+    CHECK(n == 1 && out[0].act == BKR94ACS_ACT_PROP_SEND
+                 && out[0].type == BRACHA87_ECHO,
+          "honest proposal INITIAL (from == origin): PROP_SEND/ECHO");
+
+    /* An ECHO from a non-origin sender is legitimate (sender-deduped),
+     * NOT subject to the INITIAL rule. */
+    n = bkr94acsProposalInput(a, /*origin=*/1, BRACHA87_ECHO,
+                              /*from=*/3, v, out);
+    CHECK(n <= 1, "non-origin ECHO accepted (not dropped as forged)");
+
+    /* Consensus INITIAL with from != broadcaster: dropped. */
+    n = bkr94acsConsensusInput(a, /*origin=*/1, /*round=*/0,
+                               /*broadcaster=*/2, BRACHA87_INITIAL,
+                               /*from=*/3, /*value=*/1, out);
+    CHECK(n == 0, "forged consensus INITIAL (from != broadcaster): 0 acts");
+
+    /* Consensus INITIAL with from == broadcaster: echoes. */
+    n = bkr94acsConsensusInput(a, /*origin=*/1, /*round=*/0,
+                               /*broadcaster=*/2, BRACHA87_INITIAL,
+                               /*from=*/2, /*value=*/1, out);
+    CHECK(n == 1 && out[0].act == BKR94ACS_ACT_CON_SEND
+                 && out[0].type == BRACHA87_ECHO,
+          "honest consensus INITIAL (from == broadcaster): CON_SEND/ECHO");
+
+    free(a);
+  }
+  a5_done: ;
+
+  /* ---------------------------------------------------------------- */
   /*  Section B — Lemma 2 Parts A/B/C/D + paper-direct invariants     */
   /* ---------------------------------------------------------------- */
 

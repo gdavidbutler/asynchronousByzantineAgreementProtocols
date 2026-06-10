@@ -2227,6 +2227,78 @@ testBprSkipAccept(
 }
 
 
+/*
+ * Implementation Pitfall 17 (Note 14): an INITIAL must come from the
+ * instance's designated broadcaster (origin for proposals, broadcaster
+ * for consensus).  A non-broadcaster INITIAL is a forged broadcast and
+ * must be dropped — otherwise Rule 1 echoes it and the (n+t)/2+1 echo
+ * cascade carries a value the correct origin never sent to a false
+ * ACCEPT.  Honest generators never produce this (from == origin even
+ * for an equivocating origin), so it needs an explicit injection.
+ * n=4, t=1, self=2.
+ */
+static void
+testForgedInitial(
+  void
+){
+  struct bkr94acs *a;
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, MAX_PHASES)];
+  unsigned long sz;
+  unsigned char v;
+  unsigned int n;
+  unsigned char from;
+
+  printf("\n  Forged INITIAL rejection (pitfall 17):\n");
+
+  sz = bkr94acsSz(3, 0, MAX_PHASES);
+  a = (struct bkr94acs *)calloc(1, sz);
+  if (!a) {
+    check("ForgedInitial alloc", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, MAX_PHASES, /*self=*/2, testCoin, 0);
+
+  /* Forged proposal INITIAL for origin 0, sent by Byzantine peer 1. */
+  v = 0x55;
+  n = bkr94acsProposalInput(a, /*origin=*/0, BRACHA87_INITIAL,
+                            /*from=*/1, &v, out);
+  check("forged proposal INITIAL (from!=origin) emits no action", n == 0);
+
+  /*
+   * Drive the forged value at EVERY peer index: if the from!=origin
+   * drop were absent, four forged INITIALs would echo 0x55 and the
+   * cascade could ACCEPT it.  With the drop, the BA stays pristine.
+   */
+  for (from = 0; from <= 3; ++from)
+    if (from != 0)
+      (void)bkr94acsProposalInput(a, 0, BRACHA87_INITIAL, from, &v, out);
+  check("forged INITIAL flood leaves proposal Fig1 uncommitted",
+        bkr94acsProposalValue(a, 0) == 0);
+
+  /* The honest origin's own INITIAL still works (from == origin). */
+  v = 0x55;
+  n = bkr94acsProposalInput(a, /*origin=*/0, BRACHA87_INITIAL,
+                            /*from=*/0, &v, out);
+  check("honest proposal INITIAL (from==origin) emits ECHO", n == 1);
+  check("honest proposal INITIAL action is PROP_SEND/ECHO",
+        n == 1 && out[0].act == BKR94ACS_ACT_PROP_SEND
+              && out[0].type == BRACHA87_ECHO);
+
+  /* Consensus path: forged INITIAL with from != broadcaster is dropped;
+   * the legitimate broadcaster's INITIAL is accepted. */
+  n = bkr94acsConsensusInput(a, /*origin=*/0, /*round=*/0, /*broadcaster=*/1,
+                             BRACHA87_INITIAL, /*from=*/3, /*value=*/1, out);
+  check("forged consensus INITIAL (from!=broadcaster) emits no action",
+        n == 0);
+  n = bkr94acsConsensusInput(a, /*origin=*/0, /*round=*/0, /*broadcaster=*/1,
+                             BRACHA87_INITIAL, /*from=*/1, /*value=*/1, out);
+  check("legitimate consensus INITIAL (from==broadcaster) emits ECHO",
+        n == 1 && out[0].act == BKR94ACS_ACT_CON_SEND
+              && out[0].type == BRACHA87_ECHO);
+
+  free(a);
+}
+
 int
 main(
   void
@@ -2257,6 +2329,7 @@ main(
   testBprHighDrop();
   testExhausted();
   testProposalValueGate();
+  testForgedInitial();
 
   free(MsgQ);
 

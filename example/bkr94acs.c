@@ -399,6 +399,15 @@ main(
      */
     oldTail = Qtail;
 
+    /*
+     * Sender (m->from) is the authenticated message sender; for INITIAL
+     * messages the library checks it against the designated broadcaster
+     * (origin for proposals, broadcaster for consensus) and drops a
+     * forged non-broadcaster INITIAL, so this no-loss honest demo needs
+     * no extra filter here.  A deployment with Byzantine peers relies on
+     * that library check -- do NOT strip it by pre-validating away the
+     * 'from' argument.
+     */
     if (cls == BKR94ACS_CLS_PROPOSAL) {
       if (verbose)
         printf("peer %u: recv PROP %s(origin=%u) from %u\n",

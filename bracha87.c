@@ -1449,6 +1449,8 @@ bracha87Fig1PumpStep(
         v = bracha87Fig1Value(instances[idx]);
         for (i = 0; i < n; ++i) {
           out[i].act = acts[i];
+          out[i].accepted = (acts[i] == BRACHA87_READY_ALL
+            && (instances[idx]->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
           out[i].idx = idx;
           out[i].value = v;
           out[i].skip = bracha87Fig1Skip(instances[idx], acts[i]);

@@ -487,6 +487,8 @@ Each item below is a paper-vs-code divergence that any from-scratch implementati
 
 13. **READY's only sound retire is *remote* all-accepted — never *local* accept (the per-peer refinement of Note 10).** Per-peer suppression and the all-`n`-accepted READY quiescence gate both read PEERS' accepts, announced via the `BKR94ACS_ACCEPTED` wire bit and recorded in `acFrom` — not the local `ACCEPTED` flag that Note 10 forbids. Per-peer: skip READY to a peer once *it* has accepted (its Rule 6 fired on 2t+1 readys, so it consumes no further ready). Whole-action: stop emitting only when *all* `n` have accepted. Two byzantine-safety facts are load-bearing: a forged `ACCEPTED` marks only its own sender, so it retires our replay to that liar but can never strand a correct laggard (whose bit is set solely by its own true accept); and reaching the all-`n` gate requires every *correct* peer's true accept regardless of what the ≤t Byzantine peers claim. Do **not** add a `≥2t+1 accepted → stop` threshold shortcut — Byzantine forgeries could trip it while a correct peer is still below 2t+1 readys. Regression checks: `testFig1SkipAccept`, `testBprSkipAccept`, and `runWithPump` drop-convergence with suppression active.
 
+14. **INITIAL must come from the designated broadcaster — `from == origin` (proposal) / `from == broadcaster` (consensus) is enforced, not assumed.** A Fig 1 instance is keyed to ONE designated broadcaster. Only that broadcaster may send `(initial, v)`; ECHO and READY arrive legitimately from any peer (`from != origin` is normal for them and is sender-deduped). A non-broadcaster INITIAL is a *forged broadcast* — a Byzantine peer injecting a value the correct origin never sent — and because Rule 1 echoes the first INITIAL unconditionally, an attacker reaching every correct peer drives the `(n+t)/2+1` echo cascade to a false ACCEPT, violating reliable-broadcast validity. Authenticated channels do **not** close this: they bind `from` to the true sender but not the message's *claimed* broadcaster (origin ≠ from is a valid ECHO/READY), so the binding is a protocol-semantic check, not a transport one. `bkr94acsProposalInput` / `bkr94acsConsensusInput` drop the message when `type == BRACHA87_INITIAL && from != origin/broadcaster`. The bare `bracha87Fig1Input` cannot self-enforce (it is not told its own broadcaster index — see the INITIAL-sender obligation in its header doc), so a direct bare-layer caller must filter before calling. This trap is invisible to honest-only tests: every honest generator sends INITIALs with `from == origin`, and even an equivocating *origin* still has `from == origin` — so nothing exercised the forged-non-origin path until it was added explicitly. Regression checks: `testForgedInitial` (white-box) and Section A's forged-INITIAL contract case (black-box).
+
 ---
 
 ## Re-Implementing in Another Language
@@ -494,7 +496,7 @@ Each item below is a paper-vs-code divergence that any from-scratch implementati
 A port that wants to preserve this library's correctness story has two pieces of machinery to either reproduce or replace:
 
 1. The **decision-table compilation pipeline** (described below), which lifts paper rules into depth-optimal dispatch.
-2. The **trap list and predicate corpus** for cross-checking the result. Implementation Notes #1–#13 above are paper-vs-code traps; `test/test_predicates.c` is the exhaustive paper-direct reference for the algorithmic predicates that sit below the dispatch.
+2. The **trap list and predicate corpus** for cross-checking the result. Implementation Notes #1–#14 above are paper-vs-code (and model-precondition) traps; `test/test_predicates.c` is the exhaustive paper-direct reference for the algorithmic predicates that sit below the dispatch.
 
 ### Paper-Faithful Dispatch via DTC
 
@@ -517,8 +519,8 @@ A re-implementation that does not want a DTC dependency can transcribe the dispa
 - **`Bracha87.txt`** and **`BKR94ACS.txt`** are the paper extracts. Start here.
 - **`bracha87Fig{1,3,4}.dtc`** and **`bkr94acs.dtc`** are the paper-vocabulary decision tables, rule-by-rule commented to the paper. These are the API contract for the dispatch.
 - **`test/test_predicates.c`** is the paper-direct reference for `fig3IsValid`, `fig4Nfn`, and the Fig 3 cascade — exhaustive enumeration at n=4, t=1. A port should pass this corpus.
-- **`test/test_bracha87.c`** and **`test/test_bkr94acs.c`** are the integration-test corpus, including the regression checks named in Implementation Notes #9–#12.
-- **Implementation Notes #1–#12 above** are the traps. Each one names a specific paper-vs-code divergence and (where applicable) the regression test that catches it.
+- **`test/test_bracha87.c`** and **`test/test_bkr94acs.c`** are the integration-test corpus, including the regression checks named in Implementation Notes #9–#14.
+- **Implementation Notes #1–#14 above** are the traps. Each one names a specific paper-vs-code divergence and (where applicable) the regression test that catches it.
 
 ## License
 

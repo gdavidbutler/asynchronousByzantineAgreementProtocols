@@ -211,6 +211,18 @@ bracha87Fig1Origin(
  * On any action, the committed value is available via bracha87Fig1Value.
  *
  * Deduplication: at most one echo and one ready per sender.
+ *
+ * INITIAL sender obligation: this instance is keyed to ONE designated
+ * broadcaster.  Only that broadcaster may send (initial, v); ECHO and
+ * READY arrive legitimately from any peer (and are sender-deduped).
+ * This entry does NOT know its own broadcaster index, so it cannot
+ * enforce the binding -- the CALLER must drop any INITIAL whose
+ * authenticated sender is not the designated broadcaster before calling
+ * here.  Authenticated channels alone do not close this: they bind the
+ * sender identity but not the message's claimed broadcaster, and a
+ * non-broadcaster INITIAL is a forged broadcast the echo cascade would
+ * carry to a false ACCEPT.  (bkr94acsProposalInput / bkr94acsConsensus-
+ * Input enforce from == origin / broadcaster on the caller's behalf.)
  */
 unsigned int
 bracha87Fig1Input(
@@ -274,6 +286,17 @@ bracha87Fig1Value(
  *     otherwise carry the never-retired tail.  Below that, the
  *     per-peer suppress mask (bracha87Fig1Skip) still drops READY to
  *     the peers already known accepted.
+ *
+ *     The all-n quiescence is best-effort under loss, NOT a guaranteed
+ *     terminal state: once a peer's own acFrom reaches n it stops
+ *     re-emitting READY -- and with it the ACCEPTED annotation -- so a
+ *     peer that lost those final announcements may never set the last
+ *     acFrom bit and never quiesces.  This is safe: it can only happen
+ *     once every peer has accepted, i.e. consensus is already complete,
+ *     and the un-quiesced peer merely keeps replaying a READY no correct
+ *     peer consumes.  The application's abandonment policy is the real
+ *     backstop; acFrom == n is an optimisation that collapses the tail
+ *     when the announcements arrive, not a liveness guarantee.
  *
  * Per-peer suppression: every replay action carries a suppress mask
  * (bracha87Fig1Skip; on the array path, struct bracha87Fig1Act.skip)
@@ -818,6 +841,16 @@ bracha87PumpInit(
  * One BPR replay action for one Fig 1 instance.
  *
  *   act       BRACHA87_INITIAL_ALL / ECHO_ALL / READY_ALL
+ *   accepted  READY_ALL replay only: 1 iff this instance has ACCEPTED,
+ *             so the caller sets the wire ACCEPTED bit on the re-emitted
+ *             READY -- the announcement that drives peers' per-peer READY
+ *             retire and the all-n quiescence gate (bracha87Fig1Peer-
+ *             Accepted on ingress).  0 otherwise.  Mirror of
+ *             bkr94acsAct.accepted; a bare-layer caller that wires this
+ *             back (plus bracha87Fig1PeerAccepted) gets the same READY
+ *             quiescence the bkr94acs layer has.  Without it READY simply
+ *             replays until application abandonment -- safe, just not
+ *             quiescent.
  *   idx       index in the caller's instances array
  *   value     borrowed pointer into the Fig 1 instance's
  *             committed-value slot, vLen+1 bytes; valid until the
@@ -826,6 +859,7 @@ bracha87PumpInit(
  */
 struct bracha87Fig1Act {
   unsigned char act;
+  unsigned char accepted;     /* READY_ALL: 1 = set wire ACCEPTED bit */
   unsigned int  idx;
   const unsigned char *value;
   const unsigned char *skip;  /* BPR per-peer suppress mask, or 0 = all;
