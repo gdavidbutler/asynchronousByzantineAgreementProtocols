@@ -40,7 +40,7 @@ yes,1
 no,0
 
 # Domain action -> boolean local that drives post-dispatch side effects
-# (fig1Commit / memcpy / flag set / out[nout++]=...).
+# (fig1Echo / memcpy / flag set / out[nout++]=...).
 
 @~sendEcho,"send (echo, v)"
 1,yes
@@ -55,29 +55,29 @@ no,0
 0,no
 
 # ===========================================================
-# Bracha Phase Re-emitter (BPR)
+# Bracha Phase Retry (BPR)
 # ===========================================================
 #
 # Bridge entries for the BPR additions in bracha87Fig1.dtc.  Same
 # binding style as above: '~'-prefixed C identifiers on the left,
 # paper-vocabulary names on the right.
 #
-# No new boundary inputs.  Two replay outputs (~replayEcho /
-# ~replayReady) for the BPR rules that chain on existing paper
-# rule outputs and committed-state flags.  The third BPR rule --
-# originator INITIAL replay, gated on "am origin" -- lives as a
-# C early-emit in bracha87Fig1Bpr, not in this dispatch (single-
+# No new boundary inputs.  Two retry outputs (~retryEcho /
+# ~retryReady) for the BPR rules that chain on existing paper
+# rule outputs and sent-state flags.  The third BPR rule --
+# initiator INITIAL retry, gated on "am initiator" -- lives as a
+# C early-output in bracha87Fig1Bpr, not in this dispatch (single-
 # bit guard with no test-ordering insight; merging it would
 # duplicate the paper DAG at every leaf -- see bracha87Fig1.dtc
-# "Originator (initial, v) replay -- not in this dispatch").
-# The wire encoding for replayed messages re-uses BRACHA87_INITIAL
+# "Initiator (initial, v) retry -- not in this dispatch").
+# The wire encoding for retried messages re-uses BRACHA87_INITIAL
 # / BRACHA87_ECHO / BRACHA87_READY, so only the per-action local
 # boolean output needs a bridge.
 
-@~replayEcho,"replay (echo, v)"
+@~retryEcho,"retry (echo, v)"
 1,yes
 0,no
 
-@~replayReady,"replay (ready, v)"
+@~retryReady,"retry (ready, v)"
 1,yes
 0,no

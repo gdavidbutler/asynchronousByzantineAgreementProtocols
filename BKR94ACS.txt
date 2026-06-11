@@ -12,9 +12,9 @@ deliberately not summarized here.
 Model and tools
 ---------------
 
-n players, fully connected asynchronous network, up to t Byzantine
-faults. The MPC construction targets optimal resilience t < n/3
-(i.e. n >= 3t + 1).
+n players (processors), fully connected asynchronous network, up to
+t Byzantine faults. The MPC construction targets optimal resilience
+ t < n/3 (i.e. n >= 3t + 1).
 
 ACS takes two subprotocols as inputs:
 

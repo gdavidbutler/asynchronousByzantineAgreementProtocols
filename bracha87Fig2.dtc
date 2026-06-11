@@ -14,7 +14,7 @@
 # predicate.  In our C, Figure 3 subsumes Figure 2's role - this
 # file captures Figure 2 for paper completeness only.  There is
 # no bracha87Fig2ToC.dtc and no bracha87Fig2ToC.c; the C
-# implementation of bracha87 needs no Figure 2 emission.
+# implementation of bracha87 needs no Figure 2 output.
 #
 # Inputs (the situation when delivering (round k, v) from
 # sender j; "post-record" means the count after the prospective

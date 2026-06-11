@@ -8,19 +8,19 @@
  * file inspects bracha87.c or any other implementation source.
  *
  * Properties exercised:
- *   - Validity      (all honest propose v -> all honest decide v)
+ *   - Validity      (all honest A-Cast v -> all honest decide v)
  *   - Agreement     (no two honest decide differently for same broadcast)
  *   - Totality      (one honest accepts/decides -> all honest do, modulo
  *                    delivery -- driven by completing message exchange)
- *   - API edges     (Sz/Init contracts, Origin idempotency, dedup,
- *                    BPR replay invariants documented in the header)
+ *   - API edges     (Sz/Init contracts, Initiator idempotency, dedup,
+ *                    BPR retry invariants documented in the header)
  *   - Byzantine     (t < n/3 faulty injecting equivocations / arbitrary
  *                    values cannot break validity or agreement)
  *
  * Header encoding convention (CRITICAL): n parameter is encoded;
  * actual process count = n + 1.  vLen parameter is encoded; actual
  * value length = vLen + 1.  We use:
- *   N_ENC = 3  -> actual cluster of 4 peers
+ *   N_ENC = 3  -> actual cluster of 4 processes
  *   T     = 1  -> max Byzantine; n + 1 > 3t holds (4 > 3)
  *   VLEN_BIN = 0  -> 1-byte values (binary consensus)
  *
@@ -54,8 +54,8 @@ static const char *CurTest = "<none>";
 
 #define BANNER(name) do { CurTest = (name); } while (0)
 
-/* Encoded parameters for a 4-peer cluster (actual N = N_ENC + 1) */
-#define N_ENC      3      /* actual peer count = 4 */
+/* Encoded parameters for a 4-process cluster (actual N = N_ENC + 1) */
+#define N_ENC      3      /* actual process count = 4 */
 #define N_ACT      4
 #define T_VAL      1
 #define VLEN_BIN   0      /* actual value length = 1 byte */
@@ -79,7 +79,7 @@ rngSeed(unsigned long s) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Asynchronous wire-message queue used by all multi-peer simulators. */
+/* Asynchronous wire-message queue used by all multi-process simulators. */
 /* ------------------------------------------------------------------ */
 
 struct wire {
@@ -87,7 +87,7 @@ struct wire {
   unsigned char from;
   unsigned char to;
   unsigned char round;
-  unsigned char origin;
+  unsigned char initiator;
   unsigned char value[8];
 };
 
@@ -131,7 +131,7 @@ qPopRandom(struct wire *out) {
   return 1;
 }
 
-/* Broadcast a Fig1 action from peer 'from' to all 'nAct' peers. */
+/* Broadcast a Fig1 action from process 'from' to all 'nAct' processes. */
 static void
 broadcastFig1(unsigned char from, unsigned int nAct,
               unsigned char act, const unsigned char *v,
@@ -180,7 +180,7 @@ main(int argc, char **argv)
   unsigned char buf[16];
 
   static unsigned char fig1Storage[N_ACT][2048];
-  struct bracha87Fig1 *peers[N_ACT];
+  struct bracha87Fig1 *processes[N_ACT];
   int accepted[N_ACT];
   unsigned char acceptedV[N_ACT][8];
 
@@ -228,17 +228,17 @@ main(int argc, char **argv)
     CHECK(b->t == T_VAL, "Fig1Init.t preserved");
     CHECK(b->vLen == VLEN_BIN, "Fig1Init.vLen preserved");
     CHECK((b->flags & (BRACHA87_F1_ECHOED | BRACHA87_F1_RDSENT
-                     | BRACHA87_F1_ACCEPTED | BRACHA87_F1_ORIGIN)) == 0,
+                     | BRACHA87_F1_ACCEPTED | BRACHA87_F1_INITIATOR)) == 0,
           "Fig1Init.flags clear");
-    CHECK(bracha87Fig1Value(b) == 0, "Fig1Value null pre-origin pre-echo");
+    CHECK(bracha87Fig1Value(b) == 0, "Fig1Value null pre-initiator pre-echo");
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("Fig1Origin idempotency and value visibility");
+  BANNER("Fig1Initiator idempotency and value visibility");
   /* ---------------------------------------------------------------- */
   /* Header: "Idempotent: re-calling overwrites the stored value."    */
-  /* Origin sets BRACHA87_F1_ORIGIN and the value WITHOUT setting     */
-  /* ECHOED.  bracha87Fig1Value returns non-null when ORIGIN ||       */
+  /* Initiator sets BRACHA87_F1_INITIATOR and the value WITHOUT setting     */
+  /* ECHOED.  bracha87Fig1Value returns non-null when INITIATOR ||       */
   /* ECHOED.                                                          */
   {
     struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
@@ -246,15 +246,15 @@ main(int argc, char **argv)
     static const unsigned char v0[1] = { 0 };
     const unsigned char *got;
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
-    bracha87Fig1Origin(b, v1);
-    CHECK((b->flags & BRACHA87_F1_ORIGIN) != 0, "ORIGIN flag set");
-    CHECK((b->flags & BRACHA87_F1_ECHOED) == 0, "ECHOED clear after Origin");
+    bracha87Fig1Initiator(b, v1);
+    CHECK((b->flags & BRACHA87_F1_INITIATOR) != 0, "INITIATOR flag set");
+    CHECK((b->flags & BRACHA87_F1_ECHOED) == 0, "ECHOED clear after Initiator");
     got = bracha87Fig1Value(b);
-    CHECK(got != 0, "Value visible after Origin");
-    CHECK(got && got[0] == 1, "Value matches Origin arg");
-    bracha87Fig1Origin(b, v0);
+    CHECK(got != 0, "Value visible after Initiator");
+    CHECK(got && got[0] == 1, "Value matches Initiator arg");
+    bracha87Fig1Initiator(b, v0);
     got = bracha87Fig1Value(b);
-    CHECK(got && got[0] == 0, "Origin idempotent overwrite");
+    CHECK(got && got[0] == 0, "Initiator idempotent overwrite");
   }
 
   /* ---------------------------------------------------------------- */
@@ -268,7 +268,7 @@ main(int argc, char **argv)
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
     act_count = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, actions);
     CHECK(act_count >= 1, "Rule1 fires on initial");
-    CHECK(actions[0] == BRACHA87_ECHO_ALL, "Rule1 emits ECHO_ALL");
+    CHECK(actions[0] == BRACHA87_ECHO_ALL, "Rule1 outputs ECHO_ALL");
     CHECK((b->flags & BRACHA87_F1_ECHOED) != 0, "ECHOED set after Rule1");
     /* Re-deliver same initial: ECHOED guard fails Rule 1 */
     act_count = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, actions);
@@ -292,7 +292,7 @@ main(int argc, char **argv)
     for (i = 0; i < 8; ++i)
       (void) bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, actions);
     CHECK((b->flags & BRACHA87_F1_ECHOED) == 0, "echo dedup per sender");
-    /* feed echoes from all remaining peers (1..N_ACT-1) */
+    /* feed echoes from all remaining processes (1..N_ACT-1) */
     for (i = 1; i < N_ACT; ++i) {
       act_count = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i,
                                     v, actions);
@@ -322,7 +322,7 @@ main(int argc, char **argv)
   /* ---------------------------------------------------------------- */
   BANNER("Fig1 paths to ACCEPT");
   /* ---------------------------------------------------------------- */
-  /* Eventual property: feed enough distinct READYs from all peers,   */
+  /* Eventual property: feed enough distinct READYs from all processes,   */
   /* and at some point ACCEPT (Rule 6) fires AND F1_ACCEPTED is set.  */
   /* Action order per header: echo, ready, accept.                    */
   {
@@ -332,7 +332,7 @@ main(int argc, char **argv)
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
     /* Send INITIAL first to fire Rule 1, getting ECHOED set. */
     (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, actions);
-    /* Now feed READYs from all distinct peers; at some point Rule 5  */
+    /* Now feed READYs from all distinct processes; at some point Rule 5  */
     /* fires (sets RDSENT) and eventually Rule 6 fires (accept).      */
     for (i = 0; i < N_ACT; ++i) {
       act_count = bracha87Fig1Input(b, BRACHA87_READY, (unsigned char) i,
@@ -382,15 +382,15 @@ main(int argc, char **argv)
     sz = bracha87Fig1Sz(N_ENC, vEnc);
     CHECK(sz <= sizeof (fig1Storage[0]), "Lemma4: storage size");
     for (i = 0; i < N_ACT; ++i) {
-      peers[i] = (struct bracha87Fig1 *) fig1Storage[i];
-      bracha87Fig1Init(peers[i], N_ENC, T_VAL, (unsigned char) vEnc);
+      processes[i] = (struct bracha87Fig1 *) fig1Storage[i];
+      bracha87Fig1Init(processes[i], N_ENC, T_VAL, (unsigned char) vEnc);
       accepted[i] = 0;
       memset(acceptedV[i], 0, sizeof (acceptedV[i]));
     }
-    bracha87Fig1Origin(peers[0], V);
+    bracha87Fig1Initiator(processes[0], V);
     broadcastFig1(0, N_ACT, BRACHA87_INITIAL_ALL, V, vBytes);
     while (qPopRandom(&w) && safety++ < 200000) {
-      struct bracha87Fig1 *b = peers[w.to];
+      struct bracha87Fig1 *b = processes[w.to];
       act_count = bracha87Fig1Input(b, w.type, w.from, w.value, actions);
       for (i = 0; i < act_count; ++i) {
         unsigned char a = actions[i];
@@ -406,19 +406,19 @@ main(int argc, char **argv)
     }
     CHECK(safety < 200000, "Lemma4 sim bounded");
     for (i = 0; i < N_ACT; ++i) {
-      CHECK(accepted[i], "Lemma4: every honest peer accepts");
+      CHECK(accepted[i], "Lemma4: every honest process accepts");
       CHECK(memcmp(acceptedV[i], V, vBytes) == 0,
-            "Lemma4: every honest peer accepts v_orig");
-      CHECK((peers[i]->flags & BRACHA87_F1_ACCEPTED) != 0,
+            "Lemma4: every honest process accepts v_orig");
+      CHECK((processes[i]->flags & BRACHA87_F1_ACCEPTED) != 0,
             "F1_ACCEPTED set after accept");
     }
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("Fig1 Lemma 3: one peer misses INITIAL");
+  BANNER("Fig1 Lemma 3: one process misses INITIAL");
   /* ---------------------------------------------------------------- */
-  /* Originator broadcasts INITIAL to peers 0,1,2 (skipping peer 3).  */
-  /* Peer 3 must still ACCEPT V via the echo cascade (Rules 2/3/4/5/6) */
+  /* Initiator broadcasts INITIAL to processes 0,1,2 (skipping process 3).  */
+  /* Process 3 must still ACCEPT V via the echo cascade (Rules 2/3/4/5/6) */
   /* once enough echoes/readys reach it.                              */
   {
     static const unsigned char V[1] = { 0x42 };
@@ -426,12 +426,12 @@ main(int argc, char **argv)
     unsigned int safety = 0;
     qReset();
     for (i = 0; i < N_ACT; ++i) {
-      peers[i] = (struct bracha87Fig1 *) fig1Storage[i];
-      bracha87Fig1Init(peers[i], N_ENC, T_VAL, VLEN_BIN);
+      processes[i] = (struct bracha87Fig1 *) fig1Storage[i];
+      bracha87Fig1Init(processes[i], N_ENC, T_VAL, VLEN_BIN);
       accepted[i] = 0;
     }
-    bracha87Fig1Origin(peers[0], V);
-    /* INITIAL to peers 0,1,2 only (peer 3 misses it) */
+    bracha87Fig1Initiator(processes[0], V);
+    /* INITIAL to processes 0,1,2 only (process 3 misses it) */
     for (i = 0; i < N_ACT - 1; ++i) {
       memset(&w, 0, sizeof (w));
       w.type = BRACHA87_INITIAL;
@@ -441,7 +441,7 @@ main(int argc, char **argv)
       qPush(&w);
     }
     while (qPopRandom(&w) && safety++ < 200000) {
-      struct bracha87Fig1 *b = peers[w.to];
+      struct bracha87Fig1 *b = processes[w.to];
       act_count = bracha87Fig1Input(b, w.type, w.from, w.value, actions);
       for (i = 0; i < act_count; ++i) {
         unsigned char a = actions[i];
@@ -456,7 +456,7 @@ main(int argc, char **argv)
     }
     CHECK(safety < 200000, "Lemma3 sim bounded");
     for (i = 0; i < N_ACT; ++i) {
-      CHECK(accepted[i], "Lemma3: every honest peer accepts");
+      CHECK(accepted[i], "Lemma3: every honest process accepts");
       if (accepted[i])
         CHECK(acceptedV[i][0] == V[0], "Lemma3: accepts the original v");
     }
@@ -465,11 +465,11 @@ main(int argc, char **argv)
   /* ---------------------------------------------------------------- */
   BANNER("Fig1 Lemma 2: Byzantine equivocation -> agreement holds");
   /* ---------------------------------------------------------------- */
-  /* Byzantine peer 0 originates and equivocates: sends (initial,A)   */
-  /* to peer 1 and (initial,B) to peer 2; sends mixed echoes/readys   */
-  /* with arbitrary values.  Honest peers 1,2,3.  Lemma 1/2 guarantee */
-  /* no two honest peers accept different values.  Liveness is not    */
-  /* required (split delivery may strand honest peers; safety is      */
+  /* Byzantine process 0 initiates and equivocates: sends (initial,A)   */
+  /* to process 1 and (initial,B) to process 2; sends mixed echoes/readys   */
+  /* with arbitrary values.  Honest processes 1,2,3.  Lemma 1/2 guarantee */
+  /* no two honest processes accept different values.  Liveness is not    */
+  /* required (split delivery may strand honest processes; safety is      */
   /* the property we insist on here).                                  */
   {
     static const unsigned char A[1] = { 0x55 };
@@ -483,8 +483,8 @@ main(int argc, char **argv)
     memset(&w, 0, sizeof (w));
     qReset();
     for (i = 0; i < N_ACT; ++i) {
-      peers[i] = (struct bracha87Fig1 *) fig1Storage[i];
-      bracha87Fig1Init(peers[i], N_ENC, T_VAL, VLEN_BIN);
+      processes[i] = (struct bracha87Fig1 *) fig1Storage[i];
+      bracha87Fig1Init(processes[i], N_ENC, T_VAL, VLEN_BIN);
       accepted[i] = 0;
     }
     /* Equivocating initials */
@@ -501,9 +501,9 @@ main(int argc, char **argv)
     while (qPopRandom(&w) && safety++ < 200000) {
       struct bracha87Fig1 *b;
       if (w.to >= N_ACT) continue;
-      b = peers[w.to];
+      b = processes[w.to];
       act_count = bracha87Fig1Input(b, w.type, w.from, w.value, actions);
-      if (w.to == 0) continue; /* skip Byzantine peer's outputs */
+      if (w.to == 0) continue; /* skip Byzantine process's outputs */
       for (i = 0; i < act_count; ++i) {
         unsigned char a = actions[i];
         const unsigned char *cv = bracha87Fig1Value(b);
@@ -523,20 +523,20 @@ main(int argc, char **argv)
                    "Lemma2: no two honest accept different values");
       }
     }
-    /* Even if no honest peer reaches accept, that's still a contract- */
+    /* Even if no honest process reaches accept, that's still a contract- */
     /* consistent outcome because liveness needs eventual delivery,    */
     /* which equivocation can break for the missing-value direction.   */
     (void) anyAccept; (void) commonV;
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("Fig1 BPR replay invariants");
+  BANNER("Fig1 BPR retry invariants");
   /* ---------------------------------------------------------------- */
   /* Header invariants:                                               */
-  /*   ORIGIN       -> Bpr emits INITIAL_ALL                          */
-  /*   ECHOED       -> Bpr emits ECHO_ALL                             */
-  /*   RDSENT       -> Bpr emits READY_ALL (incl. post-ACCEPT)        */
-  /*   no commits   -> Bpr returns 0                                  */
+  /*   INITIATOR       -> Bpr outputs INITIAL_ALL                          */
+  /*   ECHOED       -> Bpr outputs ECHO_ALL                             */
+  /*   RDSENT       -> Bpr outputs READY_ALL (incl. post-ACCEPT)        */
+  /*   nothing sent  -> Bpr returns 0                                  */
   /*   action order: initial, echo, ready                             */
   {
     struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
@@ -544,16 +544,16 @@ main(int argc, char **argv)
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
     CHECK(bracha87Fig1Bpr(b, actions) == 0, "Bpr 0 on fresh");
 
-    bracha87Fig1Origin(b, v);
+    bracha87Fig1Initiator(b, v);
     act_count = bracha87Fig1Bpr(b, actions);
-    CHECK(act_count == 1, "Bpr 1 act when ORIGIN only");
-    CHECK(actions[0] == BRACHA87_INITIAL_ALL, "Bpr ORIGIN -> INITIAL_ALL");
+    CHECK(act_count == 1, "Bpr 1 act when INITIATOR only");
+    CHECK(actions[0] == BRACHA87_INITIAL_ALL, "Bpr INITIATOR -> INITIAL_ALL");
 
     /* Set ECHOED via Rule 1 */
     (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, buf);
     CHECK((b->flags & BRACHA87_F1_ECHOED) != 0, "ECHOED set");
     act_count = bracha87Fig1Bpr(b, actions);
-    CHECK(act_count == 2, "Bpr 2 acts when ORIGIN + ECHOED");
+    CHECK(act_count == 2, "Bpr 2 acts when INITIATOR + ECHOED");
     CHECK(actions[0] == BRACHA87_INITIAL_ALL, "Bpr order: initial first");
     CHECK(actions[1] == BRACHA87_ECHO_ALL,    "Bpr order: echo second");
 
@@ -562,7 +562,7 @@ main(int argc, char **argv)
       (void) bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, buf);
     CHECK((b->flags & BRACHA87_F1_RDSENT) != 0, "RDSENT set");
     act_count = bracha87Fig1Bpr(b, actions);
-    CHECK(act_count == 3, "Bpr 3 acts when ORIGIN+ECHOED+RDSENT");
+    CHECK(act_count == 3, "Bpr 3 acts when INITIATOR+ECHOED+RDSENT");
     CHECK(actions[0] == BRACHA87_INITIAL_ALL, "Bpr order initial");
     CHECK(actions[1] == BRACHA87_ECHO_ALL,    "Bpr order echo");
     CHECK(actions[2] == BRACHA87_READY_ALL,   "Bpr order ready");
@@ -589,12 +589,12 @@ main(int argc, char **argv)
       CHECK(saw_ready, "BPR READY post-ACCEPT");
     }
 
-    /* Non-origin, non-echoed instance: BPR returns 0 */
+    /* Non-initiator, non-echoed instance: BPR returns 0 */
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
-    CHECK(bracha87Fig1Bpr(b, actions) == 0, "Bpr 0 on fresh non-origin");
+    CHECK(bracha87Fig1Bpr(b, actions) == 0, "Bpr 0 on fresh non-initiator");
 
     /* bracha87Fig1AllEchoed contract: 0 on null, 0 until an echo has
-     * been recorded from every one of the n peers, 1 thereafter. */
+     * been recorded from every one of the n processes, 1 thereafter. */
     CHECK(bracha87Fig1AllEchoed(0) == 0, "AllEchoed: NULL -> 0");
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
     CHECK(bracha87Fig1AllEchoed(b) == 0, "AllEchoed: fresh -> 0");
@@ -606,12 +606,12 @@ main(int argc, char **argv)
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("Fig1 BPR per-peer skip / accept");
+  BANNER("Fig1 BPR per-process skip / accept");
   /* ---------------------------------------------------------------- */
-  /* Header: bracha87Fig1Skip returns the suppress bitmap (peer p       */
+  /* Header: bracha87Fig1Skip returns the suppress bitmap (process p       */
   /* skipped iff bit p set) -- INITIAL_ALL=echoed, ECHO_ALL=readied,    */
-  /* READY_ALL=accepted, 0 for null/non-replay.  bracha87Fig1PeerAccept */
-  /* sets the accepted bit; all-n-accepted retires READY replay.        */
+  /* READY_ALL=accepted, 0 for null/non-retry.  bracha87Fig1ProcessAccept */
+  /* sets the accepted bit; all-n-accepted retires READY retry.        */
   {
     struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
     static const unsigned char v[1] = { 1 };
@@ -620,25 +620,25 @@ main(int argc, char **argv)
 
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
     CHECK(bracha87Fig1Skip(0, BRACHA87_READY_ALL) == 0, "Skip: NULL -> 0");
-    CHECK(bracha87Fig1Skip(b, BRACHA87_ACCEPT) == 0, "Skip: non-replay act -> 0");
+    CHECK(bracha87Fig1Skip(b, BRACHA87_ACCEPT) == 0, "Skip: non-retry act -> 0");
     CHECK(bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL) != 0, "Skip: INITIAL non-null");
 
-    /* INITIAL skip = echoed peers; ECHO skip = readied (not merely echoed). */
-    (void) bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, buf);   /* peer 0 echoes */
-    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, buf);  /* peer 2 readies */
+    /* INITIAL skip = echoed processes; ECHO skip = readied (not merely echoed). */
+    (void) bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, buf);   /* process 0 echoes */
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, buf);  /* process 2 readies */
     m = bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL);
-    CHECK(BRACHA87_SKIP_TST(m, 0) && !BRACHA87_SKIP_TST(m, 1), "Skip INITIAL: echoed peer only");
+    CHECK(BRACHA87_SKIP_TST(m, 0) && !BRACHA87_SKIP_TST(m, 1), "Skip INITIAL: echoed process only");
     m = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
-    CHECK(BRACHA87_SKIP_TST(m, 2) && !BRACHA87_SKIP_TST(m, 0), "Skip ECHO: readied (not echoed) peer");
+    CHECK(BRACHA87_SKIP_TST(m, 2) && !BRACHA87_SKIP_TST(m, 0), "Skip ECHO: readied (not echoed) process");
 
-    /* READY skip = accepted peers, set only via PeerAccepted; guards. */
+    /* READY skip = accepted processes, set only via ProcessAccepted; guards. */
     m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
     CHECK(!BRACHA87_SKIP_TST(m, 2), "Skip READY: readied != accepted");
-    bracha87Fig1PeerAccepted(0, 0);                 /* NULL: no crash */
-    bracha87Fig1PeerAccepted(b, (unsigned char)(N_ACT + 9));  /* range: ignored */
-    bracha87Fig1PeerAccepted(b, 2);
+    bracha87Fig1ProcessAccepted(0, 0);                 /* NULL: no crash */
+    bracha87Fig1ProcessAccepted(b, (unsigned char)(N_ACT + 9));  /* range: ignored */
+    bracha87Fig1ProcessAccepted(b, 2);
     m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
-    CHECK(BRACHA87_SKIP_TST(m, 2), "Skip READY: accepted peer set after PeerAccepted");
+    CHECK(BRACHA87_SKIP_TST(m, 2), "Skip READY: accepted process set after ProcessAccepted");
 
     /* All-n-accepted READY quiescence. */
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
@@ -649,9 +649,9 @@ main(int argc, char **argv)
     saw_ready = 0;
     for (i = 0; i < act_count; ++i)
       if (actions[i] == BRACHA87_READY_ALL) saw_ready = 1;
-    CHECK(saw_ready, "Quiescence: READY emitted before all accepted");
+    CHECK(saw_ready, "Quiescence: READY output before all accepted");
     for (i = 0; i < N_ACT; ++i)
-      bracha87Fig1PeerAccepted(b, (unsigned char) i);
+      bracha87Fig1ProcessAccepted(b, (unsigned char) i);
     act_count = bracha87Fig1Bpr(b, actions);
     saw_ready = 0;
     for (i = 0; i < act_count; ++i)
@@ -701,50 +701,50 @@ main(int argc, char **argv)
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("Fig1 array Pump cursor / CommittedCount / NULL slots");
+  BANNER("Fig1 array Retry cursor / SentCount / NULL slots");
   /* ---------------------------------------------------------------- */
-  /* Header: PumpInit + Fig1PumpStep walk the array, returning one    */
-  /* instance's BPR per call.  NULL entries skipped.  CommittedCount  */
-  /* counts ORIGIN | ECHOED | RDSENT slots.  Idle full sweep returns  */
+  /* Header: RetryInit + Fig1RetryStep walk the array, returning one    */
+  /* instance's BPR per call.  NULL entries skipped.  SentCount  */
+  /* counts INITIATOR | ECHOED | RDSENT slots.  Idle full sweep returns  */
   /* 0.                                                               */
   {
     static unsigned char pool[8][512];
     struct bracha87Fig1 *arr[8];
-    struct bracha87Pump pump;
-    struct bracha87Fig1Act outActs[BRACHA87_FIG1_PUMP_MAX_ACTS];
+    struct bracha87Retry retry;
+    struct bracha87Fig1Act outActs[BRACHA87_FIG1_RETRY_MAX_ACTS];
     static const unsigned char v[1] = { 0x42 };
     unsigned int got;
     sz = bracha87Fig1Sz(N_ENC, VLEN_BIN);
-    CHECK(sz <= sizeof (pool[0]), "pump pool slot ok");
+    CHECK(sz <= sizeof (pool[0]), "retry pool slot ok");
     /* slots 0..3 used; 4..7 NULL */
     for (i = 0; i < 4; ++i) {
       arr[i] = (struct bracha87Fig1 *) pool[i];
       bracha87Fig1Init(arr[i], N_ENC, T_VAL, VLEN_BIN);
     }
     for (i = 4; i < 8; ++i) arr[i] = 0;
-    bracha87Fig1Origin(arr[1], v);
+    bracha87Fig1Initiator(arr[1], v);
     (void) bracha87Fig1Input(arr[2], BRACHA87_INITIAL, 0, v, buf);
-    CHECK(bracha87Fig1CommittedCount((struct bracha87Fig1 *const *) arr, 8)
-            == 2, "CommittedCount = 2 (origin + echoed)");
-    bracha87PumpInit(&pump);
+    CHECK(bracha87Fig1SentCount((struct bracha87Fig1 *const *) arr, 8)
+            == 2, "SentCount = 2 (initiator + echoed)");
+    bracha87RetryInit(&retry);
     {
       int saw_init = 0, saw_echo = 0;
       for (r = 0; r < 16; ++r) {
-        got = bracha87Fig1PumpStep((struct bracha87Fig1 *const *) arr, 8,
-                                   &pump, outActs,
-                                   BRACHA87_FIG1_PUMP_MAX_ACTS);
+        got = bracha87Fig1RetryStep((struct bracha87Fig1 *const *) arr, 8,
+                                   &retry, outActs,
+                                   BRACHA87_FIG1_RETRY_MAX_ACTS);
         if (got == 0) continue;
         for (i = 0; i < got; ++i) {
           if (outActs[i].act == BRACHA87_INITIAL_ALL) saw_init = 1;
           if (outActs[i].act == BRACHA87_ECHO_ALL) saw_echo = 1;
-          CHECK(outActs[i].idx < 8, "PumpStep idx in range");
-          CHECK(arr[outActs[i].idx] != 0, "PumpStep skips NULL slots");
+          CHECK(outActs[i].idx < 8, "RetryStep idx in range");
+          CHECK(arr[outActs[i].idx] != 0, "RetryStep skips NULL slots");
         }
       }
-      CHECK(saw_init, "PumpStep emits INITIAL_ALL for ORIGIN slot");
-      CHECK(saw_echo, "PumpStep emits ECHO_ALL for ECHOED slot");
+      CHECK(saw_init, "RetryStep outputs INITIAL_ALL for INITIATOR slot");
+      CHECK(saw_echo, "RetryStep outputs ECHO_ALL for ECHOED slot");
     }
-    /* Idle sweep: all instances fresh, no commits -> a full sweep    */
+    /* Idle sweep: all instances fresh, nothing sent -> a full sweep    */
     /* returns 0 at least once.                                        */
     {
       struct bracha87Fig1 *idleArr[8];
@@ -754,17 +754,17 @@ main(int argc, char **argv)
                          N_ENC, T_VAL, VLEN_BIN);
         idleArr[i] = (struct bracha87Fig1 *) pool[i];
       }
-      bracha87PumpInit(&pump);
+      bracha87RetryInit(&retry);
       for (r = 0; r < 32; ++r) {
-        got = bracha87Fig1PumpStep((struct bracha87Fig1 *const *) idleArr, 8,
-                                   &pump, outActs,
-                                   BRACHA87_FIG1_PUMP_MAX_ACTS);
+        got = bracha87Fig1RetryStep((struct bracha87Fig1 *const *) idleArr, 8,
+                                   &retry, outActs,
+                                   BRACHA87_FIG1_RETRY_MAX_ACTS);
         if (got == 0) { sawZero = 1; break; }
       }
-      CHECK(sawZero, "PumpStep returns 0 on idle full sweep");
-      CHECK(bracha87Fig1CommittedCount((struct bracha87Fig1 *const *) idleArr,
+      CHECK(sawZero, "RetryStep returns 0 on idle full sweep");
+      CHECK(bracha87Fig1SentCount((struct bracha87Fig1 *const *) idleArr,
                                        8) == 0,
-            "CommittedCount = 0 when idle");
+            "SentCount = 0 when idle");
     }
   }
 
@@ -836,7 +836,7 @@ main(int argc, char **argv)
   /*                                                                  */
   /* Drive an instance to EXHAUSTED with maxPhases=1 so the schedule  */
   /* is short.  At sub=2 of the last phase, with no decision and no   */
-  /* >t (d,v) majority, EXHAUSTED is emitted (header).                */
+  /* >t (d,v) majority, EXHAUSTED is output (header).                */
   /*                                                                  */
   /* Strategy: run 3 rounds (0, 1, 2) with split values that produce  */
   /* no >2t (d,v) and no >t (d,v) majority -- specifically, give each */
@@ -883,7 +883,7 @@ main(int argc, char **argv)
     senders[2] = 2; values[2] = 0;
     nact = bracha87Fig4Round(fig4, 2, 3, senders, values);
     if (nact & BRACHA87_EXHAUSTED) sawExhausted = 1;
-    CHECK(sawExhausted, "EXHAUSTED emitted at sub=2 of last phase");
+    CHECK(sawExhausted, "EXHAUSTED output at sub=2 of last phase");
     CHECK((nact & BRACHA87_DECIDE) == 0,
           "EXHAUSTED mutually exclusive with DECIDE");
     /* Subsequent calls must return 0 and remain EXHAUSTED -- header  */

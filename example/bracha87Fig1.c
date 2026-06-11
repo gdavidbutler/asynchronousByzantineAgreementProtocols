@@ -29,30 +29,30 @@
  *   Lemma 4: If a correct process p broadcasts v, all correct
  *            processes accept v.
  *
- * Together: a Byzantine origin cannot show different values to
- * different correct peers and have any of them accept different
- * things.  Either all correct peers converge on one v, or none
+ * Together: a Byzantine initiator cannot show different values to
+ * different correct processes and have any of them accept different
+ * things.  Either all correct processes converge on one v, or none
  * accept anything.  This is the all-or-nothing property — what TCP
  * and UDP cannot do, and what authenticated point-to-point alone
  * cannot do under a Byzantine sender.
  *
- * This demo runs ONE Fig 1 instance per peer per origin, with one
- * designated origin.  The value carried is multi-byte (vLen+1 bytes,
+ * This demo runs ONE Fig 1 instance per process per initiator, with one
+ * designated initiator.  The value carried is multi-byte (vLen+1 bytes,
  * supplied on the command line).
  *
- * Optional Byzantine origin (`-b split`) — origin sends the supplied
- * value to peers [0..split-1] and that value with the first byte
- * inverted (XOR 0xFF) to peers [split..n-1].  Verifies Lemma 3:
- * whichever value any correct peer accepts (if any), every correct
- * peer that accepts agrees with it.
+ * Optional Byzantine initiator (`-b split`) — initiator sends the supplied
+ * value to processes [0..split-1] and that value with the first byte
+ * inverted (XOR 0xFF) to processes [split..n-1].  Verifies Lemma 3:
+ * whichever value any correct process accepts (if any), every correct
+ * process that accepts agrees with it.
  *
  * Scope: synchronous deterministic in-memory queue, every input
  * delivered, no loss.  Exercises only the Fig 1 state machine; does
- * NOT exercise BPR replay under loss.  See README.md for the full
+ * NOT exercise BPR retry under loss.  See README.md for the full
  * deployment story.
  *
  * Usage:
- *   ./example_bracha87Fig1 [-v] [-s seed] [-o origin] [-b split] n t value
+ *   ./example_bracha87Fig1 [-v] [-s seed] [-o initiator] [-b split] n t value
  */
 
 #include <stdio.h>
@@ -64,7 +64,7 @@
 /*  Constants                                                             */
 /*------------------------------------------------------------------------*/
 
-#define MAX_PEERS 16
+#define MAX_PROCESSES 16
 #define MAX_VLEN  64
 
 /*------------------------------------------------------------------------*/
@@ -199,7 +199,7 @@ main(
 ){
   unsigned int n;
   unsigned int t;
-  unsigned int origin;
+  unsigned int initiator;
   unsigned int byzSplit;
   unsigned int verbose;
   unsigned int shuffleSeed;
@@ -208,9 +208,9 @@ main(
   unsigned char honestVal[MAX_VLEN];
   unsigned char byzVal[MAX_VLEN];
 
-  struct bracha87Fig1 *fig1[MAX_PEERS]; /* one instance per peer */
-  unsigned char accepted[MAX_PEERS];    /* 1 if peer accepted */
-  unsigned char acceptVal[MAX_PEERS][MAX_VLEN];
+  struct bracha87Fig1 *fig1[MAX_PROCESSES]; /* one instance per process */
+  unsigned char accepted[MAX_PROCESSES];    /* 1 if process accepted */
+  unsigned char acceptVal[MAX_PROCESSES][MAX_VLEN];
 
   unsigned long f1sz;
   unsigned int i;
@@ -230,7 +230,7 @@ main(
 
   verbose = 0;
   shuffleSeed = 0;
-  origin = 0;
+  initiator = 0;
   byzSplit = 0;
   exitCode = 0;
 
@@ -247,7 +247,7 @@ main(
     } else if (argv[arg][1] == 'o' && argv[arg][2] == '\0') {
       ++arg;
       if (arg >= argc) goto usage;
-      origin = (unsigned int)atoi(argv[arg]);
+      initiator = (unsigned int)atoi(argv[arg]);
       ++arg;
     } else if (argv[arg][1] == 'b' && argv[arg][2] == '\0') {
       ++arg;
@@ -263,16 +263,16 @@ main(
   n = (unsigned int)atoi(argv[arg++]);
   t = (unsigned int)atoi(argv[arg++]);
 
-  if (n < 1 || n > MAX_PEERS) {
-    fprintf(stderr, "n must be 1..%d\n", MAX_PEERS);
+  if (n < 1 || n > MAX_PROCESSES) {
+    fprintf(stderr, "n must be 1..%d\n", MAX_PROCESSES);
     return (1);
   }
   if (n <= 3 * t) {
     fprintf(stderr, "need n > 3t (n=%u, t=%u)\n", n, t);
     return (1);
   }
-  if (origin >= n) {
-    fprintf(stderr, "origin must be < n\n");
+  if (initiator >= n) {
+    fprintf(stderr, "initiator must be < n\n");
     return (1);
   }
   if (byzSplit > n) {
@@ -297,7 +297,7 @@ main(
   origSeed = shuffleSeed;
 
   /*----------------------------------------------------------------------*/
-  /*  Allocate per-peer Fig 1 instance                                    */
+  /*  Allocate per-process Fig 1 instance                                    */
   /*----------------------------------------------------------------------*/
 
   /* vLen encoding: actual = vLen + 1; we have Vlen bytes. */
@@ -308,9 +308,9 @@ main(
   memset(acceptVal, 0, sizeof (acceptVal));
 
   for (i = 0; i < n; ++i) {
-    /* Byzantine origin holds no Fig 1 state — it sends arbitrary
+    /* Byzantine initiator holds no Fig 1 state — it sends arbitrary
      * messages and never runs the protocol. */
-    if (byzSplit && i == origin)
+    if (byzSplit && i == initiator)
       continue;
     fig1[i] = (struct bracha87Fig1 *)calloc(1, f1sz);
     if (!fig1[i]) {
@@ -324,7 +324,7 @@ main(
 
   /*----------------------------------------------------------------------*/
   /*  Allocate message queue                                              */
-  /*  Up to 3 * n^2 messages: INITIAL/ECHO/READY from n peers to n peers. */
+  /*  Up to 3 * n^2 messages: INITIAL/ECHO/READY from n processes to n processes. */
   /*----------------------------------------------------------------------*/
 
   if (qAlloc(16u * n * n)) {
@@ -334,30 +334,30 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Bootstrap: origin broadcasts INITIAL                                */
+  /*  Bootstrap: initiator broadcasts INITIAL                                */
   /*----------------------------------------------------------------------*/
 
   if (byzSplit) {
-    /* Byzantine origin equivocates: honestVal to first split peers,
+    /* Byzantine initiator equivocates: honestVal to first split processes,
      * byzVal to the rest. */
     for (j = 0; j < n; ++j)
-      qPush(BRACHA87_INITIAL, (unsigned char)origin, (unsigned char)j,
+      qPush(BRACHA87_INITIAL, (unsigned char)initiator, (unsigned char)j,
             (j < byzSplit) ? honestVal : byzVal);
     if (verbose) {
-      printf("origin %u (BYZANTINE): sending ", origin);
+      printf("initiator %u (BYZANTINE): sending ", initiator);
       printValue(honestVal);
-      printf(" to peers [0..%u), ", byzSplit);
+      printf(" to processes [0..%u), ", byzSplit);
       printValue(byzVal);
-      printf(" to peers [%u..%u)\n", byzSplit, n);
+      printf(" to processes [%u..%u)\n", byzSplit, n);
     }
   } else {
-    /* Honest origin: same value to all. */
-    bracha87Fig1Origin(fig1[origin], honestVal);
+    /* Honest initiator: same value to all. */
+    bracha87Fig1Initiator(fig1[initiator], honestVal);
     for (j = 0; j < n; ++j)
-      qPush(BRACHA87_INITIAL, (unsigned char)origin,
+      qPush(BRACHA87_INITIAL, (unsigned char)initiator,
             (unsigned char)j, honestVal);
     if (verbose) {
-      printf("origin %u (honest): broadcasting ", origin);
+      printf("initiator %u (honest): broadcasting ", initiator);
       printValue(honestVal);
       printf("\n");
     }
@@ -381,8 +381,8 @@ main(
 
     m = &MsgQ[Qhead++];
 
-    /* Skip messages to the Byzantine origin — it has no state. */
-    if (byzSplit && m->to == origin)
+    /* Skip messages to the Byzantine initiator — it has no state. */
+    if (byzSplit && m->to == initiator)
       continue;
     if (m->to >= n || m->from >= n)
       continue;
@@ -390,20 +390,20 @@ main(
     /*
      * INITIAL sender obligation (bracha87Fig1Input header, pitfall
      * 17): the bare Fig 1 entry does not know its designated
-     * broadcaster, so the CALLER must drop any INITIAL whose
-     * authenticated sender is not it — a forged non-origin INITIAL
+     * initiator, so the CALLER must drop any INITIAL whose
+     * authenticated sender is not it — a forged non-initiator INITIAL
      * would ride the echo cascade to a false ACCEPT.  bkr94acs
      * enforces this inside its Input entries; a bare-layer caller
      * filters here.
      */
-    if (m->type == BRACHA87_INITIAL && m->from != origin)
+    if (m->type == BRACHA87_INITIAL && m->from != initiator)
       continue;
 
     f1 = fig1[m->to];
     oldTail = Qtail;
 
     if (verbose) {
-      printf("peer %u: recv %s value=", (unsigned)m->to, typeName(m->type));
+      printf("process %u: recv %s value=", (unsigned)m->to, typeName(m->type));
       printValue(m->value);
       printf(" from %u\n", (unsigned)m->from);
     }
@@ -419,18 +419,18 @@ main(
         accepted[m->to] = 1;
         memcpy(acceptVal[m->to], cv, Vlen);
         if (verbose) {
-          printf("peer %u: ACCEPT value=", (unsigned)m->to);
+          printf("process %u: ACCEPT value=", (unsigned)m->to);
           printValue(cv);
           printf("\n");
         }
         continue;
       }
 
-      /* ECHO_ALL or READY_ALL: relay the committed value to all peers,
-       * minus the BPR per-peer suppress set (peers that have already
+      /* ECHO_ALL or READY_ALL: relay the echoed value to all processes,
+       * minus the BPR per-process suppress set (processes that have already
        * echoed/readied/accepted no longer consume this action). */
       if (verbose) {
-        printf("peer %u: -> %s value=", (unsigned)m->to,
+        printf("process %u: -> %s value=", (unsigned)m->to,
                (out[k] == BRACHA87_ECHO_ALL) ? "ECHO_ALL" : "READY_ALL");
         printValue(cv);
         printf("\n");
@@ -454,30 +454,30 @@ main(
   }
 
   /*------------------------------------------------------------------*/
-  /*  Pump tick                                                       */
+  /*  Retry tick                                                       */
   /*                                                                  */
-  /*  In a real deployment, the BPR pump is called once per tick,     */
+  /*  In a real deployment, the BPR retry is called once per tick,     */
   /*  paced by the application's sleep(tickMs).  Looping until idle   */
-  /*  would flood the network — Bracha BPR replays are persistent, so */
-  /*  every committed Fig 1 always has actions; a tight loop empties  */
+  /*  would flood the network — Bracha BPR retries are persistent, so */
+  /*  every sent Fig 1 always has actions; a tight loop empties  */
   /*  the cursor as fast as the CPU runs and overruns kernel buffers. */
   /*  The call is shown here as a representative single tick.         */
   /*------------------------------------------------------------------*/
 
   for (i = 0; i < n; ++i) {
-    struct bracha87Fig1 *peerArr[1];
-    struct bracha87Pump pump;
-    struct bracha87Fig1Act pacts[BRACHA87_FIG1_PUMP_MAX_ACTS];
+    struct bracha87Fig1 *processArr[1];
+    struct bracha87Retry retry;
+    struct bracha87Fig1Act pacts[BRACHA87_FIG1_RETRY_MAX_ACTS];
     unsigned int n_pacts;
     unsigned int p;
 
-    if (byzSplit && i == origin) continue;
+    if (byzSplit && i == initiator) continue;
     if (!fig1[i]) continue;
 
-    peerArr[0] = fig1[i];
-    bracha87PumpInit(&pump);
-    n_pacts = bracha87Fig1PumpStep(peerArr, 1, &pump, pacts,
-                                   BRACHA87_FIG1_PUMP_MAX_ACTS);
+    processArr[0] = fig1[i];
+    bracha87RetryInit(&retry);
+    n_pacts = bracha87Fig1RetryStep(processArr, 1, &retry, pacts,
+                                   BRACHA87_FIG1_RETRY_MAX_ACTS);
     for (p = 0; p < n_pacts; ++p)
       for (j = 0; j < n; ++j) {
         if (pacts[p].skip && BRACHA87_SKIP_TST(pacts[p].skip, j))
@@ -490,8 +490,8 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Drain the post-pump replay queue.  Receivers dedup at Fig1Input,    */
-  /*  so under perfect delivery these replays produce no new state — the  */
+  /*  Drain the post-retry retry queue.  Receivers dedup at Fig1Input,    */
+  /*  so under perfect delivery these retries produce no new state — the  */
   /*  drain mirrors what a deployment loop does on every tick.            */
   /*----------------------------------------------------------------------*/
 
@@ -504,10 +504,10 @@ main(
     const unsigned char *cv;
 
     m = &MsgQ[Qhead++];
-    if (byzSplit && m->to == origin) continue;
+    if (byzSplit && m->to == initiator) continue;
     if (m->to >= n || m->from >= n) continue;
     /* Same caller-side INITIAL filter as the main loop (pitfall 17). */
-    if (m->type == BRACHA87_INITIAL && m->from != origin) continue;
+    if (m->type == BRACHA87_INITIAL && m->from != initiator) continue;
     f1 = fig1[m->to];
     nout = bracha87Fig1Input(f1, m->type, m->from, m->value, out);
     for (k = 0; k < nout; ++k) {
@@ -517,10 +517,10 @@ main(
         /* already accepted; dedup at Fig1Input prevents re-trigger */
         continue;
       }
-      /* ECHO_ALL / READY_ALL replays from this receiver do not propagate
+      /* ECHO_ALL / READY_ALL retries from this receiver do not propagate
        * further in the demo — they are equivalent to the ones already in
        * the system.  Under loss this is where new echoes/readys would
-       * help peers below threshold. */
+       * help processes below threshold. */
     }
   }
 
@@ -528,13 +528,13 @@ main(
   /*  Verify Lemma 3 and Lemma 4                                          */
   /*----------------------------------------------------------------------*/
 
-  /* Lemma 3: all correct peers that accept agree on the value. */
+  /* Lemma 3: all correct processes that accept agree on the value. */
   acceptCount = 0;
   haveFirstAcc = 0;
   lemma3ok = 1;
   memset(firstAccVal, 0, sizeof (firstAccVal));
   for (i = 0; i < n; ++i) {
-    if (byzSplit && i == origin)
+    if (byzSplit && i == initiator)
       continue;
     if (accepted[i]) {
       ++acceptCount;
@@ -547,7 +547,7 @@ main(
     }
   }
 
-  /* Lemma 4: if origin is correct, all correct peers accept (and the
+  /* Lemma 4: if initiator is correct, all correct processes accept (and the
    * value they accept is honestVal — a stronger property than Lemma 4
    * alone, which the demo verifies for completeness). */
   lemma4ok = 1;
@@ -561,27 +561,27 @@ main(
   /*  Output summary                                                      */
   /*----------------------------------------------------------------------*/
 
-  printf("\n--- Results (n=%u, t=%u, origin=%u, seed=%u) ---\n",
-         n, t, origin, origSeed);
+  printf("\n--- Results (n=%u, t=%u, initiator=%u, seed=%u) ---\n",
+         n, t, initiator, origSeed);
   for (i = 0; i < n; ++i) {
-    if (byzSplit && i == origin) {
-      printf("Peer %u: Byzantine origin (equivocating, split=%u)\n",
+    if (byzSplit && i == initiator) {
+      printf("Process %u: Byzantine initiator (equivocating, split=%u)\n",
              i, byzSplit);
     } else if (accepted[i]) {
-      printf("Peer %u: accepted ", i);
+      printf("Process %u: accepted ", i);
       printValue(acceptVal[i]);
       printf("\n");
     } else {
-      printf("Peer %u: did not accept\n", i);
+      printf("Process %u: did not accept\n", i);
     }
   }
-  printf("Accept count: %u of %u correct peers\n",
+  printf("Accept count: %u of %u correct processes\n",
          acceptCount, byzSplit ? (n - 1) : n);
   printf("Lemma 3 (accepts agree): %s\n",
          (acceptCount > 1) ? (lemma3ok ? "ok" : "FAIL")
                            : "n/a (fewer than 2 accepts)");
   if (!byzSplit)
-    printf("Lemma 4 (correct origin -> all accept): %s\n",
+    printf("Lemma 4 (correct initiator -> all accept): %s\n",
            lemma4ok ? "ok" : "FAIL");
 
   if (!lemma3ok || !lemma4ok)
@@ -600,16 +600,16 @@ cleanup:
 
 usage:
   fprintf(stderr,
-    "usage: example_bracha87Fig1 [-v] [-s seed] [-o origin] [-b split]"
+    "usage: example_bracha87Fig1 [-v] [-s seed] [-o initiator] [-b split]"
     " n t value\n"
-    "  n        total peers (1-%d)\n"
+    "  n        total processes (1-%d)\n"
     "  t        max Byzantine faults\n"
     "  value    multi-byte payload to broadcast (1-%d bytes, string)\n"
     "  -v       verbose: trace every message\n"
     "  -s seed  shuffle seed (0 = ordered delivery)\n"
-    "  -o orig  designated origin peer (default 0)\n"
-    "  -b split origin is Byzantine: sends value to peers [0..split-1],\n"
+    "  -o orig  designated initiator process (default 0)\n"
+    "  -b split initiator is Byzantine: sends value to processes [0..split-1],\n"
     "           value with first byte XOR 0xFF to [split..n-1]\n",
-    MAX_PEERS, MAX_VLEN);
+    MAX_PROCESSES, MAX_VLEN);
   return (1);
 }

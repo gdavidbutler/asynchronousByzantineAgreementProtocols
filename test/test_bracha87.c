@@ -72,19 +72,19 @@ qPush(
 /*
  * Simulate a Figure 1 broadcast.
  *
- *   n:      total peers
+ *   n:      total processes
  *   t:      max Byzantine
- *   origin: broadcasting peer
+ *   initiator: broadcasting process
  *   value:  broadcast value (VLEN bytes)
- *   silent: bitmask of peers whose OUTBOUND messages are dropped
+ *   silent: bitmask of processes whose OUTBOUND messages are dropped
  *
- * Returns number of peers that accepted.
+ * Returns number of processes that accepted.
  */
 static unsigned int
 simFig1(
   unsigned char n
  ,unsigned char t
- ,unsigned char origin
+ ,unsigned char initiator
  ,const unsigned char *value
  ,unsigned int silent
 ){
@@ -103,10 +103,10 @@ simFig1(
     bracha87Fig1Init(inst[i], n - 1, t, VLEN - 1);
   }
 
-  /* Origin sends INITIAL to all peers (including self) */
+  /* Initiator sends INITIAL to all processes (including self) */
   qInit();
   for (i = 0; i < n; ++i)
-    qPush(BRACHA87_INITIAL, origin, (unsigned char)i, value);
+    qPush(BRACHA87_INITIAL, initiator, (unsigned char)i, value);
 
   /* Process message queue */
   while (Qhead < Qtail) {
@@ -125,7 +125,7 @@ simFig1(
       if (out[j] == BRACHA87_ACCEPT)
         continue; /* no message to send */
 
-      /* Silenced peers don't send */
+      /* Silenced processes don't send */
       if (silent & (1u << m->to))
         continue;
 
@@ -152,15 +152,15 @@ simFig1(
 }
 
 /*
- * Simulate a Figure 1 broadcast with equivocating origin.
- * Origin sends value1 to peers [0..split-1], value2 to peers [split..n-1].
- * Returns number of peers that accepted, and which value via *acceptedVal.
+ * Simulate a Figure 1 broadcast with equivocating initiator.
+ * Initiator sends value1 to processes [0..split-1], value2 to processes [split..n-1].
+ * Returns number of processes that accepted, and which value via *acceptedVal.
  */
 static unsigned int
 simFig1Equivoc(
   unsigned char n
  ,unsigned char t
- ,unsigned char origin
+ ,unsigned char initiator
  ,const unsigned char *value1
  ,const unsigned char *value2
  ,unsigned char split
@@ -181,13 +181,13 @@ simFig1Equivoc(
     bracha87Fig1Init(inst[i], n - 1, t, VLEN - 1);
   }
 
-  /* Equivocating origin: different values to different peers */
+  /* Equivocating initiator: different values to different processes */
   qInit();
   for (i = 0; i < n; ++i) {
     if (i < split)
-      qPush(BRACHA87_INITIAL, origin, (unsigned char)i, value1);
+      qPush(BRACHA87_INITIAL, initiator, (unsigned char)i, value1);
     else
-      qPush(BRACHA87_INITIAL, origin, (unsigned char)i, value2);
+      qPush(BRACHA87_INITIAL, initiator, (unsigned char)i, value2);
   }
 
   while (Qhead < Qtail) {
@@ -268,7 +268,7 @@ static unsigned int
 simFig1Shuffled(
   unsigned char n
  ,unsigned char t
- ,unsigned char origin
+ ,unsigned char initiator
  ,const unsigned char *value
  ,unsigned int silent
  ,unsigned int seed
@@ -290,7 +290,7 @@ simFig1Shuffled(
 
   qInit();
   for (i = 0; i < n; ++i)
-    qPush(BRACHA87_INITIAL, origin, (unsigned char)i, value);
+    qPush(BRACHA87_INITIAL, initiator, (unsigned char)i, value);
   qShuffle(&seed);
 
   while (Qhead < Qtail) {
@@ -355,10 +355,10 @@ testCoin(
 }
 
 /*
- * Simulate Figure 4 consensus with all-honest peers.
- * Each peer sees all n messages per round.
+ * Simulate Figure 4 consensus with all-honest processes.
+ * Each process sees all n messages per round.
  *
- * Returns number of peers that decided.
+ * Returns number of processes that decided.
  * All decisions are verified to agree (Theorem 2).
  */
 static unsigned int
@@ -396,7 +396,7 @@ simFig4(
 
   anyDecided = 0;
   for (k = 0; k < (unsigned int)maxPhases * 3; ++k) {
-    /* All peers process this round with the collected values */
+    /* All processes process this round with the collected values */
     for (i = 0; i < n; ++i) {
       if ((inst[i]->flags & BRACHA87_F4_DECIDED))
         continue;
@@ -455,7 +455,7 @@ testFig1Rules(
   printf("\n  Rule-by-rule tests (n=4, t=1):\n");
 
   /*
-   * Rule 1: INITIAL from origin, !echoed -> echo all
+   * Rule 1: INITIAL from initiator, !echoed -> echo all
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
@@ -472,7 +472,7 @@ testFig1Rules(
 
   /*
    * Rule 2: !echoed, echo_count[v] > (n+t)/2 -> echo all (threshold=3 for n=4,t=1)
-   * No INITIAL received. Feed echoes from peers.
+   * No INITIAL received. Feed echoes from processes.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
@@ -489,7 +489,7 @@ testFig1Rules(
 
   /* Third echo: count=3 >= 3, rule 2 fires */
   nout = bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, out);
-  printf("    Rule 2 (echo quorum)   : nout=%u out[0]=%u\n", nout, nout ? out[0] : 0);
+  printf("    Rule 2 (echo threshold)   : nout=%u out[0]=%u\n", nout, nout ? out[0] : 0);
   check("Rule 2: 3 echoes -> ECHO_ALL", nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
   check("Rule 2: echoed set", (b->flags & BRACHA87_F1_ECHOED));
   check("Rule 2: value correct", !memcmp(bracha87Fig1Value(b), val_A, VLEN));
@@ -497,7 +497,7 @@ testFig1Rules(
 
   /*
    * Rule 3: !echoed, ready_count[v] >= t+1=2 -> echo all
-   * No INITIAL or echoes. Feed readys from peers.
+   * No INITIAL or echoes. Feed readys from processes.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
@@ -821,11 +821,11 @@ testFig1Thresholds(
 
 /*
  * Test liveness: echoed value A, but majority echoes value B.
- * Rule 4 should fire for B (ready B), not blocked by committed A.
+ * Rule 4 should fire for B (ready B), not blocked by sent A.
  *
  * n=4, t=1. Echo threshold=(n+t)/2+1=3.
- * Peer 0 gets INITIAL(A). Peers 1,2,3 echo B.
- * Peer 0 should eventually ready B because echo_count[B] >= 3.
+ * Process 0 gets INITIAL(A). Processes 1,2,3 echo B.
+ * Process 0 should eventually ready B because echo_count[B] >= 3.
  */
 static void
 testFig1Liveness(
@@ -912,13 +912,13 @@ testFig1Liveness(
 }
 
 /*
- * Test asymmetric equivocation: origin sends A to 1 peer, B to rest.
- * With n=4 t=1: origin sends A to peer 0, B to peers 1,2,3.
+ * Test asymmetric equivocation: initiator sends A to 1 process, B to rest.
+ * With n=4 t=1: initiator sends A to process 0, B to processes 1,2,3.
  * The majority (B) has 3 echoes, well above threshold.
- * All honest peers should accept the SAME value.
+ * All honest processes should accept the SAME value.
  *
  * This test specifically exercises the liveness fix:
- * peer 0 echoed A but must accept B when B's counts cross thresholds.
+ * process 0 echoed A but must accept B when B's counts cross thresholds.
  */
 static void
 testFig1AsymEquivoc(
@@ -932,7 +932,7 @@ testFig1AsymEquivoc(
 
   printf("\n  Asymmetric equivocation tests:\n");
 
-  /* n=4 t=1: origin sends A to peer 0 only, B to peers 1,2,3 */
+  /* n=4 t=1: initiator sends A to process 0 only, B to processes 1,2,3 */
   a = simFig1Equivoc(4, 1, 3, val1, val2, 1, aval);
   printf("    n=4 t=1 split 1:3      : accept %u/4", a);
   if (a > 0) printf(" value=%c%c%c%c", aval[0], aval[1], aval[2], aval[3]);
@@ -941,7 +941,7 @@ testFig1AsymEquivoc(
   check("Asym equivoc n=4: majority value wins",
         !memcmp(aval, val2, VLEN));
 
-  /* n=7 t=2: origin sends A to peer 0 only, B to peers 1-6 */
+  /* n=7 t=2: initiator sends A to process 0 only, B to processes 1-6 */
   a = simFig1Equivoc(7, 2, 6, val1, val2, 1, aval);
   printf("    n=7 t=2 split 1:6      : accept %u/7", a);
   if (a > 0) printf(" value=%c%c%c%c", aval[0], aval[1], aval[2], aval[3]);
@@ -950,7 +950,7 @@ testFig1AsymEquivoc(
   check("Asym equivoc n=7: majority value wins",
         !memcmp(aval, val2, VLEN));
 
-  /* n=10 t=3: origin sends A to peer 0 only, B to peers 1-9 */
+  /* n=10 t=3: initiator sends A to process 0 only, B to processes 1-9 */
   a = simFig1Equivoc(10, 3, 9, val1, val2, 1, aval);
   printf("    n=10 t=3 split 1:9     : accept %u/10", a);
   if (a > 0) printf(" value=%c%c%c%c", aval[0], aval[1], aval[2], aval[3]);
@@ -959,7 +959,7 @@ testFig1AsymEquivoc(
   check("Asym equivoc n=10: majority value wins",
         !memcmp(aval, val2, VLEN));
 
-  /* n=7 t=2: origin sends A to 2 peers, B to 5 peers */
+  /* n=7 t=2: initiator sends A to 2 processes, B to 5 processes */
   a = simFig1Equivoc(7, 2, 6, val1, val2, 2, aval);
   printf("    n=7 t=2 split 2:5      : accept %u/7", a);
   if (a > 0) printf(" value=%c%c%c%c", aval[0], aval[1], aval[2], aval[3]);
@@ -1006,14 +1006,14 @@ testFig1Shuffled(
   }
   printf("    n=10 t=3 seed 1-10     : all accepted\n");
 
-  /* n=4 t=1, 1 silent peer, shuffled */
+  /* n=4 t=1, 1 silent process, shuffled */
   for (seed = 1; seed <= 10; ++seed) {
     a = simFig1Shuffled(4, 1, 0, val, 1u << 3, seed);
     check("Shuffled n=4 1-silent all accept", a == 4);
   }
   printf("    n=4 t=1 1-silent shuf  : all accepted\n");
 
-  /* n=7 t=2, 2 silent peers, shuffled */
+  /* n=7 t=2, 2 silent processes, shuffled */
   for (seed = 1; seed <= 10; ++seed) {
     a = simFig1Shuffled(7, 2, 0, val, (1u << 5) | (1u << 6), seed);
     check("Shuffled n=7 2-silent all accept", a == 7);
@@ -1026,7 +1026,7 @@ testFig1Shuffled(
 /*************************************************************************/
 
 /*
- * Simple N function: majority vote.
+ * Simple N function: majority.
  */
 static int
 testNfn(
@@ -1246,38 +1246,38 @@ testFig3Deep(
   bracha87Fig3Init(f3, 3, 1, 4, testNfn, 0);
 
   /*
-   * Round 0: peers 0,1,2 send {0, 1, 0}. All valid (binary).
+   * Round 0: processes 0,1,2 send {0, 1, 0}. All valid (binary).
    * N(0, {0,1,0}) = majority = 0.
    */
   a = bracha87Fig3Accept(f3, 0, 0, 0, &vc);
-  check("Deep VALID^0 peer 0", a == BRACHA87_VALIDATED && vc == 1);
+  check("Deep VALID^0 process 0", a == BRACHA87_VALIDATED && vc == 1);
   a = bracha87Fig3Accept(f3, 0, 1, 1, &vc);
-  check("Deep VALID^0 peer 1", a == BRACHA87_VALIDATED && vc == 2);
+  check("Deep VALID^0 process 1", a == BRACHA87_VALIDATED && vc == 2);
   a = bracha87Fig3Accept(f3, 0, 2, 0, &vc);
-  check("Deep VALID^0 peer 2", a == BRACHA87_VALIDATED && vc == 3);
+  check("Deep VALID^0 process 2", a == BRACHA87_VALIDATED && vc == 3);
 
   /*
-   * Round 1: peers 0,1,2 send value 0 (= N(0,{0,1,0})).
+   * Round 1: processes 0,1,2 send value 0 (= N(0,{0,1,0})).
    * N(1, {0,0,0}) = majority = 0.
    */
   a = bracha87Fig3Accept(f3, 1, 0, 0, &vc);
-  check("Deep VALID^1 peer 0", a == BRACHA87_VALIDATED && vc == 1);
+  check("Deep VALID^1 process 0", a == BRACHA87_VALIDATED && vc == 1);
   a = bracha87Fig3Accept(f3, 1, 1, 0, &vc);
-  check("Deep VALID^1 peer 1", a == BRACHA87_VALIDATED && vc == 2);
+  check("Deep VALID^1 process 1", a == BRACHA87_VALIDATED && vc == 2);
   a = bracha87Fig3Accept(f3, 1, 2, 0, &vc);
-  check("Deep VALID^1 peer 2", a == BRACHA87_VALIDATED && vc == 3);
+  check("Deep VALID^1 process 2", a == BRACHA87_VALIDATED && vc == 3);
 
   /*
-   * Round 2: peers 0,1,2 send value 0 (= N(1,{0,0,0})).
+   * Round 2: processes 0,1,2 send value 0 (= N(1,{0,0,0})).
    * Should be validated as VALID^2.
    */
   a = bracha87Fig3Accept(f3, 2, 0, 0, &vc);
   printf("  VALID^2(0,0)=%u vc=%u\n", a, vc);
-  check("Deep VALID^2 peer 0", a == BRACHA87_VALIDATED && vc == 1);
+  check("Deep VALID^2 process 0", a == BRACHA87_VALIDATED && vc == 1);
   a = bracha87Fig3Accept(f3, 2, 1, 0, &vc);
-  check("Deep VALID^2 peer 1", a == BRACHA87_VALIDATED && vc == 2);
+  check("Deep VALID^2 process 1", a == BRACHA87_VALIDATED && vc == 2);
   a = bracha87Fig3Accept(f3, 2, 2, 0, &vc);
-  check("Deep VALID^2 peer 2", a == BRACHA87_VALIDATED && vc == 3);
+  check("Deep VALID^2 process 2", a == BRACHA87_VALIDATED && vc == 3);
   printf("  VALID^2 validCount=%u\n", bracha87Fig3ValidCount(f3, 2));
   check("Deep VALID^2 validCount", bracha87Fig3ValidCount(f3, 2) == 3);
 
@@ -1962,8 +1962,8 @@ testFig4PostDecide(
  * of the next phase.
  *
  * If sub=0 set value to majority post-decide, b->value would drift to
- * the adversarial majority and the decided peer's continuation
- * broadcast would carry the wrong value, potentially stranding peers
+ * the adversarial majority and the decided process's continuation
+ * broadcast would carry the wrong value, potentially stranding processes
  * still trying to decide.
  */
 static void
@@ -2119,7 +2119,7 @@ testFig4SubsetMajority(
   bracha87Fig4Init(b, 4, 1, 10, 0, testCoin, 0);
   f3 = &b->fig3;
 
-  /* Round 0: 2 zeros, 3 ones (all 5 peers) */
+  /* Round 0: 2 zeros, 3 ones (all 5 processes) */
   bracha87Fig3Accept(f3, 0, 0, 0, &vc);  /* vc=1 */
   bracha87Fig3Accept(f3, 0, 1, 0, &vc);  /* vc=2 */
   bracha87Fig3Accept(f3, 0, 2, 1, &vc);  /* vc=3 */
@@ -2579,10 +2579,10 @@ testFig4MultiPhase(
 }
 
 /*
- * Simulate Figure 4 consensus with t Byzantine peers.
- * Byzantine peers (indices 0..t-1) always broadcast byzVal.
- * In step 3, Byzantine peers send byzVal | D_FLAG.
- * Only honest peers (t..n-1) are tracked for decisions.
+ * Simulate Figure 4 consensus with t Byzantine processes.
+ * Byzantine processes (indices 0..t-1) always broadcast byzVal.
+ * In step 3, Byzantine processes send byzVal | D_FLAG.
+ * Only honest processes (t..n-1) are tracked for decisions.
  */
 static unsigned int
 simFig4Byz(
@@ -2605,7 +2605,7 @@ simFig4Byz(
   int anyDecided;
 
   sz = bracha87Fig4Sz(n - 1, maxPhases);
-  /* Only allocate Fig4 for honest peers */
+  /* Only allocate Fig4 for honest processes */
   for (i = 0; i < (unsigned int)t; ++i)
     inst[i] = 0;
   for (i = (unsigned int)t; i < n; ++i) {
@@ -2629,7 +2629,7 @@ simFig4Byz(
   for (k = 0; k < (unsigned int)maxPhases * 3; ++k) {
     sub = k % 3;
 
-    /* Feed round to honest peers */
+    /* Feed round to honest processes */
     for (i = (unsigned int)t; i < n; ++i) {
       if ((inst[i]->flags & BRACHA87_F4_DECIDED))
         continue;
@@ -2678,7 +2678,7 @@ testFig4Byzantine(
   unsigned int i;
   unsigned int honestN;
 
-  printf("\n  Byzantine peer tests:\n");
+  printf("\n  Byzantine process tests:\n");
 
   /*
    * n=4, t=1: 1 Byzantine always sends 1, 3 honest start 0.
@@ -2746,7 +2746,7 @@ testFig4Byzantine(
 /*  Deterministic composed simulation: Fig1 -> Fig3 -> Fig4                 */
 /*                                                                          */
 /*  Single-threaded pipeline with message queue. Each process has Fig1      */
-/*  instances per (origin, round), and a Fig4 (embedding Fig3).             */
+/*  instances per (initiator, round), and a Fig4 (embedding Fig3).             */
 /*  Messages flow: Fig1 echo/ready/accept -> Fig3 validate ->               */
 /*  Fig4 round complete -> new Fig1 broadcasts.                             */
 /*  Asserts the paper's lemmas inline.                                      */
@@ -2759,7 +2759,7 @@ struct bMsgQ {
   unsigned char type;
   unsigned char from;
   unsigned char to;
-  unsigned char origin;
+  unsigned char initiator;
   unsigned char value;
 };
 
@@ -2780,7 +2780,7 @@ bqPush(
  ,unsigned char type
  ,unsigned char from
  ,unsigned char to
- ,unsigned char origin
+ ,unsigned char initiator
  ,unsigned char value
 ){
   if (BQtail >= MAX_BMSGS)
@@ -2789,7 +2789,7 @@ bqPush(
   BMsgQ[BQtail].type = type;
   BMsgQ[BQtail].from = from;
   BMsgQ[BQtail].to = to;
-  BMsgQ[BQtail].origin = origin;
+  BMsgQ[BQtail].initiator = initiator;
   BMsgQ[BQtail].value = value;
   ++BQtail;
 }
@@ -2827,20 +2827,20 @@ struct composedState {
 };
 
 /*
- * Composed simulation. Returns number of honest peers that decided.
+ * Composed simulation. Returns number of honest processes that decided.
  *
- * byzantineMask: bitmask of Byzantine peers (their messages are sent
- *   but they don't process incoming). Byzantine peers always send
+ * byzantineMask: bitmask of Byzantine processes (their messages are sent
+ *   but they don't process incoming). Byzantine processes always send
  *   their initVal, optionally with equivocation via byzSplit.
  *
- * byzSplit: if non-zero, Byzantine peer 0 sends value 0 to peers
+ * byzSplit: if non-zero, Byzantine process 0 sends value 0 to processes
  *   [0..byzSplit-1] and value 1 to [byzSplit..n-1] for round 1.
  *
  * shuffleSeed: if non-zero, shuffle queue after each batch of enqueues.
  *
  * Inline assertions:
  *   - Step 1 broadcasts never carry D_FLAG
- *   - Lemma 2: all accepted values agree per (origin, round)
+ *   - Lemma 2: all accepted values agree per (initiator, round)
  *   - Theorem 2: all decisions agree
  */
 static unsigned int
@@ -2930,11 +2930,11 @@ simComposed(
     if (byzantineMask & (1u << m->to))
       continue;
     if (m->round >= maxRounds
-     || m->origin >= n || m->from >= n)
+     || m->initiator >= n || m->from >= n)
       continue;
 
     st = &states[m->to];
-    f1 = st->fig1[(unsigned int)m->round * n + m->origin];
+    f1 = st->fig1[(unsigned int)m->round * n + m->initiator];
     oldTail = BQtail;
     nout = bracha87Fig1Input(f1, m->type, m->from, &m->value, out);
 
@@ -2950,7 +2950,7 @@ simComposed(
         /* (checked at end across all processes) */
 
         bracha87Fig3Accept(st->fig3, m->round,
-                           m->origin, cv[0], &vc);
+                           m->initiator, cv[0], &vc);
 
         /* Process completed rounds (incl. cascade) */
         while (st->nextRound < maxRounds
@@ -3000,7 +3000,7 @@ simComposed(
           bqPush(m->round,
                  (out[k] == BRACHA87_ECHO_ALL)
                    ? BRACHA87_ECHO : BRACHA87_READY,
-                 m->to, (unsigned char)j, m->origin, cv[0]);
+                 m->to, (unsigned char)j, m->initiator, cv[0]);
       }
     }
 
@@ -3010,7 +3010,7 @@ simComposed(
 
   /* Post-simulation assertions */
 
-  /* Lemma 1: all honest readys agree per (origin, round) */
+  /* Lemma 1: all honest readys agree per (initiator, round) */
   for (r = 0; r < maxRounds; ++r) {
     unsigned int orig;
 
@@ -3043,7 +3043,7 @@ simComposed(
     }
   }
 
-  /* Lemma 2: all honest accepts agree per (origin, round) */
+  /* Lemma 2: all honest accepts agree per (initiator, round) */
   for (r = 0; r < maxRounds; ++r) {
     unsigned int orig;
 
@@ -3244,9 +3244,9 @@ testComposedShuffled(
 }
 
 /*
- * Byzantine equivocating origin through full pipeline.
- * Peer 0 is Byzantine: sends value 0 to some, value 1 to others.
- * Honest peers must agree (Lemma 2, Theorem 2).
+ * Byzantine equivocating initiator through full pipeline.
+ * Process 0 is Byzantine: sends value 0 to some, value 1 to others.
+ * Honest processes must agree (Lemma 2, Theorem 2).
  */
 static void
 testByzantineComposed(
@@ -3260,7 +3260,7 @@ testByzantineComposed(
 
   printf("\n  Byzantine composed tests:\n");
 
-  /* n=4 t=1, peer 0 Byzantine, split 1:3 */
+  /* n=4 t=1, process 0 Byzantine, split 1:3 */
   for (i = 0; i < MAX_N; ++i) inits[i] = 0;
   CoinVal = 0;
   honestN = 3;
@@ -3269,7 +3269,7 @@ testByzantineComposed(
          (unsigned)decs[1], a, honestN);
   check("ByzComposed n=4 split 1:3: honest decide", a == honestN);
 
-  /* n=7 t=2, peer 0 Byzantine, split 3:4 */
+  /* n=7 t=2, process 0 Byzantine, split 3:4 */
   for (i = 0; i < MAX_N; ++i) inits[i] = 0;
   CoinVal = 0;
   honestN = 6;
@@ -3278,7 +3278,7 @@ testByzantineComposed(
          (unsigned)decs[1], a, honestN);
   check("ByzComposed n=7 split 3:4: honest decide", a == honestN);
 
-  /* n=7 t=2, peer 0 Byzantine, split 3:4, shuffled */
+  /* n=7 t=2, process 0 Byzantine, split 3:4, shuffled */
   for (i = 0; i < MAX_N; ++i) inits[i] = 0;
   CoinVal = 0;
   a = simComposed(7, 2, inits, decs, 20, 1u, 3, 42);
@@ -3352,7 +3352,7 @@ testPostDecideMultiPhase(
     /* Must keep broadcasting */
     check("MultiPhase: keeps broadcasting",
           (act & BRACHA87_BROADCAST) != 0);
-    /* Must not re-emit DECIDE */
+    /* Must not retry DECIDE */
     check("MultiPhase: no re-decide",
           (act & BRACHA87_DECIDE) == 0);
   }
@@ -3364,8 +3364,8 @@ testPostDecideMultiPhase(
 }
 
 /*
- * Fig1 value switch: Byzantine initial commits to A, honest echo
- * quorum for B corrects the value. Full accept path verified.
+ * Fig1 value switch: Byzantine initial echoes A, honest echo
+ * threshold for B corrects the value. Full accept path verified.
  */
 static void
 testFig1ValueSwitch(
@@ -3388,12 +3388,12 @@ testFig1ValueSwitch(
   valA = 0;
   valB = 1;
 
-  /* Byzantine initial: commit to A */
+  /* Byzantine initial: echo A */
   nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, &valA, out);
   check("ValSwitch: INITIAL echoes", nout >= 1);
-  check("ValSwitch: committed to A", bracha87Fig1Value(b)[0] == valA);
+  check("ValSwitch: sent to A", bracha87Fig1Value(b)[0] == valA);
 
-  /* 3 echoes for B from honest peers: threshold = (4+1)/2+1 = 3 */
+  /* 3 echoes for B from honest processes: threshold = (4+1)/2+1 = 3 */
   bracha87Fig1Input(b, BRACHA87_ECHO, 1, &valB, out);
   bracha87Fig1Input(b, BRACHA87_ECHO, 2, &valB, out);
   nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, &valB, out);
@@ -3417,13 +3417,13 @@ testFig1ValueSwitch(
 }
 
 /*
- * BPR (Bracha Phase Re-emitter) unit tests.
+ * BPR (Bracha Phase Retry) unit tests.
  *
  * White-box tests of the bracha87Fig1Bpr entry point against the
  * contract in bracha87Fig1.dtc's BPR section: dispatch over the
- * (reconsider) discriminator and the existing committed-state
+ * (reconsider) discriminator and the existing sent-state
  * flags only; outputs reuse BRACHA87_ECHO_ALL / READY_ALL with
- * no commit and no flag change.
+ * no echo and no flag change.
  *
  * Configuration: n=4, t=1.  Echo threshold (n+t)/2+1 = 3, Rule 5
  * ready threshold t+1 = 2, accept threshold 2t+1 = 3.
@@ -3437,18 +3437,18 @@ testFig1Bpr(
   unsigned char out[3];
   unsigned int nout;
   unsigned char val[VLEN];
-  unsigned char committed[VLEN];
+  unsigned char sent[VLEN];
   unsigned int i;
 
-  printf("\n  Fig1 BPR (Bracha Phase Re-emitter) tests:\n");
+  printf("\n  Fig1 BPR (Bracha Phase Retry) tests:\n");
 
   memcpy(val, "AAAA", VLEN);
 
   sz = bracha87Fig1Sz(3, VLEN - 1);
 
   /*
-   * Fresh instance: nothing committed.  BPR has no echo or ready
-   * to replay; returns 0 actions.  Repeat calls are idempotent.
+   * Fresh instance: nothing sent.  BPR has no echo or ready
+   * to retry; returns 0 actions.  Repeat calls are idempotent.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
@@ -3462,7 +3462,7 @@ testFig1Bpr(
   free(b);
 
   /*
-   * After Rule 1 (INITIAL -> ECHOED): BPR replays the echo.
+   * After Rule 1 (INITIAL -> ECHOED): BPR retries the echo.
    * One action, ECHO_ALL.  Repeat calls return the same.
    * State flags unchanged across BPR calls.
    */
@@ -3490,7 +3490,7 @@ testFig1Bpr(
 
   /*
    * After Rule 5 fires (echoed + t+1=2 readys -> RDSENT): BPR
-   * replays both echo and ready.  Two actions in order: ECHO_ALL
+   * retries both echo and ready.  Two actions in order: ECHO_ALL
    * then READY_ALL.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
@@ -3521,7 +3521,7 @@ testFig1Bpr(
 
   /*
    * After Rule 4 fires (echoed + (n+t)/2+1 = 3 echoes -> RDSENT
-   * with no readys yet): BPR replays both committed actions.
+   * with no readys yet): BPR retries both sent actions.
    * This path stresses DTC's leaf merger - the BPR rule must
    * keep type discrimination at (RDSENT=1, rdGeTPlus1=no) where
    * the paper rules produce all-zero outputs.
@@ -3544,15 +3544,15 @@ testFig1Bpr(
   free(b);
 
   /*
-   * After Rule 6 fires (2t+1 = 3 readys -> ACCEPTED): BPR replays
+   * After Rule 6 fires (2t+1 = 3 readys -> ACCEPTED): BPR retries
    * READY only.  ACCEPTED is the witness that t+1 correct processes
    * have sent ready (>= t+1 of the 2t+1 are non-byzantine), so every
    * remaining correct process reaches accept via ready-amplification
    * alone -- INITIAL and ECHO are bootstrap-only and provably dead
-   * past this point, so they retire (the minimal-re-emit gate).
+   * past this point, so they retire (the minimal-retry gate).
    * READY does NOT retire (pitfall 10): it is exactly what that
-   * amplification tail consumes; an accepted peer still owes its
-   * ready to peers below 2t+1.  The application's abandon policy
+   * amplification tail consumes; an accepted process still owes its
+   * ready to processes below 2t+1.  The application's abandon policy
    * retires the instance.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
@@ -3573,25 +3573,25 @@ testFig1Bpr(
     check("BPR post-accept: idempotent count", nout == 1);
     check("BPR post-accept: idempotent READY_ALL", out[0] == BRACHA87_READY_ALL);
   }
-  printf("    after Rule 6         : %u action (post-accept READY-only replay)\n", nout);
+  printf("    after Rule 6         : %u action (post-accept READY-only retry)\n", nout);
   free(b);
 
   /*
    * Value preservation across BPR calls.  Drive to RDSENT, then
    * call BPR repeatedly.  bracha87Fig1Value content must be
-   * byte-identical to the originally committed value - BPR must
-   * not re-commit, must not mutate the value buffer.
+   * byte-identical to the originally echoed value - BPR must
+   * not re-echo, must not mutate the value buffer.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
   bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
   bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
   bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
-  memcpy(committed, bracha87Fig1Value(b), VLEN);
+  memcpy(sent, bracha87Fig1Value(b), VLEN);
   for (i = 0; i < 10; ++i)
     bracha87Fig1Bpr(b, out);
-  check("BPR value preservation: committed value intact",
-        memcmp(bracha87Fig1Value(b), committed, VLEN) == 0);
+  check("BPR value preservation: echoed value intact",
+        memcmp(bracha87Fig1Value(b), sent, VLEN) == 0);
   check("BPR value preservation: matches input",
         memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
   printf("    value preservation   : 10 BPR calls, value byte-identical\n");
@@ -3599,30 +3599,30 @@ testFig1Bpr(
 
   /*
    * Cross-talk discipline: bracha87Fig1Input now also computes
-   * the BPR replay outputs (the merged dispatch produces all
+   * the BPR retry outputs (the merged dispatch produces all
    * five), but the wrapper discards them on the Input path so
-   * Bracha's emission count is unaffected.  Verified directly
+   * Bracha's output count is unaffected.  Verified directly
    * here for two cases: (a) Input call that fires a paper rule,
    * Bracha's action count is exactly the paper count - no stray
-   * replay piggy-backed; (b) Input call after committed state
-   * exists but no paper rule fires, BPR's would-be replay is
+   * retry piggy-backed; (b) Input call after sent state
+   * exists but no paper rule fires, BPR's would-be retry is
    * silently discarded - Input returns 0 actions.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  /* (a) Rule 1 fires alone: pre-state echoed=0, BPR replay is
+  /* (a) Rule 1 fires alone: pre-state echoed=0, BPR retry is
    * inhibited by its chained input "send (echo, v) = yes" - the
-   * dispatch produces sendEcho=yes and replayEcho=no together. */
+   * dispatch produces sendEcho=yes and retryEcho=no together. */
   nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
-  check("BPR cross-talk: Rule 1 emits exactly 1 action",
+  check("BPR cross-talk: Rule 1 outputs exactly 1 action",
         nout == 1 && out[0] == BRACHA87_ECHO_ALL);
-  /* (b) Subsequent ECHO from peer 1 with no threshold met: no
-   * Bracha rule fires.  BPR replay would say yes (echoed=1,
+  /* (b) Subsequent ECHO from process 1 with no threshold met: no
+   * Bracha rule fires.  BPR retry would say yes (echoed=1,
    * sendEcho=no), but the Input wrapper discards it. */
   nout = bracha87Fig1Input(b, BRACHA87_ECHO, 1, val, out);
-  check("BPR cross-talk: non-firing Input emits 0 actions",
+  check("BPR cross-talk: non-firing Input outputs 0 actions",
         nout == 0);
-  printf("    cross-talk discard   : Input emits paper count, BPR replay ignored\n");
+  printf("    cross-talk discard   : Input outputs paper count, BPR retry ignored\n");
   free(b);
 
   /*
@@ -3657,143 +3657,143 @@ testFig1Bpr(
   free(b);
 
   /*
-   * Originator INITIAL replay and its retirement.
+   * Initiator INITIAL retry and its retirement.
    *
-   * bracha87Fig1Origin sets BRACHA87_F1_ORIGIN and stores the
-   * value.  bracha87Fig1Bpr emits BRACHA87_INITIAL_ALL on every
-   * call while ORIGIN is set, INCLUDING after the origin has echoed
-   * locally -- stopping at ECHOED would strand a peer that missed
+   * bracha87Fig1Initiator sets BRACHA87_F1_INITIATOR and stores the
+   * value.  bracha87Fig1Bpr outputs BRACHA87_INITIAL_ALL on every
+   * call while INITIATOR is set, INCLUDING after the initiator has echoed
+   * locally -- stopping at ECHOED would strand a process that missed
    * the bootstrap (see the byzantine-silent test).  INITIAL retires
    * only at the strictly-stronger stops: ACCEPTED (t+1 correct
    * readys now circulate, so ready-amplification finishes without
-   * it) or an echo observed from every peer (echoSenders == n,
+   * it) or an echo observed from every process (echoSenders == n,
    * nothing left to induce).  The pre-loopback / post-loopback
    * cases below assert INITIAL survives ECHOED; the accepted and
    * all-echoed retirements are covered just after.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Origin(b, val);
-  check("BPR origin: ORIGIN flag set",
-        (b->flags & BRACHA87_F1_ORIGIN));
-  check("BPR origin: ECHOED clear pre-loopback",
+  bracha87Fig1Initiator(b, val);
+  check("BPR initiator: INITIATOR flag set",
+        (b->flags & BRACHA87_F1_INITIATOR));
+  check("BPR initiator: ECHOED clear pre-loopback",
         !(b->flags & BRACHA87_F1_ECHOED));
-  check("BPR origin: Value() returns committed value",
+  check("BPR initiator: Value() returns echoed value",
         bracha87Fig1Value(b)
         && memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
 
   nout = bracha87Fig1Bpr(b, out);
-  check("BPR origin pre-loopback: 1 action", nout == 1);
-  check("BPR origin pre-loopback: action is INITIAL_ALL",
+  check("BPR initiator pre-loopback: 1 action", nout == 1);
+  check("BPR initiator pre-loopback: action is INITIAL_ALL",
         out[0] == BRACHA87_INITIAL_ALL);
 
   /* Idempotency under repeat */
   for (i = 0; i < 5; ++i) {
     nout = bracha87Fig1Bpr(b, out);
-    check("BPR origin pre-loopback: idempotent count", nout == 1);
-    check("BPR origin pre-loopback: idempotent INITIAL_ALL",
+    check("BPR initiator pre-loopback: idempotent count", nout == 1);
+    check("BPR initiator pre-loopback: idempotent INITIAL_ALL",
           out[0] == BRACHA87_INITIAL_ALL);
   }
 
   /* Now self-feed (loopback): Rule 1 fires, ECHOED gets set.
-   * INITIAL replay continues (BPR rule, not gated by ECHOED) AND
-   * ECHO replay starts. */
+   * INITIAL retry continues (BPR rule, not gated by ECHOED) AND
+   * ECHO retry starts. */
   bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
-  check("BPR origin post-loopback: ECHOED set",
+  check("BPR initiator post-loopback: ECHOED set",
         (b->flags & BRACHA87_F1_ECHOED));
-  check("BPR origin post-loopback: ORIGIN still set",
-        (b->flags & BRACHA87_F1_ORIGIN));
+  check("BPR initiator post-loopback: INITIATOR still set",
+        (b->flags & BRACHA87_F1_INITIATOR));
 
   nout = bracha87Fig1Bpr(b, out);
-  check("BPR origin post-loopback: 2 actions (INITIAL+ECHO replay)",
+  check("BPR initiator post-loopback: 2 actions (INITIAL+ECHO retry)",
         nout == 2);
-  check("BPR origin post-loopback: INITIAL_ALL first",
+  check("BPR initiator post-loopback: INITIAL_ALL first",
         nout >= 1 && out[0] == BRACHA87_INITIAL_ALL);
-  check("BPR origin post-loopback: ECHO_ALL second",
+  check("BPR initiator post-loopback: ECHO_ALL second",
         nout >= 2 && out[1] == BRACHA87_ECHO_ALL);
 
-  printf("    origin INITIAL replay: pre-loopback INITIAL_ALL, post-loopback INITIAL+ECHO\n");
+  printf("    initiator INITIAL retry: pre-loopback INITIAL_ALL, post-loopback INITIAL+ECHO\n");
   free(b);
 
   /*
-   * Origin + advanced-state matrix.  An originator's Fig1 can
-   * progress through every committed-state combination (echoed
+   * Initiator + advanced-state matrix.  An initiator's Fig1 can
+   * progress through every sent-state combination (echoed
    * via Rule 1, rdSent via Rule 4 / 5, accepted via Rule 6) just
-   * like a non-origin Fig1.  Verify Bpr replay outputs at each
-   * combination match the non-origin replay rules: once ECHOED,
-   * INITIAL replay stops; ECHO replay takes over; RDSENT adds
-   * READY replay; ACCEPTED keeps both (gap 3).
+   * like a non-initiator Fig1.  Verify Bpr retry outputs at each
+   * combination match the non-initiator retry rules: once ECHOED,
+   * INITIAL retry stops; ECHO retry takes over; RDSENT adds
+   * READY retry; ACCEPTED keeps both (gap 3).
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Origin(b, val);
+  bracha87Fig1Initiator(b, val);
   bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);  /* Rule 1 -> ECHOED */
   bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
   bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);    /* Rule 5 -> RDSENT */
-  check("BPR origin+rdSent: ORIGIN set",
-        (b->flags & BRACHA87_F1_ORIGIN));
-  check("BPR origin+rdSent: ECHOED set",
+  check("BPR initiator+rdSent: INITIATOR set",
+        (b->flags & BRACHA87_F1_INITIATOR));
+  check("BPR initiator+rdSent: ECHOED set",
         (b->flags & BRACHA87_F1_ECHOED));
-  check("BPR origin+rdSent: RDSENT set",
+  check("BPR initiator+rdSent: RDSENT set",
         (b->flags & BRACHA87_F1_RDSENT));
-  check("BPR origin+rdSent: not yet accepted",
+  check("BPR initiator+rdSent: not yet accepted",
         !(b->flags & BRACHA87_F1_ACCEPTED));
 
   nout = bracha87Fig1Bpr(b, out);
-  check("BPR origin+rdSent: 3 actions (INITIAL+ECHO+READY)", nout == 3);
-  check("BPR origin+rdSent: INITIAL_ALL first",
+  check("BPR initiator+rdSent: 3 actions (INITIAL+ECHO+READY)", nout == 3);
+  check("BPR initiator+rdSent: INITIAL_ALL first",
         nout >= 1 && out[0] == BRACHA87_INITIAL_ALL);
-  check("BPR origin+rdSent: ECHO_ALL second",
+  check("BPR initiator+rdSent: ECHO_ALL second",
         nout >= 2 && out[1] == BRACHA87_ECHO_ALL);
-  check("BPR origin+rdSent: READY_ALL third",
+  check("BPR initiator+rdSent: READY_ALL third",
         nout >= 3 && out[2] == BRACHA87_READY_ALL);
   free(b);
 
-  /* Origin + ACCEPTED (Rule 6 fires).  ACCEPTED retires both INITIAL
+  /* Initiator + ACCEPTED (Rule 6 fires).  ACCEPTED retires both INITIAL
    * and ECHO (bootstrap-only; t+1 correct readys now circulate, so
-   * ready-amplification carries every correct peer to accept with no
-   * initial/echo consumed).  Only READY replays (pitfall 10).  The
+   * ready-amplification carries every correct process to accept with no
+   * initial/echo consumed).  Only READY retries (pitfall 10).  The
    * accept witness is strictly stronger than the ECHOED gate pitfall
    * 11 forbids, so retiring here is sound. */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Origin(b, val);
+  bracha87Fig1Initiator(b, val);
   bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);  /* Rule 1 -> ECHOED */
   bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
   bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);    /* Rule 5 -> RDSENT */
   bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);    /* Rule 6 -> ACCEPTED */
-  check("BPR origin+accepted: ORIGIN set",
-        (b->flags & BRACHA87_F1_ORIGIN));
-  check("BPR origin+accepted: ACCEPTED set",
+  check("BPR initiator+accepted: INITIATOR set",
+        (b->flags & BRACHA87_F1_INITIATOR));
+  check("BPR initiator+accepted: ACCEPTED set",
         (b->flags & BRACHA87_F1_ACCEPTED));
 
   nout = bracha87Fig1Bpr(b, out);
-  check("BPR origin+accepted: 1 action (READY only, INITIAL+ECHO retired)",
+  check("BPR initiator+accepted: 1 action (READY only, INITIAL+ECHO retired)",
         nout == 1);
-  check("BPR origin+accepted: READY_ALL",
+  check("BPR initiator+accepted: READY_ALL",
         nout >= 1 && out[0] == BRACHA87_READY_ALL);
   for (i = 0; i < 5; ++i) {
     nout = bracha87Fig1Bpr(b, out);
-    check("BPR origin+accepted: idempotent count", nout == 1);
-    check("BPR origin+accepted: idempotent READY_ALL",
+    check("BPR initiator+accepted: idempotent count", nout == 1);
+    check("BPR initiator+accepted: idempotent READY_ALL",
           out[0] == BRACHA87_READY_ALL);
   }
-  printf("    origin state matrix  : ORIGIN+RDSENT emits INITIAL+ECHO+READY; ORIGIN+ACCEPTED emits READY only\n");
+  printf("    initiator state matrix  : INITIATOR+RDSENT outputs INITIAL+ECHO+READY; INITIATOR+ACCEPTED outputs READY only\n");
   free(b);
 
   /*
    * INITIAL retires at echoSenders == n INDEPENDENTLY of accept.
-   * Origin receives an echo from every one of the n=4 peers but no
+   * Initiator receives an echo from every one of the n=4 processes but no
    * readys, so it is ECHOED + RDSENT (Rule 2/3 at the 3-echo
    * threshold) yet NOT ACCEPTED (accept needs 2t+1 readys, none
-   * arrived).  All peers have echoed, so INITIAL has nothing left to
-   * induce and retires; ECHO + READY still replay (not accepted).
+   * arrived).  All processes have echoed, so INITIAL has nothing left to
+   * induce and retires; ECHO + READY still retry (not accepted).
    * This pins the all-echoed gate as distinct from the accept gate.
    */
   check("BPR all-echoed: NULL guard", bracha87Fig1AllEchoed(0) == 0);
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Origin(b, val);
+  bracha87Fig1Initiator(b, val);
   check("BPR all-echoed: 0 with no echoes", bracha87Fig1AllEchoed(b) == 0);
   /* Feed echoes one at a time; AllEchoed stays 0 until the n-th sender. */
   for (i = 0; i < 4; ++i) {
@@ -3804,11 +3804,11 @@ testFig1Bpr(
   }
   check("BPR all-echoed: 1 when echoSenders == n",
         bracha87Fig1AllEchoed(b) == 1);
-  check("BPR origin all-echoed: ECHOED set", (b->flags & BRACHA87_F1_ECHOED));
-  check("BPR origin all-echoed: NOT accepted",
+  check("BPR initiator all-echoed: ECHOED set", (b->flags & BRACHA87_F1_ECHOED));
+  check("BPR initiator all-echoed: NOT accepted",
         !(b->flags & BRACHA87_F1_ACCEPTED));
   nout = bracha87Fig1Bpr(b, out);
-  check("BPR origin all-echoed: INITIAL retired (no INITIAL_ALL)",
+  check("BPR initiator all-echoed: INITIAL retired (no INITIAL_ALL)",
         nout >= 1 && out[0] != BRACHA87_INITIAL_ALL);
   {
     unsigned int gi, sawInit = 0, sawReady = 0;
@@ -3816,39 +3816,39 @@ testFig1Bpr(
       if (out[gi] == BRACHA87_INITIAL_ALL) sawInit = 1;
       if (out[gi] == BRACHA87_READY_ALL)   sawReady = 1;
     }
-    check("BPR origin all-echoed: INITIAL_ALL absent", !sawInit);
-    check("BPR origin all-echoed: READY_ALL still replays", sawReady);
+    check("BPR initiator all-echoed: INITIAL_ALL absent", !sawInit);
+    check("BPR initiator all-echoed: READY_ALL still retries", sawReady);
   }
   printf("    all-echoed gate      : bracha87Fig1AllEchoed 0->1 at echoSenders==n, retires INITIAL without accept\n");
   free(b);
 
   /*
-   * Defensive: NULL pointer guards and re-Origin idempotency.
-   * Origin called twice with different values is "user error
+   * Defensive: NULL pointer guards and re-Initiator idempotency.
+   * Initiator called twice with different values is "user error
    * but defined" -- the second call overwrites the stored value
    * and clears no flags.  This mirrors the API doc and guards
-   * the case where an application Init+Origin sequence is
-   * re-driven (e.g. epoch restart).
+   * the case where an application Init+Initiator sequence is
+   * re-driven (e.g. instance restart).
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  bracha87Fig1Origin(0, val);  /* NULL b -> no crash */
-  bracha87Fig1Origin(b, 0);    /* NULL value -> no crash, no flag set */
-  check("BPR origin NULL value: ORIGIN flag NOT set",
-        !(b->flags & BRACHA87_F1_ORIGIN));
+  bracha87Fig1Initiator(0, val);  /* NULL b -> no crash */
+  bracha87Fig1Initiator(b, 0);    /* NULL value -> no crash, no flag set */
+  check("BPR initiator NULL value: INITIATOR flag NOT set",
+        !(b->flags & BRACHA87_F1_INITIATOR));
 
-  /* Real Origin call works */
-  bracha87Fig1Origin(b, val);
-  check("BPR origin defensive: ORIGIN set after real call",
-        (b->flags & BRACHA87_F1_ORIGIN));
+  /* Real Initiator call works */
+  bracha87Fig1Initiator(b, val);
+  check("BPR initiator defensive: INITIATOR set after real call",
+        (b->flags & BRACHA87_F1_INITIATOR));
 
-  /* Re-Origin overwrites value */
+  /* Re-Initiator overwrites value */
   {
     unsigned char val2[VLEN];
     memcpy(val2, "BBBB", VLEN);
-    bracha87Fig1Origin(b, val2);
-    check("BPR origin re-call: value overwritten",
+    bracha87Fig1Initiator(b, val2);
+    check("BPR initiator re-call: value overwritten",
           memcmp(bracha87Fig1Value(b), val2, VLEN) == 0);
   }
 
@@ -3860,17 +3860,17 @@ testFig1Bpr(
   nout = bracha87Fig1Bpr(0, out);
   check("BPR NULL b: 0 actions", nout == 0);
 
-  printf("    defensive guards     : NULL ptrs handled, re-Origin overwrites value\n");
+  printf("    defensive guards     : NULL ptrs handled, re-Initiator overwrites value\n");
   free(b);
 }
 
-/* Bit test on a returned suppress mask (peer j skipped iff bit j set). */
+/* Bit test on a returned suppress mask (process j skipped iff bit j set). */
 
 /*
- * Per-peer BPR suppression: bracha87Fig1Skip masks +
- * bracha87Fig1PeerAccepted + the all-accepted READY quiescence gate.
+ * Per-process BPR suppression: bracha87Fig1Skip masks +
+ * bracha87Fig1ProcessAccepted + the all-accepted READY quiescence gate.
  *
- * The skip mask names peers that provably no longer consume an action
+ * The skip mask names processes that provably no longer consume an action
  * (echoed -> INITIAL, readied -> ECHO, accepted -> READY); the caller's
  * broadcast skips them.  Verified by bit CONTENTS, not pointer identity
  * (the F1_* layout macros are private to bracha87.c).  n=4, t=1.
@@ -3888,7 +3888,7 @@ testFig1SkipAccept(
   unsigned int gi;
   unsigned int sawReady;
 
-  printf("\n  Fig1 BPR per-peer skip / accept tests:\n");
+  printf("\n  Fig1 BPR per-process skip / accept tests:\n");
   memcpy(val, "AAAA", VLEN);
   sz = bracha87Fig1Sz(3, VLEN - 1);
 
@@ -3897,12 +3897,12 @@ testFig1SkipAccept(
         bracha87Fig1Skip(0, BRACHA87_READY_ALL) == 0);
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  check("Skip: ACCEPT act (non-replay) -> 0",
+  check("Skip: ACCEPT act (non-retry) -> 0",
         bracha87Fig1Skip(b, BRACHA87_ACCEPT) == 0);
   check("Skip: INITIAL_ALL -> non-null mask",
         bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL) != 0);
 
-  /* INITIAL skip = echoed peers (value-agnostic).  Echo from 0 and 2. */
+  /* INITIAL skip = echoed processes (value-agnostic).  Echo from 0 and 2. */
   bracha87Fig1Input(b, BRACHA87_ECHO, 0, val, out);
   bracha87Fig1Input(b, BRACHA87_ECHO, 2, val, out);
   m = bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL);
@@ -3912,8 +3912,8 @@ testFig1SkipAccept(
   free(b);
 
   /*
-   * ECHO skip = READIED peers, NOT merely echoed -- an echoed-but-not-
-   * readied peer is still collecting echoes toward Rule 4 and DOES
+   * ECHO skip = READIED processes, NOT merely echoed -- an echoed-but-not-
+   * readied process is still collecting echoes toward Rule 4 and DOES
    * consume our echo.  Echo from 1 (not suppressed), ready from 3.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
@@ -3926,32 +3926,32 @@ testFig1SkipAccept(
   check("Skip ECHO: bit 3 set (readied)", BRACHA87_SKIP_TST(m, 3));
   free(b);
 
-  /* READY skip = accepted peers, set ONLY via PeerAccepted (accept is
+  /* READY skip = accepted processes, set ONLY via ProcessAccepted (accept is
    * wire-silent; readied != accepted). */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
   bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
   m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
   check("Skip READY: bit 2 clear (readied != accepted)", !BRACHA87_SKIP_TST(m, 2));
-  bracha87Fig1PeerAccepted(b, 2);
+  bracha87Fig1ProcessAccepted(b, 2);
   m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
-  check("Skip READY: bit 2 set after PeerAccepted", BRACHA87_SKIP_TST(m, 2));
+  check("Skip READY: bit 2 set after ProcessAccepted", BRACHA87_SKIP_TST(m, 2));
   /* Idempotent + guards. */
-  bracha87Fig1PeerAccepted(b, 2);
-  check("PeerAccepted idempotent: bit 2 still set",
+  bracha87Fig1ProcessAccepted(b, 2);
+  check("ProcessAccepted idempotent: bit 2 still set",
         BRACHA87_SKIP_TST(bracha87Fig1Skip(b, BRACHA87_READY_ALL), 2));
-  bracha87Fig1PeerAccepted(0, 0);        /* NULL b: no crash */
-  bracha87Fig1PeerAccepted(b, 99);       /* from > n: ignored, no clobber */
+  bracha87Fig1ProcessAccepted(0, 0);        /* NULL b: no crash */
+  bracha87Fig1ProcessAccepted(b, 99);       /* from > n: ignored, no clobber */
   m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
-  check("PeerAccepted range guard: bit 1 still clear", !BRACHA87_SKIP_TST(m, 1));
+  check("ProcessAccepted range guard: bit 1 still clear", !BRACHA87_SKIP_TST(m, 1));
   free(b);
 
   /*
-   * READY quiescence: an RDSENT instance keeps emitting READY until
-   * EVERY peer (all n, self included) is recorded accepted -- then no
-   * peer consumes a ready anywhere and Bpr stops emitting it.  This is
+   * READY quiescence: an RDSENT instance keeps outputting READY until
+   * EVERY process (all n, self included) is recorded accepted -- then no
+   * process consumes a ready anywhere and Bpr stops outputting it.  This is
    * the remote-all-accepted gate (sound: full coverage requires every
-   * correct peer's true accept), distinct from the forbidden local-
+   * correct process's true accept), distinct from the forbidden local-
    * accept gate (pitfall 10).
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
@@ -3966,18 +3966,18 @@ testFig1SkipAccept(
   sawReady = 0;
   for (gi = 0; gi < nout; ++gi)
     if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
-  check("Quiescence: READY emitted while not all accepted", sawReady);
+  check("Quiescence: READY output while not all accepted", sawReady);
   /* 3 of 4 accepted: still owed to the 4th. */
-  bracha87Fig1PeerAccepted(b, 0);
-  bracha87Fig1PeerAccepted(b, 1);
-  bracha87Fig1PeerAccepted(b, 2);
+  bracha87Fig1ProcessAccepted(b, 0);
+  bracha87Fig1ProcessAccepted(b, 1);
+  bracha87Fig1ProcessAccepted(b, 2);
   nout = bracha87Fig1Bpr(b, out);
   sawReady = 0;
   for (gi = 0; gi < nout; ++gi)
     if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
-  check("Quiescence: READY still emitted at 3/4 accepted", sawReady);
+  check("Quiescence: READY still output at 3/4 accepted", sawReady);
   /* 4th (self) accepted: all n -> READY retires. */
-  bracha87Fig1PeerAccepted(b, 3);
+  bracha87Fig1ProcessAccepted(b, 3);
   nout = bracha87Fig1Bpr(b, out);
   sawReady = 0;
   for (gi = 0; gi < nout; ++gi)
@@ -3991,8 +3991,8 @@ testFig1SkipAccept(
 /*
  * Test echo threshold with even n+t.
  *
- * The echo quorum must be strictly greater than (n+t)/2 to guarantee
- * quorum intersection contains at least one correct process (Lemma 1).
+ * The echo threshold must be strictly greater than (n+t)/2 to guarantee
+ * threshold intersection contains at least one correct process (Lemma 1).
  * In integer arithmetic: threshold = (n+t)/2 + 1.
  *
  * For n=3t+1 (n+t odd), ceil((n+t)/2) == (n+t)/2+1 — no difference.
@@ -4096,26 +4096,26 @@ testFig1EvenNplusT(
   printf("    n=8 t=2 honest sim    : accept %u/8\n", a);
   check("EvenNT n=8 honest: all accept", a == 8);
 
-  /* n=5 t=1 with 1 silent peer: all should still accept */
+  /* n=5 t=1 with 1 silent process: all should still accept */
   a = simFig1(5, 1, 0, val_A, 1u << 4);
   printf("    n=5 t=1 1-silent sim  : accept %u/5\n", a);
   check("EvenNT n=5 1-silent: all accept", a == 5);
 
-  /* n=8 t=2 with 2 silent peers */
+  /* n=8 t=2 with 2 silent processes */
   a = simFig1(8, 2, 0, val_A, (1u << 6) | (1u << 7));
   printf("    n=8 t=2 2-silent sim  : accept %u/8\n", a);
   check("EvenNT n=8 2-silent: all accept", a == 8);
 
   /*
    * Equivocation with even n+t: Lemma 2 must hold.
-   * n=5 t=1, origin=4 (Byzantine), split at 2.
+   * n=5 t=1, initiator=4 (Byzantine), split at 2.
    */
   a = simFig1Equivoc(5, 1, 4, val_A, val_B, 2, aval);
   printf("    n=5 t=1 equivoc 2:3   : accept %u/5", a);
   if (a > 0) printf(" value=%c%c%c%c", aval[0], aval[1], aval[2], aval[3]);
   printf("\n");
 
-  /* n=8 t=2, origin=7, split at 3 */
+  /* n=8 t=2, initiator=7, split at 3 */
   a = simFig1Equivoc(8, 2, 7, val_A, val_B, 3, aval);
   printf("    n=8 t=2 equivoc 3:5   : accept %u/8", a);
   if (a > 0) printf(" value=%c%c%c%c", aval[0], aval[1], aval[2], aval[3]);
@@ -4126,27 +4126,27 @@ testFig1EvenNplusT(
 /*  BPR large-n reliable broadcast (n >> 3t)                             */
 /*                                                                       */
 /*  The rest of the suite runs at the n = 3t+1 boundary, where           */
-/*  2t+1 == n-t, so a peer accepts exactly when all n-t correct peers    */
-/*  have readied -- the regime where minimal re-emission's accept-retire */
+/*  2t+1 == n-t, so a process accepts exactly when all n-t correct processes    */
+/*  have readied -- the regime where minimal retry's accept-retire */
 /*  of INITIAL/ECHO is trivially safe (nobody is behind at accept).      */
 /*  This pins the OTHER regime, the one the pthreadChannel deployments   */
 /*  actually run (local coin => Ben-Or t < sqrt(n) => n >> 3t; up to     */
-/*  37/6 on a laptop): here 2t+1 << n-t, so peers cross the accept        */
+/*  37/6 on a laptop): here 2t+1 << n-t, so processes cross the accept        */
 /*  threshold at widely different times.  Early accepters retire their   */
-/*  INITIAL/ECHO replay (bracha87Fig1Bpr) while many correct peers are   */
-/*  still far below 2t+1 readys; the never-retired READY replay plus      */
+/*  INITIAL/ECHO retry (bracha87Fig1Bpr) while many correct processes are   */
+/*  still far below 2t+1 readys; the never-retired READY retry plus      */
 /*  Rule-3 amplification (t+1 readys -> send ready, 2t+1 -> accept) must  */
-/*  still carry EVERY correct peer to ACCEPT.  If the accept-retire cut   */
+/*  still carry EVERY correct process to ACCEPT.  If the accept-retire cut   */
 /*  something a laggard needed, a laggard would stall and never accept.   */
 /*  Pure Fig1 reliable broadcast (no Fig3/Fig4, no coin, no consensus     */
-/*  pipeline), so n=37 is a few KB.  All n peers are honest; the only     */
+/*  pipeline), so n=37 is a few KB.  All n processes are honest; the only     */
 /*  adversity is HETEROGENEOUS per-receiver loss (a "fast" group on good  */
 /*  links, a "slow" group on bad links) -- a uniform-loss synchronous     */
-/*  pump converges in lockstep and would never stagger acceptance.  The   */
+/*  retry converges in lockstep and would never stagger acceptance.  The   */
 /*  fast group (sized above the (n+t)/2+1 echo threshold so it bootstraps */
 /*  itself) accepts first and retires INITIAL/ECHO; the slow group, still */
 /*  far below 2t+1 readys, is carried to ACCEPT solely by the fast        */
-/*  group's never-retired READY replay (receiving 2t+1 readys accepts     */
+/*  group's never-retired READY retry (receiving 2t+1 readys accepts     */
 /*  directly, no echo needed).                                            */
 /*************************************************************************/
 
@@ -4179,9 +4179,9 @@ testBprLargeN(
   }
   val[0] = 1;
 
-  /* Peer 0 originates and self-feeds its own INITIAL (Rule 1 -> ECHOED),
-   * the realistic bootstrap; thereafter everything rides the BPR pump. */
-  bracha87Fig1Origin(f1[0], val);
+  /* Process 0 initiates and self-feeds its own INITIAL (Rule 1 -> ECHOED),
+   * the realistic bootstrap; thereafter everything rides the BPR retry. */
+  bracha87Fig1Initiator(f1[0], val);
   bracha87Fig1Input(f1[0], BRACHA87_INITIAL, 0, val, out);
 
   rng = 0xC0FFEEu;
@@ -4199,7 +4199,7 @@ testBprLargeN(
     if (accepted == LN_N)
       break;
 
-    /* One BPR sweep: every peer re-emits its committed actions.  Drop
+    /* One BPR sweep: every process retries its sent actions.  Drop
      * per receiver: fast group (j < LN_FAST) 25%, slow group 80%. */
     for (i = 0; i < LN_N; ++i) {
       const unsigned char *vi;
@@ -4233,9 +4233,9 @@ testBprLargeN(
     if (f1[i]->flags & BRACHA87_F1_ACCEPTED)
       ++accepted;
 
-  /* The property: every correct peer accepts, despite early accepters
+  /* The property: every correct process accepts, despite early accepters
    * having retired INITIAL/ECHO mid-run. */
-  check("BPR large-n: all n peers ACCEPT under heterogeneous loss",
+  check("BPR large-n: all n processes ACCEPT under heterogeneous loss",
         accepted == LN_N);
   /* Witness that the staggered regime was actually exercised -- when the
    * first accept landed, the rest were still behind (else the test would
@@ -4252,43 +4252,43 @@ testBprLargeN(
 
 
 /*************************************************************************/
-/*  Fig 1 array Pump tests                                               */
+/*  Fig 1 array Retry tests                                               */
 /*                                                                       */
-/*  Cover bracha87PumpInit, bracha87Fig1PumpStep,                        */
-/*  bracha87Fig1CommittedCount.  Pin the cursor walk over a caller-      */
-/*  supplied array, sparse-slot skipping, and multi-act emission per     */
+/*  Cover bracha87RetryInit, bracha87Fig1RetryStep,                        */
+/*  bracha87Fig1SentCount.  Pin the cursor walk over a caller-      */
+/*  supplied array, sparse-slot skipping, and multi-act output per     */
 /*  visited instance.                                                    */
 /*************************************************************************/
 
 static void
-testFig1ArrayPump(
+testFig1ArrayRetry(
   void
 ){
-  struct bracha87Pump pump;
+  struct bracha87Retry retry;
   struct bracha87Fig1 *inst[5];
   struct bracha87Fig1 *array[5];
-  struct bracha87Fig1Act out[BRACHA87_FIG1_PUMP_MAX_ACTS];
+  struct bracha87Fig1Act out[BRACHA87_FIG1_RETRY_MAX_ACTS];
   unsigned long sz;
   unsigned int n;
   unsigned int i;
-  unsigned int seenOrigin;
+  unsigned int seenInitiator;
   unsigned int seenEchoed;
   unsigned int sweep;
   unsigned char val[VLEN];
   unsigned char tmpOut[3];
 
-  printf("\n  Fig1 array Pump tests:\n");
+  printf("\n  Fig1 array Retry tests:\n");
 
-  memcpy(val, "PUMP", VLEN);
+  memcpy(val, "RETRY", VLEN);
   sz = bracha87Fig1Sz(3, VLEN - 1);
 
   /*
-   * PumpInit defensiveness: NULL is a no-op; a real cursor is zeroed.
+   * RetryInit defensiveness: NULL is a no-op; a real cursor is zeroed.
    */
-  bracha87PumpInit(0);
-  bracha87PumpInit(&pump);
-  check("Fig1Pump: init pos=0", pump.pos == 0);
-  check("Fig1Pump: init sweepActs=0", pump.sweepActs == 0);
+  bracha87RetryInit(0);
+  bracha87RetryInit(&retry);
+  check("Fig1Retry: init pos=0", retry.pos == 0);
+  check("Fig1Retry: init sweepActs=0", retry.sweepActs == 0);
 
   /*
    * Defensive: NULL array, count=0, NULL out, undersized outCap all
@@ -4296,22 +4296,22 @@ testFig1ArrayPump(
    */
   for (i = 0; i < 5; ++i)
     array[i] = 0;
-  n = bracha87Fig1PumpStep(0, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
-  check("Fig1Pump: NULL instances -> 0", n == 0);
-  n = bracha87Fig1PumpStep(array, 0, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
-  check("Fig1Pump: count=0 -> 0", n == 0);
-  n = bracha87Fig1PumpStep(array, 5, 0, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
-  check("Fig1Pump: NULL pump -> 0", n == 0);
-  n = bracha87Fig1PumpStep(array, 5, &pump, 0, BRACHA87_FIG1_PUMP_MAX_ACTS);
-  check("Fig1Pump: NULL out -> 0", n == 0);
-  n = bracha87Fig1PumpStep(array, 5, &pump, out, 1);
-  check("Fig1Pump: undersized outCap -> 0", n == 0);
+  n = bracha87Fig1RetryStep(0, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  check("Fig1Retry: NULL instances -> 0", n == 0);
+  n = bracha87Fig1RetryStep(array, 0, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  check("Fig1Retry: count=0 -> 0", n == 0);
+  n = bracha87Fig1RetryStep(array, 5, 0, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  check("Fig1Retry: NULL retry -> 0", n == 0);
+  n = bracha87Fig1RetryStep(array, 5, &retry, 0, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  check("Fig1Retry: NULL out -> 0", n == 0);
+  n = bracha87Fig1RetryStep(array, 5, &retry, out, 1);
+  check("Fig1Retry: undersized outCap -> 0", n == 0);
 
-  check("Fig1Pump: NULL array CommittedCount=0",
-        bracha87Fig1CommittedCount(0, 5) == 0);
+  check("Fig1Retry: NULL array SentCount=0",
+        bracha87Fig1SentCount(0, 5) == 0);
 
   /*
-   * Allocate 5 fresh instances; nothing committed.  Full sweep emits
+   * Allocate 5 fresh instances; nothing sent.  Full sweep outputs
    * 0 — pre-broadcast / fully-shutdown signal, NOT a per-tick exit
    * marker.
    */
@@ -4320,28 +4320,28 @@ testFig1ArrayPump(
     bracha87Fig1Init(inst[i], 3, 1, VLEN - 1);
     array[i] = inst[i];
   }
-  check("Fig1Pump: fresh array CommittedCount=0",
-        bracha87Fig1CommittedCount(array, 5) == 0);
-  bracha87PumpInit(&pump);
-  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
-  check("Fig1Pump: idle sweep returns 0", n == 0);
+  check("Fig1Retry: fresh array SentCount=0",
+        bracha87Fig1SentCount(array, 5) == 0);
+  bracha87RetryInit(&retry);
+  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  check("Fig1Retry: idle sweep returns 0", n == 0);
 
   /*
-   * Mark inst[2] as origin: one committed instance.  Pump finds it,
+   * Mark inst[2] as initiator: one sent instance.  Retry finds it,
    * tags idx=2, action INITIAL_ALL, value pointer matches.
    */
-  bracha87Fig1Origin(inst[2], val);
-  check("Fig1Pump: 1 committed",
-        bracha87Fig1CommittedCount(array, 5) == 1);
+  bracha87Fig1Initiator(inst[2], val);
+  check("Fig1Retry: 1 sent",
+        bracha87Fig1SentCount(array, 5) == 1);
 
-  bracha87PumpInit(&pump);
-  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
-  check("Fig1Pump: origin -> 1 act", n == 1);
-  check("Fig1Pump: act INITIAL_ALL",
+  bracha87RetryInit(&retry);
+  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  check("Fig1Retry: initiator -> 1 act", n == 1);
+  check("Fig1Retry: act INITIAL_ALL",
         n >= 1 && out[0].act == BRACHA87_INITIAL_ALL);
-  check("Fig1Pump: idx=2",
+  check("Fig1Retry: idx=2",
         n >= 1 && out[0].idx == 2);
-  check("Fig1Pump: value pointer set + matches",
+  check("Fig1Retry: value pointer set + matches",
         n >= 1 && out[0].value
          && memcmp(out[0].value, val, VLEN) == 0);
 
@@ -4349,80 +4349,80 @@ testFig1ArrayPump(
    * Repeat call wraps and re-finds inst[2].  Cursor is monotone within
    * a sweep; a fresh sweep starts when pos exhausts count.
    */
-  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
-  check("Fig1Pump: wrap revisits inst[2]",
+  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  check("Fig1Retry: wrap revisits inst[2]",
         n == 1 && out[0].idx == 2);
 
   /*
-   * Drive inst[1] through Rule 1 (INITIAL -> ECHOED).  CommittedCount
+   * Drive inst[1] through Rule 1 (INITIAL -> ECHOED).  SentCount
    * climbs to 2; a fresh-cursor sweep visits inst[1] before inst[2]
    * (pos walks forward in array order).
    */
   bracha87Fig1Input(inst[1], BRACHA87_INITIAL, 0, val, tmpOut);
-  check("Fig1Pump: 2 committed",
-        bracha87Fig1CommittedCount(array, 5) == 2);
+  check("Fig1Retry: 2 sent",
+        bracha87Fig1SentCount(array, 5) == 2);
 
-  bracha87PumpInit(&pump);
-  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
-  check("Fig1Pump: visits inst[1] first (ECHOED)",
+  bracha87RetryInit(&retry);
+  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  check("Fig1Retry: visits inst[1] first (ECHOED)",
         n == 1 && out[0].idx == 1
          && out[0].act == BRACHA87_ECHO_ALL);
-  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
-  check("Fig1Pump: visits inst[2] next (ORIGIN)",
+  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  check("Fig1Retry: visits inst[2] next (INITIATOR)",
         n == 1 && out[0].idx == 2
          && out[0].act == BRACHA87_INITIAL_ALL);
 
   /*
    * Sparse array: a NULL slot is silently skipped.  Replace inst[3]
-   * with NULL; sweep still finds the 2 committed instances, still 2
-   * by CommittedCount (NULL not counted).
+   * with NULL; sweep still finds the 2 sent instances, still 2
+   * by SentCount (NULL not counted).
    */
   array[3] = 0;
-  check("Fig1Pump sparse: CommittedCount unchanged",
-        bracha87Fig1CommittedCount(array, 5) == 2);
-  bracha87PumpInit(&pump);
-  seenOrigin = 0;
+  check("Fig1Retry sparse: SentCount unchanged",
+        bracha87Fig1SentCount(array, 5) == 2);
+  bracha87RetryInit(&retry);
+  seenInitiator = 0;
   seenEchoed = 0;
   for (sweep = 0; sweep < 5; ++sweep) {
-    n = bracha87Fig1PumpStep(array, 5, &pump, out,
-                             BRACHA87_FIG1_PUMP_MAX_ACTS);
+    n = bracha87Fig1RetryStep(array, 5, &retry, out,
+                             BRACHA87_FIG1_RETRY_MAX_ACTS);
     if (!n)
       break;
     if (out[0].idx == 1)
       ++seenEchoed;
     else if (out[0].idx == 2)
-      ++seenOrigin;
+      ++seenInitiator;
   }
-  check("Fig1Pump sparse: visits inst[1] (ECHOED)", seenEchoed >= 1);
-  check("Fig1Pump sparse: visits inst[2] (ORIGIN)", seenOrigin >= 1);
+  check("Fig1Retry sparse: visits inst[1] (ECHOED)", seenEchoed >= 1);
+  check("Fig1Retry sparse: visits inst[2] (INITIATOR)", seenInitiator >= 1);
   array[3] = inst[3];
 
   /*
    * Drive inst[0] to RDSENT (Rule 5 via 2 readys after Rule 1):
    * sweep visits inst[0] first, returns 2 actions (ECHO_ALL, READY_ALL)
-   * in a single PumpStep call.  Confirms outCap >= 3 paths through
+   * in a single RetryStep call.  Confirms outCap >= 3 paths through
    * fan-out logic.
    */
   bracha87Fig1Input(inst[0], BRACHA87_INITIAL, 0, val, tmpOut);
   bracha87Fig1Input(inst[0], BRACHA87_READY, 1, val, tmpOut);
   bracha87Fig1Input(inst[0], BRACHA87_READY, 2, val, tmpOut);
-  check("Fig1Pump rdSent setup: RDSENT",
+  check("Fig1Retry rdSent setup: RDSENT",
         (inst[0]->flags & BRACHA87_F1_RDSENT));
 
-  bracha87PumpInit(&pump);
-  n = bracha87Fig1PumpStep(array, 5, &pump, out, BRACHA87_FIG1_PUMP_MAX_ACTS);
-  check("Fig1Pump rdSent: 2 acts at inst[0]",
+  bracha87RetryInit(&retry);
+  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  check("Fig1Retry rdSent: 2 acts at inst[0]",
         n == 2 && out[0].idx == 0 && out[1].idx == 0);
-  check("Fig1Pump rdSent: ECHO_ALL first",
+  check("Fig1Retry rdSent: ECHO_ALL first",
         n >= 1 && out[0].act == BRACHA87_ECHO_ALL);
-  check("Fig1Pump rdSent: READY_ALL second",
+  check("Fig1Retry rdSent: READY_ALL second",
         n >= 2 && out[1].act == BRACHA87_READY_ALL);
-  check("Fig1Pump rdSent: shared value pointer",
+  check("Fig1Retry rdSent: shared value pointer",
         n >= 2 && out[0].value == out[1].value);
 
   for (i = 0; i < 5; ++i)
     free(inst[i]);
-  printf("    idle / origin / cascade / sparse / rdSent: ok\n");
+  printf("    idle / initiator / cascade / sparse / rdSent: ok\n");
 }
 
 
@@ -4447,7 +4447,7 @@ main(
   /*
    * Figure 1 — Reliable Broadcast
    *
-   * All-honest tests: every peer should accept.
+   * All-honest tests: every process should accept.
    */
   memcpy(val, "TEST", VLEN);
 
@@ -4500,31 +4500,31 @@ main(
   check("Fig1 n=8 t=2", a == 8);
 
   /*
-   * Silent peer tests: one peer's outbound messages are dropped.
-   * All peers should still accept (Lemma 3/4).
+   * Silent process tests: one process's outbound messages are dropped.
+   * All processes should still accept (Lemma 3/4).
    */
-  printf("\n  Silent peer tests:\n");
+  printf("\n  Silent process tests:\n");
 
-  /* n=4 t=1, peer 3 silent */
+  /* n=4 t=1, process 3 silent */
   a = simFig1(4, 1, 0, val, 1u << 3);
   printf("  n=4  t=1 1-silent : accept %u/4\n", a);
   check("Fig1 n=4 t=1 1-silent", a == 4);
 
-  /* n=7 t=2, peers 5,6 silent */
+  /* n=7 t=2, processes 5,6 silent */
   a = simFig1(7, 2, 0, val, (1u << 5) | (1u << 6));
   printf("  n=7  t=2 2-silent : accept %u/7\n", a);
   check("Fig1 n=7 t=2 2-silent", a == 7);
 
-  /* n=10 t=3, peers 7,8,9 silent */
+  /* n=10 t=3, processes 7,8,9 silent */
   a = simFig1(10, 3, 0, val, (1u << 7) | (1u << 8) | (1u << 9));
   printf("  n=10 t=3 3-silent : accept %u/10\n", a);
   check("Fig1 n=10 t=3 3-silent", a == 10);
 
   /*
-   * Equivocating origin tests (Byzantine origin sends different values).
+   * Equivocating initiator tests (Byzantine initiator sends different values).
    * Lemma 2: if any two correct processes accept, they accept the same value.
    */
-  printf("\n  Equivocating origin tests:\n");
+  printf("\n  Equivocating initiator tests:\n");
 
   {
     unsigned char val1[VLEN], val2[VLEN], aval[VLEN];
@@ -4532,20 +4532,20 @@ main(
     memcpy(val1, "AAAA", VLEN);
     memcpy(val2, "BBBB", VLEN);
 
-    /* n=4 t=1, origin=3 (Byzantine), split at 2: peers 0,1 get val1; 2,3 get val2 */
+    /* n=4 t=1, initiator=3 (Byzantine), split at 2: processes 0,1 get val1; 2,3 get val2 */
     a = simFig1Equivoc(4, 1, 3, val1, val2, 2, aval);
     printf("  n=4  t=1 equivoc  : accept %u/4", a);
     if (a > 0) printf(" value=%c%c%c%c", aval[0], aval[1], aval[2], aval[3]);
     printf("\n");
     /* With equivocation, some or all may accept, but Lemma 2 holds */
 
-    /* n=7 t=2, origin=6, split at 3 */
+    /* n=7 t=2, initiator=6, split at 3 */
     a = simFig1Equivoc(7, 2, 6, val1, val2, 3, aval);
     printf("  n=7  t=2 equivoc  : accept %u/7", a);
     if (a > 0) printf(" value=%c%c%c%c", aval[0], aval[1], aval[2], aval[3]);
     printf("\n");
 
-    /* n=10 t=3, origin=9, split at 5 */
+    /* n=10 t=3, initiator=9, split at 5 */
     a = simFig1Equivoc(10, 3, 9, val1, val2, 5, aval);
     printf("  n=10 t=3 equivoc  : accept %u/10", a);
     if (a > 0) printf(" value=%c%c%c%c", aval[0], aval[1], aval[2], aval[3]);
@@ -4568,7 +4568,7 @@ main(
   /*
    * Figure 4 — Consensus
    *
-   * All-honest, all peers see all n messages per round.
+   * All-honest, all processes see all n messages per round.
    */
   printf("\nFigure 4 — Consensus\n");
 
@@ -4716,10 +4716,10 @@ main(
   testBprLargeN();
 
   /*
-   * Fig 1 array Pump coverage: bracha87PumpInit, Fig 1 array pump,
-   * bracha87Fig1CommittedCount.
+   * Fig 1 array Retry coverage: bracha87RetryInit, Fig 1 array retry,
+   * bracha87Fig1SentCount.
    */
-  testFig1ArrayPump();
+  testFig1ArrayRetry();
 
   printf("\n===================\n");
   if (Fail)

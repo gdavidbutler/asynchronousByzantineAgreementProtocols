@@ -10,17 +10,17 @@ This is the only known implementation of Bracha 1987 as composable pure state ma
 
 Each module boundary matches the paper exactly, so the paper's proofs apply per-module: Lemmas 1-4 to Fig 1, Lemmas 5-7 to Fig 2/3, Lemmas 9-10 and Theorems 1-2 to Fig 4.
 
-The `bkr94acs` module composes these figures into multi-value agreement: N peers propose arbitrary values, and all honest peers agree on the same common subset of at least n-t proposals. This is Ben-Or/Kelmer/Rabin 1994 Section 4 Figure 3 (Protocol Agreement[Q]).
+The `bkr94acs` module composes these figures into multi-value agreement: N processes A-Cast arbitrary values, and all honest processes agree on the same common subset of at least n-t A-Casts. This is Ben-Or/Kelmer/Rabin 1994 Section 4 Figure 3 (Protocol Agreement[Q]).
 
-This README serves two audiences. **If you are integrating the library**, the load-bearing sections are *When to Use What*, *System Model*, *API Overview*, *Examples*, and *Deployment Notes*. **If you are auditing the implementation or porting it to another language**, additionally read *Design Rationale*, *Architecture*, *Bracha Phase Re-emitter*, *Test Coverage*, *Correctness Audit*, *Implementation Notes*, and *Re-Implementing in Another Language*.
+This README serves two audiences. **If you are integrating the library**, the load-bearing sections are *When to Use What*, *System Model*, *API Overview*, *Examples*, and *Deployment Notes*. **If you are auditing the implementation or porting it to another language**, additionally read *Design Rationale*, *Architecture*, *Bracha Phase Retry*, *Test Coverage*, *Correctness Audit*, *Implementation Notes*, and *Re-Implementing in Another Language*.
 
 ## When to Use What
 
 This library provides two application-facing primitives. Pick by the shape of your problem.
 
-**Reliable broadcast — `bracha87Fig1`.** One designated sender announces a value; all correct peers either accept the same value or none do, under up to `t` Byzantine faults at `n > 3t`. Use when you have a known originator per message: configuration distribution from a designated source, single-writer state replication, one-shot dissemination of a signed announcement, or as a reliable-channel building block inside your own outer protocol. See `example/bracha87Fig1.c`.
+**Reliable broadcast — `bracha87Fig1`.** One designated sender announces a value; all correct processes either accept the same value or none do, under up to `t` Byzantine faults at `n > 3t`. Use when you have a known initiator per message: configuration distribution from a designated source, single-writer state replication, one-shot dissemination of a signed announcement, or as a reliable-channel building block inside your own outer protocol. See `example/bracha87Fig1.c`.
 
-**Common subset — `bkr94acs`.** N peers each propose a value; all correct peers agree on the same common subset of at least `n-t` proposals. Use when you need leaderless agreement on a batch of contributions: HoneyBadger-style atomic broadcast batching, MPC input bundling, distributed candidate selection — anything shaped as "agree on the set" rather than "agree on a single value." See `example/bkr94acs.c`.
+**Common subset — `bkr94acs`.** N processes each A-Cast a value; all correct processes agree on the same common subset of at least `n-t` A-Casts. Use when you need agreement on a batch of contributions among symmetric processes: atomic-broadcast batching, MPC input bundling, distributed candidate selection — anything shaped as "agree on the set" rather than "agree on a single value." See `example/bkr94acs.c`.
 
 Fig 3 (VALID-set framework) and Fig 4 (binary Byzantine agreement) are exposed for completeness but exist primarily as internal mechanism feeding `bkr94acs`; raw single-bit binary BA has no realistic standalone caller (the seven-year gap between Bracha 1987 and BKR94 1994 is exactly that evidence).
 
@@ -30,7 +30,7 @@ Gabriel Bracha, "Asynchronous Byzantine Agreement Protocols," *Information and C
 
 Michael Ben-Or, Boaz Kelmer, Tal Rabin, "Asynchronous Secure Computations with Optimal Resilience (Extended Abstract)," PODC '94, pages 183-192. Section 4 Figure 3 (Protocol Agreement[Q]) is implemented in `bkr94acs.[hc]`.
 
-J. H. Saltzer, D. P. Reed, D. D. Clark, "End-To-End Arguments in System Design," *ACM Transactions on Computer Systems* 2(4), 277-288 (1984). Cited as the design rationale for placing the BPR (Bracha Phase Re-emitter) pump at the protocol endpoint rather than in a lower transport layer.
+J. H. Saltzer, D. P. Reed, D. D. Clark, "End-To-End Arguments in System Design," *ACM Transactions on Computer Systems* 2(4), 277-288 (1984). Cited as the design rationale for placing the BPR (Bracha Phase Retry) retry at the protocol endpoint rather than in a lower transport layer.
 
 `Bracha87.txt` is a companion summary of the Bracha 1987 paper: figures, rules, VALID set definitions, all lemma/theorem statements, and a mapping from each lemma to the test that verifies it.
 
@@ -52,25 +52,25 @@ Bracha's three-phase counting-threshold mechanism (initial / echo / ready) is th
 
 ### Why BKR94 for asynchronous common subset
 
-The agreement primitive we needed is multi-value agreement on a common subset of `n-t` proposals, asynchronous, Byzantine-resilient, with no leader and no view-change machinery.
+The agreement primitive we needed is multi-value agreement on a common subset of `n-t` A-Casts, asynchronous, Byzantine-resilient, with every process symmetric — no process plays a distinguished role, so no machinery exists to elect, follow, or replace one.
 
-BKR94 alone is the smallest piece that does ACS with no setup, no leader, and no threshold cryptography — `n` Bracha Fig 1 instances feed `n` binary agreements, and the step-2 trigger ("`n-t` BAs decided 1, vote 0 in the rest") closes it out. We deliberately stopped at ACS: BKR94 itself continues to ASC (asynchronous secure computation, the MPC layer), but ASC has no caller in the stack we are building, and pulling it in would require a private-channels mesh that ACS itself cannot bootstrap.
+BKR94 alone is the smallest piece that does ACS with no setup, no distinguished process, and no threshold cryptography — `n` Bracha Fig 1 instances feed `n` binary agreements, and the step-2 trigger ("`n-t` BAs decided 1, enter 0 in the rest") closes it out. We deliberately stopped at ACS: BKR94 itself continues to ASC (asynchronous secure computation, the MPC layer), but ASC has no caller in the stack we are building, and pulling it in would require a private-channels mesh that ACS itself cannot bootstrap.
 
 ### Why Saltzer-Reed-Clark 1984 for BPR placement
 
 Bracha's correctness proofs presume reliable point-to-point channels between correct processes. Over fair-loss datagrams that assumption does not hold, and something must close the gap.
 
-The end-to-end argument (Saltzer/Reed/Clark 1984) is exactly the principle that resolves this: the reliability function should live at the layer that has the complete information needed to perform it correctly. For our reliability function — "deliver INITIAL/ECHO/READY despite a fair-loss network until the protocol no longer owes them" — the complete information lives in the Bracha state machine itself (`F1_ORIGIN`, `F1_ECHOED`, `F1_RDSENT`, plus the BKR per-origin BA-decided byte). BPR is the smallest re-emitter that runs over exactly that state, with no parallel data structure and no timing predicate. Lower-layer wire optimizations (RSEC, batching, inter-shard delay) remain admissible under SRC84's performance carve-outs (P1, P2) — they tune retry frequency without taking on the correctness obligation.
+The end-to-end argument (Saltzer/Reed/Clark 1984) is exactly the principle that resolves this: the reliability function should live at the layer that has the complete information needed to perform it correctly. For our reliability function — "deliver INITIAL/ECHO/READY despite a fair-loss network until the protocol no longer owes them" — the complete information lives in the Bracha state machine itself (`F1_INITIATOR`, `F1_ECHOED`, `F1_RDSENT`, plus the BKR per-process BA-decided byte). BPR is the smallest retry that runs over exactly that state, with no parallel data structure and no timing predicate. Lower-layer wire optimizations (RSEC, batching, inter-shard delay) remain admissible under SRC84's performance carve-outs (P1, P2) — they tune retry frequency without taking on the correctness obligation.
 
 ### What we deliberately did not build
 
 For comparison shoppers: the following are absent by design, not by oversight.
 
-- **No DKG, no trusted setup, no threshold signatures, no pairing-based crypto, no verifiable random beacon.** Setup is one symmetric authentication credential per peer pair.
+- **No DKG, no trusted setup, no threshold signatures, no pairing-based crypto, no verifiable random beacon.** Setup is one symmetric authentication credential per process pair.
 - **No bundled coin source.** The library is coin-agnostic — both `bracha87Fig4Init` and `bkr94acsInit` take a `bracha87CoinFn` callback that the caller supplies. The bundled examples use a deterministic alternating coin (demo only); adversarial deployments are expected to supply their own. See "Coin choice — caller responsibility" in Deployment Notes.
 - **No transaction layer, no atomic broadcast wrapper, no application semantics.** BKR94 ACS produces a sorted subset of `n-t` arbitrary byte strings; what those bytes mean is the caller's choice.
 - **No partial-synchrony assumption.** Correctness (safety and termination) holds under arbitrary asynchrony.
-- **No leader, no view change, no pacemaker.** All peers are symmetric.
+- **All processes are symmetric.** No distinguished role, no machinery to replace one, no liveness scheduler.
 - **No dynamic allocation, no I/O, no threads.** The library is a pure state machine; the caller provides memory and a transport.
 
 ---
@@ -83,15 +83,15 @@ The paper's proofs depend on three assumptions about the communication system (S
 
 These assumptions are not optional — they are load-bearing requirements of every lemma and theorem in the paper. This library is a pure state machine with no I/O. **The caller is responsible for building a transport layer that satisfies them:**
 
-1. **Eventual delivery under fair-loss.** Every message sent between correct processes must eventually arrive — but messages may be silently dropped any finite number of times in transit. The Bracha Phase Re-emitter (BPR, see below) closes the gap from "fair-loss point-to-point" to "reliable delivery" intrinsically, so the transport need not provide retransmission of its own; the caller's pump tick is what drives BPR's replays. Per-message reliability is no longer the transport's job.
+1. **Eventual delivery under fair-loss.** Every message sent between correct processes must eventually arrive — but messages may be silently dropped any finite number of times in transit. The Bracha Phase Retry (BPR, see below) closes the gap from "fair-loss point-to-point" to "reliable delivery" intrinsically, so the transport need not provide retransmission of its own; the caller's retry tick is what drives BPR's retries. Per-message reliability is no longer the transport's job.
 
 2. **No message fabrication.** The transport must not generate messages that were never sent. A Byzantine process may send arbitrary content, but the transport itself must not invent messages. In practice this means authenticated channels.
 
 3. **Sender identification.** The receiver must know which process sent each message, and a Byzantine process must not be able to impersonate a correct one. In practice this means authentication bound to process identity.
 
-The protocol's correctness (both safety and termination) does not depend on any timing assumption — that is the asynchronous-BFT model. Pump cadence, termination-policy windows, and any other timing parameters in a deployment are operator-tuning, not protocol invariants.
+The protocol's correctness (both safety and termination) does not depend on any timing assumption — that is the asynchronous-BFT model. Retry cadence, termination-policy windows, and any other timing parameters in a deployment are operator-tuning, not protocol invariants.
 
-The System Model deliberately does **not** require: a distributed key generation (DKG), a trusted setup, threshold signatures, pairing-based crypto, or a verifiable random beacon. Authenticated point-to-point channels (assumption 3 above) suffice — provisioned by whatever mechanism the deployment prefers (HMAC over a pre-shared key, TLS, mutual SSH, Noise, etc.). Setup cost is one symmetric authentication credential per peer pair.
+The System Model deliberately does **not** require: a distributed key generation (DKG), a trusted setup, threshold signatures, pairing-based crypto, or a verifiable random beacon. Authenticated point-to-point channels (assumption 3 above) suffice — provisioned by whatever mechanism the deployment prefers (HMAC over a pre-shared key, TLS, mutual SSH, Noise, etc.). Setup cost is one symmetric authentication credential per process pair.
 
 ## Architecture
 
@@ -104,14 +104,14 @@ message -> Fig1(n,t) -> accept -> Fig3(N) -> round complete -> Fig4(coin) -> dec
 ### BKR94 Asynchronous Common Subset (bkr94acs)
 
 ```
-N proposals -> N Fig1(n,t,vLen) -> accept -> vote 1 in BA
-                                   n-t BAs decided 1 -> vote 0 in remaining BAs
+N A-Casts -> N Fig1(n,t,vLen) -> accept -> enter 1 in BA
+                                   n-t BAs decided 1 -> enter 0 in remaining BAs
                                    N BA instances -> Fig1+Fig3+Fig4 each -> common subset
 ```
 
 ### Figure 1 -- Reliable Broadcast Primitive
 
-The canonical Bracha reliable broadcast (RBC) — three-phase initial/echo/ready with `n > 3t`, no signatures, no setup. One instance per (sender, round) pair. Implements the six rules from the paper's table: incoming initial/echo/ready messages trigger echo, ready, and accept actions based on counting thresholds. Per-peer echo/ready values are stored (not just counts) so `echo_count[v]` is computed correctly for any v.
+The canonical Bracha reliable broadcast (RBC) — three-phase initial/echo/ready with `n > 3t`, no signatures, no setup. One instance per (sender, round) pair. Implements the six rules from the paper's table: incoming initial/echo/ready messages trigger echo, ready, and accept actions based on counting thresholds. Per-process echo/ready values are stored (not just counts) so `echo_count[v]` is computed correctly for any v.
 
 ### Figure 2 -- Abstract Protocol Round
 
@@ -135,102 +135,102 @@ Decided processes continue participating so others can reach consensus. Bracha's
 
 ### bkr94acs -- BKR94 Asynchronous Common Subset
 
-Composes Bracha87 Fig 1 and Fig 4 into multi-value agreement, implementing Ben-Or/Kelmer/Rabin 1994 Section 4 Figure 3 (Protocol Agreement[Q]). BKR94 ACS is the consensus core of HoneyBadgerBFT-family asynchronous BFT systems; this implementation provides it as a standalone primitive without bundling a transaction layer or a transport. See `BKR94ACS.txt` for the line-by-line extract used as the implementation's reference.
+Composes Bracha87 Fig 1 and Fig 4 into multi-value agreement, implementing Ben-Or/Kelmer/Rabin 1994 Section 4 Figure 3 (Protocol Agreement[Q]). BKR94 ACS is provided here as a standalone primitive without bundling a transaction layer or a transport. See `BKR94ACS.txt` for the line-by-line extract used as the implementation's reference.
 
-Each of N peers proposes an arbitrary value (up to vLen+1 bytes). N Bracha87 Fig 1 instances reliably broadcast the proposals. N Bracha87 Fig 4 instances run binary consensus on "include this origin?" When a peer accepts origin j's proposal via Fig 1, it votes 1 in BA_j. When n-t BAs have *decided 1*, it votes 0 for every BA in which it has not yet voted. The common subset is {j : BA_j decided 1}, guaranteed to contain at least n-t origins.
+Each of N processes A-Casts an arbitrary value (up to vLen+1 bytes). N Bracha87 Fig 1 instances reliably broadcast the A-Casts. N Bracha87 Fig 4 instances run binary consensus on "include this process?" When a process accepts process j's A-Cast via Fig 1, it enters 1 in BA_j. When n-t BAs have *decided 1*, it enters 0 for every BA in which it has not yet entered. The common subset is {j : BA_j decided 1}, guaranteed to contain at least n-t processes.
 
 The step-2 trigger is "n-t BAs decided with output 1," not "n-t Fig 1 ACCEPTs." The two coincide in benign runs but diverge under asynchrony or Byzantine scheduling, and only the decide-1 trigger satisfies Part A case (i) of the BKR94 Lemma 2 proof.
 
-Two message classes flow on the network: proposal messages (Fig 1 carrying arbitrary values) and consensus messages (Fig 1 carrying binary values for per-origin BA instances). Consensus messages are routed internally by (origin, round, broadcaster) -- the broadcaster identifies whose Fig 1 broadcast within a consensus round, distinct from the message sender.
+Two message classes flow on the network: A-Cast messages (Fig 1 carrying arbitrary values) and BA messages (Fig 1 carrying binary values for per-process BA instances). BA messages are routed internally by (process, round, initiator) -- the initiator identifies whose Fig 1 broadcast within a BA round, distinct from the message sender.
 
 Each such message's per-message discriminator -- the Bracha87 type, the class, and (for a consensus message) the binary value plus decision flag -- is valued so it packs bit-disjoint into a single byte, letting an application's wire framer carry the whole thing in one byte and a consensus message carry no payload at all. This is a value-choice the headers guarantee, not a serialization the library performs: the library never puts bytes on a wire, and consumes class structurally (by which entry function the caller invokes) rather than as a stored value. It matters because ACS is message-dense -- N reliable broadcasts plus N binary BAs, each O(phases) of O(n^2) Fig 1 traffic -- so a byte saved per message compounds across the run. The canonical bit layout is documented in `bkr94acs.h`; the example framer,`example/bkr94acs.c`, follows it.
 
-The bkr94acs state machine knows its own peer index (self), which the bracha87 figures do not need. This is because bkr94acs manages internal routing: when Fig 4 says BROADCAST, bkr94acs must tag the outgoing INITIAL with self as the broadcaster.
+The bkr94acs state machine knows its own process index (self), which the bracha87 figures do not need. This is because bkr94acs manages internal routing: when Fig 4 says BROADCAST, bkr94acs must tag the outgoing INITIAL with self as the initiator.
 
-## Bracha Phase Re-emitter (BPR)
+## Bracha Phase Retry (BPR)
 
-Bracha's correctness proofs presume reliable point-to-point channels between correct processes. Over fair-loss datagrams that assumption is not satisfied. **BPR is the smallest rule set that, joined with the paper rules, restores eventual delivery — replacing the application-layer ledger entirely.**
+Bracha's correctness proofs presume reliable point-to-point channels between correct processes. Over fair-loss datagrams that assumption is not satisfied. **BPR is the smallest rule set that, joined with the paper rules, restores eventual delivery — replacing the application-layer retry bookkeeping entirely.**
 
 ### Why BPR exists
 
-BPR is the end-to-end argument (Saltzer, Reed, Clark 1984 — see `SRC84.txt`) applied to Bracha. The reliability function — "deliver INITIAL/ECHO/READY despite a fair-loss network" — depends on knowledge that lives only at the Bracha state-machine endpoint (the `F1_ORIGIN`/`F1_ECHOED`/`F1_RDSENT` flags and the BKR per-origin BA-decided state). A lower link layer cannot decide when to retire without being told by Bracha — i.e., without folding the function back into the endpoint anyway — so the principled placement is at the endpoint itself.
+BPR is the end-to-end argument (Saltzer, Reed, Clark 1984 — see `SRC84.txt`) applied to Bracha. The reliability function — "deliver INITIAL/ECHO/READY despite a fair-loss network" — depends on knowledge that lives only at the Bracha state-machine endpoint (the `F1_INITIATOR`/`F1_ECHOED`/`F1_RDSENT` flags and the BKR per-process BA-decided state). A lower link layer cannot decide when to retire without being told by Bracha — i.e., without folding the function back into the endpoint anyway — so the principled placement is at the endpoint itself.
 
-Without BPR, an application using this library would need its own ledger to track per-record destinations, per-peer evidence of receipt, and a cursor-driven retransmit pump — the standard "deployment-layer reliability" pattern. Three properties make BPR a better fit:
+Without BPR, an application using this library would need its own bookkeeping to track per-record destinations, per-process evidence of receipt, and a cursor-driven retransmit retry — the standard "deployment-layer reliability" pattern. Three properties make BPR a better fit:
 
-1. **All replay state is already in the protocol.** The committed-action flags (`F1_ECHOED`, `F1_RDSENT`) plus a one-bit `F1_ORIGIN` flag (set by `bracha87Fig1Origin`) encode everything needed to decide which actions to re-emit. No parallel data structure.
-2. **The pump is event-driven, not wall-clock-driven.** The application's pump tick is the only event; no `pumpNs` floor, no per-record evidence tracking, no destination masks.
-3. **Asynchrony is preserved.** No timing predicate appears anywhere in the protocol; the application's tick *is* the event, and silent ticks emit nothing.
+1. **All retry state is already in the protocol.** The sent-action flags (`F1_ECHOED`, `F1_RDSENT`) plus a one-bit `F1_INITIATOR` flag (set by `bracha87Fig1Initiator`) encode everything needed to decide which actions to retry. No parallel data structure.
+2. **The retry is event-driven, not wall-clock-driven.** The application's retry tick is the only event; no `retryNs` floor, no per-record evidence tracking, no destination masks.
+3. **Asynchrony is preserved.** No timing predicate appears anywhere in the protocol; the application's tick *is* the event, and silent ticks output nothing.
 
-### Replay rules
+### Retry rules
 
-Three replay outputs, each gated on a committed-state flag and retired at the soonest point it is provably no longer owed to *any* correct peer. INITIAL and ECHO are bootstrap-only — they exist solely to drive the system to the point where `t+1` correct peers have sent READY; past that point Bracha's ready-amplification (`rdCnt >= t+1 → send ready`) is self-sustaining and consumes neither. `ACCEPTED` is the local witness that this point has passed (≥ `t+1` of the `2t+1` readys are correct), so it retires INITIAL and ECHO. READY is what that amplification tail consumes, so it never retires on local state — only application abandonment retires it. This is *minimal re-emission*: every unnecessary re-emit harms rather than helps under fair-loss.
+Three retry outputs, each gated on a sent-state flag and retired at the soonest point it is provably no longer owed to *any* correct process. INITIAL and ECHO are bootstrap-only — they exist solely to drive the system to the point where `t+1` correct processes have sent READY; past that point Bracha's ready-amplification (`rdCnt >= t+1 → send ready`) is self-sustaining and consumes neither. `ACCEPTED` is the local witness that this point has passed (≥ `t+1` of the `2t+1` readys are correct), so it retires INITIAL and ECHO. READY is what that amplification tail consumes, so it never retires on local state — only application abandonment retires it. This is *minimal retry*: every unnecessary retry harms rather than helps under fair-loss.
 
-| Replay action | Flag gate | Whole-action retires when | Per-peer suppress mask |
+| Retry action | Flag gate | Whole-action retires when | Per-process suppress mask |
 |---|---|---|---|
-| `BRACHA87_INITIAL_ALL` | `F1_ORIGIN` | `ACCEPTED`, or echo observed from all `n` peers | echoed peers (`ecFrom`) |
-| `BRACHA87_ECHO_ALL` | `F1_ECHOED` | `ACCEPTED` | readied peers (`rdFrom`) |
-| `BRACHA87_READY_ALL` | `F1_RDSENT` | all `n` peers accepted (quiescence), else only application abandonment | accepted peers (`acFrom`) |
+| `BRACHA87_INITIAL_ALL` | `F1_INITIATOR` | `ACCEPTED`, or echo observed from all `n` processes | echoed processes (`ecFrom`) |
+| `BRACHA87_ECHO_ALL` | `F1_ECHOED` | `ACCEPTED` | readied processes (`rdFrom`) |
+| `BRACHA87_READY_ALL` | `F1_RDSENT` | all `n` processes accepted (quiescence), else only application abandonment | accepted processes (`acFrom`) |
 
-Whole-action retire reasoning: INITIAL only induces echoes, so all-echoed leaves nothing to induce; `ACCEPTED` witnesses `t+1` correct readys, after which ready-amplification finishes with neither INITIAL nor ECHO. The *weaker* "stop once we ECHOed locally" gate stays forbidden — at the n=3t+1 boundary the (n+t)/2+1 echo threshold equals the honest count, so a peer that missed the bootstrap can be left one echo short forever, and only the originator breaks it. READY is the amplification carrier and never retires on *local* state (an accepted peer still owes its READY to peers below `2t+1`); the "ACCEPTED → stop replaying READY" optimisation strands slow peers.
+Whole-action retire reasoning: INITIAL only induces echoes, so all-echoed leaves nothing to induce; `ACCEPTED` witnesses `t+1` correct readys, after which ready-amplification finishes with neither INITIAL nor ECHO. The *weaker* "stop once we ECHOed locally" gate stays forbidden — at the n=3t+1 boundary the (n+t)/2+1 echo threshold equals the honest count, so a process that missed the bootstrap can be left one echo short forever, and only the initiator breaks it. READY is the amplification carrier and never retires on *local* state (an accepted process still owes its READY to processes below `2t+1`); the "ACCEPTED → stop retrying READY" optimisation strands slow processes.
 
-### Per-peer suppression (individual-peer refinement)
+### Per-process suppression (individual-process refinement)
 
-The whole-action retires above are all-or-nothing across the `n` recipients. Each replay also carries a **per-peer suppress mask** (`bracha87Fig1Skip`, exposed on `bracha87Fig1Act.skip` / `bkr94acsAct.skip`) naming the recipients that *individually* no longer consume it, so the broadcast drops a fast peer the moment **it** crosses, not when the last peer does. The masks are exactly the protocol's own already-maintained bitmaps — no parallel structure — so this stays inside the BPR/SRC84 framing (the endpoint already holds the knowledge). Each uses the soonest *sound* evidence: INITIAL→echoed (a peer that echoed never echoes again, and INITIAL induces only echoes); ECHO→readied (a readied peer satisfies neither Rule 2 nor Rule 4, and accept consumes readys, not echoes — note *echoed* is too weak here, an echoed-but-not-readied peer is still collecting echoes toward Rule 4); READY→accepted.
+The whole-action retires above are all-or-nothing across the `n` recipients. Each retry also carries a **per-process suppress mask** (`bracha87Fig1Skip`, exposed on `bracha87Fig1Act.skip` / `bkr94acsAct.skip`) naming the recipients that *individually* no longer consume it, so the broadcast drops a fast process the moment **it** crosses, not when the last process does. The masks are exactly the protocol's own already-maintained bitmaps — no parallel structure — so this stays inside the BPR/SRC84 framing (the endpoint already holds the knowledge). Each uses the soonest *sound* evidence: INITIAL→echoed (a process that echoed never echoes again, and INITIAL induces only echoes); ECHO→readied (a readied process satisfies neither Rule 2 nor Rule 4, and accept consumes readys, not echoes — note *echoed* is too weak here, an echoed-but-not-readied process is still collecting echoes toward Rule 4); READY→accepted.
 
-READY is the dominant cost — it is the only class that re-emits to everyone forever — and its per-peer retire point ("the peer has accepted") is wire-silent in base Bracha (no accept message; post-decide READYs are byte-identical to pre-accept ones). The single `BKR94ACS_ACCEPTED` wire bit (bit 4 of the packed consensus byte, valid on any PROPOSAL or CONSENSUS READY) makes it observable: an accepted peer rides the bit on the READY re-emits it is *already* sending, the receiver records it in `acFrom` (`bracha87Fig1PeerAccepted`, routed by `bkr94acs{Proposal,Consensus}Accepted`), and READY to that peer retires. Once every peer's bit is in, READY stops entirely — genuine per-instance quiescence among correct peers, collapsing the never-retired tail the application's abandonment policy would otherwise carry. It is byzantine-safe: a forged ACCEPTED only marks its own sender, so it can retire replay to that liar but never strand a correct laggard (whose bit is set solely by its own true accept); the all-`n` quiescence gate fires only when every correct peer has truly accepted, at which point no peer consumes a ready anywhere. `example/bkr94acs.c` round-trips the bit (egress `.accepted` → bit 4 → ingress `bkr94acs*Accepted`, called after the matching Input so `acFrom` stays a subset of `rdFrom`); `test_bkr94acs_blackbox.c` exercises the same round-trip under loss.
+READY is the dominant cost — it is the only class that retries to everyone forever — and its per-process retire point ("the process has accepted") is wire-silent in base Bracha (no accept message; post-decide READYs are byte-identical to pre-accept ones). The single `BKR94ACS_ACCEPTED` wire bit (bit 4 of the packed consensus byte, valid on any ACAST or BA READY) makes it observable: an accepted process rides the bit on the READY retries it is *already* sending, the receiver records it in `acFrom` (`bracha87Fig1ProcessAccepted`, routed by `bkr94acs{Acast,Ba}Accepted`), and READY to that process retires. Once every process's bit is in, READY stops entirely — genuine per-instance quiescence among correct processes, collapsing the never-retired tail the application's abandonment policy would otherwise carry. It is byzantine-safe: a forged ACCEPTED only marks its own sender, so it can retire our retries to that liar but never strand a correct laggard (whose bit is set solely by its own true accept); the all-`n` quiescence gate fires only when every correct process has truly accepted, at which point no process consumes a ready anywhere. `example/bkr94acs.c` round-trips the bit (egress `.accepted` → bit 4 → ingress `bkr94acs*Accepted`, called after the matching Input so `acFrom` stays a subset of `rdFrom`); `test_bkr94acs_blackbox.c` exercises the same round-trip under loss.
 
-Two of the three (`replay (echo, v)` and `replay (ready, v)`) are captured as DTC sub-tables at the bottom of `bracha87Fig1.dtc`, chaining on existing paper-rule outputs and inputs; their retirement guards (ECHO's `!ACCEPTED`) are applied in C around the dispatch. The third (origin INITIAL replay, with its `!ACCEPTED && echoSenders<n` retirement) is a C early-emit; the design intent is documented in the .dtc's BPR text section. This split follows the "trivial guards stay in C" principle from `decisionTableCompiler/README.md` — BPR rules whose ordering benefits from joint optimisation with paper rules go in DTC; flag/count guards with no ordering insight stay in C.
+Two of the three (`retry (echo, v)` and `retry (ready, v)`) are captured as DTC sub-tables at the bottom of `bracha87Fig1.dtc`, chaining on existing paper-rule outputs and inputs; their retirement guards (ECHO's `!ACCEPTED`) are applied in C around the dispatch. The third (initiator INITIAL retry, with its `!ACCEPTED && echoSenders<n` retirement) is a C early-output; the design intent is documented in the .dtc's BPR text section. This split follows the "trivial guards stay in C" principle from `decisionTableCompiler/README.md` — BPR rules whose ordering benefits from joint optimisation with paper rules go in DTC; flag/count guards with no ordering insight stay in C.
 
-### Where the pump is called
+### Where the retry is called
 
-The pump is exposed at the layer that owns the Fig 1 instances:
+The retry is exposed at the layer that owns the Fig 1 instances:
 
-| Layer | Pump entry point? | Why |
+| Layer | Retry entry point? | Why |
 |---|---|---|
 | Fig 1 | `bracha87Fig1Bpr` | Broadcast state lives here. |
 | Fig 2 | n/a | Reference-only. |
 | Fig 3 | none | Validator over already-accepted messages; no message state. |
 | Fig 4 | none | Round-driven; Fig 4 broadcasts are new Fig 1 instantiations in the caller. |
-| bkr94acs | `bkr94acsPump` | Owns N proposal Fig 1 instances + N×R×N consensus Fig 1 instances + N Fig 4 instances internally; only the bkr94acs pump can reach them. |
+| bkr94acs | `bkr94acsRetry` | Owns N A-Cast Fig 1 instances + N×R×N BA Fig 1 instances + N Fig 4 instances internally; only the bkr94acs retry can reach them. |
 
-`bkr94acsPump` walks an internal cursor over (proposal phase, then consensus phase by origin × round × broadcaster), emits one Fig 1 instance's replays per call (≤ 3 actions), and returns 0 only when a full sweep finds no actions — either nothing is committed yet, or every committed instance has retired all its replays (quiescence: every peer announced accepted). Both are the application's idle signal. Per-origin gating, indexed by `bkr94acsBaDecision(a, origin)`:
+`bkr94acsRetry` walks an internal cursor over (A-Cast phase, then BA phase by process × round × initiator), outputs one Fig 1 instance's retries per call (≤ 3 actions), and returns 0 only when a full sweep finds no actions — either nothing is sent yet, or every sent instance has retired all its retries (quiescence: every process announced accepted). Both are the application's idle signal. Per-process gating, indexed by `bkr94acsBaDecision(a, process)`:
 
-- **0xFF (undecided)** — pump; other honest peers may still need our echoes/readys to learn Q(j)=1.
-- **0xFE (EXHAUSTED)** — pump; the local BA can't complete, but other peers may still benefit from our earlier-round echoes/readys.
-- **0 (decided 0, excluded)** — skip; the origin is out of the common subset and no honest peer needs further evidence from us.
-- **1 (decided 1, included)** — pump; Bracha post-decide continuation requires us to keep feeding peers that haven't yet reached n-t.
+- **0xFF (undecided)** — retry; other honest processes may still need our echoes/readys to learn Q(j)=1.
+- **0xFE (EXHAUSTED)** — retry; the local BA can't complete, but other processes may still benefit from our earlier-round echoes/readys.
+- **0 (decided 0, excluded)** — skip; the process is out of the common subset and no honest process needs further evidence from us.
+- **1 (decided 1, included)** — retry; Bracha post-decide continuation requires us to keep feeding processes that haven't yet reached n-t.
 
-Only the decided-0 case stops pumping.
+Only the decided-0 case stops retrying.
 
 ### Application loop
 
-With BPR, the application loop is two operations: drain the network and tick the pump. No *application* ledger — no per-record destination mask, no per-peer receipt tracking. The per-peer suppress mask the broadcast consults (and the `acFrom` evidence behind the READY mask) is library-owned, intrinsic protocol state surfaced through `bracha87Fig1Skip` / the `.skip` field; the application just honours it (`BRACHA87_SKIP_TST`) and feeds the decoded `BKR94ACS_ACCEPTED` bit back via `bkr94acs{Proposal,Consensus}Accepted` — it maintains none of it.
+With BPR, the application loop is two operations: drain the network and tick the retry. No *application* bookkeeping — no per-record destination mask, no per-process receipt tracking. The per-process suppress mask the broadcast consults (and the `acFrom` evidence behind the READY mask) is library-owned, intrinsic protocol state surfaced through `bracha87Fig1Skip` / the `.skip` field; the application just honours it (`BRACHA87_SKIP_TST`) and feeds the decoded `BKR94ACS_ACCEPTED` bit back via `bkr94acs{Acast,Ba}Accepted` — it maintains none of it.
 
 ```c
-struct bkr94acsAct out[BKR94ACS_PUMP_MAX_ACTS];
+struct bkr94acsAct out[BKR94ACS_RETRY_MAX_ACTS];
 struct bkr94acsAct propAct;
-struct bracha87Pump pump;
+struct bracha87Retry retry;
 
-bracha87PumpInit(&pump);
+bracha87RetryInit(&retry);
 
-/* Self-initiation: mark the local proposal Fig 1 as origin and emit
- * one PROP_SEND action (.type = BRACHA87_INITIAL) for the application
+/* Self-initiation: mark the local A-Cast Fig 1 as initiator and output
+ * one ACAST_SEND action (.type = BRACHA87_INITIAL) for the application
  * to broadcast.  The act's .value points into library storage. */
-bkr94acsPropose(a, my_value, &propAct);
+bkr94acsAcast(a, my_value, &propAct);
 broadcast_action(propAct);
 
 while (!terminate) {
   /* Drain ingress: Input handles paper rules + cascades. */
   while (network_recv(&msg)) {
-    n = (msg.cls == BKR94ACS_CLS_PROPOSAL)
-      ? bkr94acsProposalInput(a, ...)
-      : bkr94acsConsensusInput(a, ...);
+    n = (msg.cls == BKR94ACS_CLS_ACAST)
+      ? bkr94acsAcastInput(a, ...)
+      : bkr94acsBaInput(a, ...);
     for (k = 0; k < n; ++k) broadcast_action(actions[k]);
   }
 
-  /* Pump tick: BPR re-emits committed actions.  ONE call per tick
+  /* Retry tick: BPR retries sent actions.  ONE call per tick
    * — see the network flood warning in bracha87.h. */
-  n = bkr94acsPump(a, &pump, out);
+  n = bkr94acsRetry(a, &retry, out);
   for (k = 0; k < n; ++k) broadcast_action(out[k]);
 
   sleep(tickMs);
@@ -238,10 +238,10 @@ while (!terminate) {
 ```
 
 `broadcast_action(act)` switches on `act.act` and sends:
-- `BKR94ACS_ACT_PROP_SEND` — broadcast a proposal Fig 1 message of `act.type` (INITIAL/ECHO/READY) for `act.origin`, with bytes `act.value` (vLen+1, borrowed pointer into library state — copy if persisting).
-- `BKR94ACS_ACT_CON_SEND` — broadcast a consensus Fig 1 message: `act.origin`, `act.round`, `act.broadcaster`, `act.type`, binary `act.conValue`.
-- `BKR94ACS_ACT_BA_DECIDED` / `BKR94ACS_ACT_COMPLETE` — observability signals; no wire emission.
-- `BKR94ACS_ACT_BA_EXHAUSTED` — fatal protocol-level event for `act.origin` (no decision within `maxPhases`); the local ACS instance cannot complete. Application aborts; treat as "did not complete" plus a specific cause.
+- `BKR94ACS_ACT_ACAST_SEND` — broadcast an A-Cast Fig 1 message of `act.type` (INITIAL/ECHO/READY) for `act.process`, with bytes `act.value` (vLen+1, borrowed pointer into library state — copy if persisting).
+- `BKR94ACS_ACT_BA_SEND` — broadcast a BA Fig 1 message: `act.process`, `act.round`, `act.initiator`, `act.type`, binary `act.baValue`.
+- `BKR94ACS_ACT_BA_DECIDED` / `BKR94ACS_ACT_COMPLETE` — observability signals; no wire output.
+- `BKR94ACS_ACT_BA_EXHAUSTED` — fatal protocol-level event for `act.process` (no decision within `maxPhases`); the local ACS instance cannot complete. Application aborts; treat as "did not complete" plus a specific cause.
 
 `terminate` is the application's termination policy — an application choice, not a library-prescribed one. See Deployment Notes below.
 
@@ -249,17 +249,17 @@ while (!terminate) {
 
 ### bracha87 Entry Points
 
-bracha87 exposes paper-vocabulary state-machine operations (one rule cluster each), plus a Fig 1 array BPR Pump wrapper (one cursor sweep per call).  Each Fig 1 / Fig 3 / Fig 4 entry point takes the instance plus the rule's natural inputs and returns its actions; cascading across layers is the caller's responsibility (or, for the canonical composition, `bkr94acs`'s responsibility).
+bracha87 exposes paper-vocabulary state-machine operations (one rule cluster each), plus a Fig 1 array BPR Retry wrapper (one cursor sweep per call).  Each Fig 1 / Fig 3 / Fig 4 entry point takes the instance plus the rule's natural inputs and returns its actions; cascading across layers is the caller's responsibility (or, for the canonical composition, `bkr94acs`'s responsibility).
 
 | Function | Purpose |
 |---|---|
 | `bracha87Fig1Sz(n, vLen)` | Compute allocation size for a Fig 1 instance |
 | `bracha87Fig1Init(...)` | Initialize a Fig 1 instance |
-| `bracha87Fig1Origin(f1, value)` | Mark this instance as broadcast originator and store the value (BPR — enables INITIAL replay) |
+| `bracha87Fig1Initiator(f1, value)` | Mark this instance as broadcast initiator and store the value (BPR — enables INITIAL retry) |
 | `bracha87Fig1Input(f1, type, from, value, out)` | Process one incoming message; returns action count (0-3) |
-| `bracha87Fig1Bpr(f1, out)` | Emit committed-action replays for one Fig 1 instance; returns action count (0-3); 0 = nothing committed, or every replay retired (quiescence) |
-| `bracha87Fig1AllEchoed(f1)` | 1 iff an echo has been recorded from all `n` peers (echoSenders == n) — the all-echoed retire point for an INITIAL-paired side channel; see BPR replay rules |
-| `bracha87Fig1Value(f1)` | Retrieve committed value (returns non-null when ORIGIN or ECHOED) |
+| `bracha87Fig1Bpr(f1, out)` | Output sent-action retries for one Fig 1 instance; returns action count (0-3); 0 = nothing sent, or every retry retired (quiescence) |
+| `bracha87Fig1AllEchoed(f1)` | 1 iff an echo has been recorded from all `n` processes (echoSenders == n) — the all-echoed retire point for an INITIAL-paired side channel; see BPR retry rules |
+| `bracha87Fig1Value(f1)` | Retrieve echoed value (returns non-null when INITIATOR or ECHOED) |
 | `bracha87Fig3Sz(n, maxRounds)` | Compute allocation size for a Fig 3 instance |
 | `bracha87Fig3Init(...)` | Initialize with N function and closure |
 | `bracha87Fig3Accept(f3, round, sender, value, &vc)` | Submit an accepted message for validation |
@@ -269,58 +269,58 @@ bracha87 exposes paper-vocabulary state-machine operations (one rule cluster eac
 | `bracha87Fig4Init(...)` | Initialize with initial value, coin function, and closure |
 | `bracha87Fig4Round(f4, round, n_msgs, senders, values)` | Process a completed round; returns action bitmask |
 
-#### Fig 1 array BPR Pump
+#### Fig 1 array BPR Retry
 
-Wraps the per-instance `bracha87Fig1Bpr` with a cursor that walks an application-owned array of Fig 1 instances.  Useful for reliable-broadcast applications that own multiple Fig 1 instances of any shape (single-broadcast streaming, multi-origin reliable multicast, etc.).  Pump cursor lives in caller storage, initialized with `bracha87PumpInit`.
+Wraps the per-instance `bracha87Fig1Bpr` with a cursor that walks an application-owned array of Fig 1 instances.  Useful for reliable-broadcast applications that own multiple Fig 1 instances of any shape (single-broadcast streaming, multi-initiator reliable multicast, etc.).  Retry cursor lives in caller storage, initialized with `bracha87RetryInit`.
 
 | Function | Purpose |
 |---|---|
-| `bracha87PumpInit(p)` | Initialize a shared Pump cursor |
-| `bracha87Fig1PumpStep(instances, count, p, out, outCap)` | Walk a caller-owned Fig 1 array; one instance's BPR actions per call; returns 0 on a full sweep with no actions (nothing committed, or all quiesced) |
-| `bracha87Fig1CommittedCount(instances, count)` | Count of instances with any committed flag (ORIGIN/ECHOED/RDSENT); one sweep = this many Pump calls |
+| `bracha87RetryInit(p)` | Initialize a shared Retry cursor |
+| `bracha87Fig1RetryStep(instances, count, p, out, outCap)` | Walk a caller-owned Fig 1 array; one instance's BPR actions per call; returns 0 on a full sweep with no actions (nothing sent, or all quiesced) |
+| `bracha87Fig1SentCount(instances, count)` | Count of instances with any sent flag (INITIATOR/ECHOED/RDSENT); one sweep = this many Retry calls |
 
 `struct bracha87Fig1Act` carries the act: `act` (INITIAL_ALL / ECHO_ALL / READY_ALL), `idx` (array index), `value` (borrowed).
 
-The same `struct bracha87Pump` cursor type is also consumed by `bkr94acsPump` (cursor unification across the library).
+The same `struct bracha87Retry` cursor type is also consumed by `bkr94acsRetry` (cursor unification across the library).
 
 ### bkr94acs Entry Points
 
 | Function | Purpose |
 |---|---|
 | `bkr94acsSz(n, vLen, maxPhases)` | Compute allocation size for a BKR94 ACS instance |
-| `bkr94acsInit(...)` | Initialize with peer index, coin function, and closure |
-| `bkr94acsPropose(acs, value, out)` | Mark local proposal Fig 1 as originator and emit one PROP_SEND/INITIAL action (BPR) |
-| `bkr94acsProposalInput(acs, origin, type, from, value, out)` | Process a proposal broadcast message; returns action count |
-| `bkr94acsConsensusInput(acs, origin, round, broadcaster, type, from, value, out)` | Process a consensus message; returns action count |
-| `bkr94acsPump(acs, p, out)` | BPR pump tick using shared `struct bracha87Pump` cursor; one Fig 1 per call; returns action count (0-3); 0 = full-sweep no-commit (one-call-per-tick — see flood warning) |
-| `bkr94acsSubset(acs, origins)` | Retrieve the decided common subset |
-| `bkr94acsProposalValue(acs, origin)` | Retrieve accepted proposal value for an origin |
-| `bkr94acsBaDecision(acs, origin)` | BA decision for origin: 0xFF undecided / 0xFE exhausted / 0 excluded / 1 included |
-| `bkr94acsProposalAllEchoed(acs, origin)` | 1 iff proposal Fig1[origin] has an echo from all `n` peers. An app pairing a single-source side-channel payload (PSK/signature) with its own proposal re-emits it until this holds for `origin == self` — all-echoed implies all-validated, the correct retire point (strictly stronger than the proposal's ACCEPTED) |
-| `bkr94acsProposalSkip(acs, origin)` | Per-peer refinement of the above: the proposal's echoed-peer suppress mask (`BRACHA87_SKIP_TST`). The side channel skips each peer the moment it echoes (hence validated and holds the payload), instead of broadcasting to all until every peer has. `brachaAcsMls`'s signature channel uses it |
-| `bkr94acsCommittedFig1Count(acs)` | Count of Fig1 instances with any committed flag (ORIGIN/ECHOED/RDSENT); useful for cadence sizing. Walks the full consensus space — committed state is not bounded by this peer's own BA progress (a faster peer's INITIAL for a not-yet-entered round commits the local Fig1 ahead of it) |
+| `bkr94acsInit(...)` | Initialize with process index, coin function, and closure |
+| `bkr94acsAcast(acs, value, out)` | Mark local A-Cast Fig 1 as initiator and output one ACAST_SEND/INITIAL action (BPR) |
+| `bkr94acsAcastInput(acs, process, type, from, value, out)` | Process an A-Cast broadcast message; returns action count |
+| `bkr94acsBaInput(acs, process, round, initiator, type, from, value, out)` | Process a BA message; returns action count |
+| `bkr94acsRetry(acs, p, out)` | BPR retry tick using shared `struct bracha87Retry` cursor; one Fig 1 per call; returns action count (0-3); 0 = full-sweep idle (one-call-per-tick — see flood warning) |
+| `bkr94acsSubset(acs, processes)` | Retrieve the decided common subset |
+| `bkr94acsAcastValue(acs, process)` | Retrieve accepted A-Cast value for a process |
+| `bkr94acsBaDecision(acs, process)` | BA decision for process: 0xFF undecided / 0xFE exhausted / 0 excluded / 1 included |
+| `bkr94acsAcastAllEchoed(acs, process)` | 1 iff A-Cast Fig1[process] has an echo from all `n` processes. An app pairing a single-source side-channel payload (PSK/signature) with its own A-Cast retries it until this holds for `process == self` — all-echoed implies all-validated, the correct retire point (strictly stronger than the A-Cast's ACCEPTED) |
+| `bkr94acsAcastSkip(acs, process)` | Per-process refinement of the above: the A-Cast's echoed-process suppress mask (`BRACHA87_SKIP_TST`). The side channel skips each process the moment it echoes (hence validated and holds the payload), instead of broadcasting to all until every process has. `brachaAcsMls`'s signature channel uses it |
+| `bkr94acsSentFig1Count(acs)` | Count of Fig1 instances with any sent flag (INITIATOR/ECHOED/RDSENT); useful for cadence sizing. Walks the full BA space — sent state is not bounded by this process's own BA progress (a faster process's INITIAL for a not-yet-entered round echoes the local Fig1 ahead of it) |
 
-Test `acs->flags & BKR94ACS_F_COMPLETE` to check if all N BAs have decided (the `BKR94ACS_F_THRESHOLD` bit indicates step-2 vote-0 fanout has fired).  Pump cursor lives in caller storage (`struct bracha87Pump`); the application owns the cursor lifetime, the same way every other Pump entry point in this library works.
+Test `acs->flags & BKR94ACS_F_COMPLETE` to check if all N BAs have decided (the `BKR94ACS_F_THRESHOLD` bit indicates step-2 enter-0 fanout has fired).  Retry cursor lives in caller storage (`struct bracha87Retry`); the application owns the cursor lifetime, the same way every other Retry entry point in this library works.
 
 ### Action Struct
 
-`struct bkr94acsAct` carries one library emission. Field usage by `act.act`:
+`struct bkr94acsAct` carries one library output. Field usage by `act.act`:
 
 | act value | meaning | populated fields |
 |---|---|---|
-| `BKR94ACS_ACT_PROP_SEND` | broadcast a proposal Fig 1 message | `.origin`, `.type` (BRACHA87_INITIAL/ECHO/READY), `.value` (vLen+1 bytes, borrowed pointer) |
-| `BKR94ACS_ACT_CON_SEND` | broadcast a consensus Fig 1 message | `.origin`, `.round`, `.broadcaster`, `.type`, `.conValue` (binary) |
-| `BKR94ACS_ACT_BA_DECIDED` | a BA reached a decision | `.origin`, `.conValue` (0=excluded, 1=included) |
+| `BKR94ACS_ACT_ACAST_SEND` | broadcast an A-Cast Fig 1 message | `.process`, `.type` (BRACHA87_INITIAL/ECHO/READY), `.value` (vLen+1 bytes, borrowed pointer) |
+| `BKR94ACS_ACT_BA_SEND` | broadcast a BA Fig 1 message | `.process`, `.round`, `.initiator`, `.type`, `.baValue` (binary) |
+| `BKR94ACS_ACT_BA_DECIDED` | a BA reached a decision | `.process`, `.baValue` (0=excluded, 1=included) |
 | `BKR94ACS_ACT_COMPLETE` | all N BAs decided | (none) |
-| `BKR94ACS_ACT_BA_EXHAUSTED` | a BA's Fig 4 reached `maxPhases` with no decision; the local ACS instance cannot complete (BKR94 Lemma 2 Part B's BA-termination assumption violated). No safe in-protocol recovery — substituting a unilateral decision could disagree with another peer's actual decision and break SubSet agreement. Application must abort and (optionally) restart with fresh state. The library marks `bkr94acsBaDecision[origin] = 0xFE` and continues pumping replays for this origin (other peers may still benefit from earlier-round echoes / readys). Emitted exactly once per BA per ACS instance. | `.origin` |
+| `BKR94ACS_ACT_BA_EXHAUSTED` | a BA's Fig 4 reached `maxPhases` with no decision; the local ACS instance cannot complete (BKR94 Lemma 2 Part B's BA-termination assumption violated). No safe in-protocol recovery — substituting a unilateral decision could disagree with another process's actual decision and break SubSet agreement. Application must abort and (optionally) restart with fresh state. The library marks `bkr94acsBaDecision[process] = 0xFE` and continues retrying for this process (other processes may still benefit from earlier-round echoes / readys). Output exactly once per BA per ACS instance. | `.process` |
 
-`.value` is a borrowed pointer into the library's committed-value slot — populated as soon as ORIGIN, Rule 1, 2, or 3 commits a value (i.e. while ECHOED is set, before ACCEPT) so PROP_SEND emissions can carry the bytes during ECHO/READY traffic. Valid until the next library call that mutates state. Caller copies if persistence is needed past that boundary. Distinct from `bkr94acsProposalValue`, which queries the same slot but is ACCEPT-gated for non-self origins so application reads see only Bracha-Lemma-2-protected values.
+`.value` is a borrowed pointer into the library's echoed-value slot — populated as soon as INITIATOR, Rule 1, 2, or 3 echoes a value (i.e. while ECHOED is set, before ACCEPT) so ACAST_SEND outputs can carry the bytes during ECHO/READY traffic. Valid until the next library call that mutates state. Caller copies if persistence is needed past that boundary. Distinct from `bkr94acsAcastValue`, which queries the same slot but is ACCEPT-gated for non-self processes so application reads see only Bracha-Lemma-2-protected values.
 
 ### Caller Composition Pattern
 
-For multi-value agreement, use `bkr94acs` and the application loop shown in the **Bracha Phase Re-emitter (BPR)** section above — it manages all Fig 1 instances internally and provides `bkr94acsPump` for BPR replays. See `example/bkr94acs.c` for a runnable version of this pattern.
+For multi-value agreement, use `bkr94acs` and the application loop shown in the **Bracha Phase Retry (BPR)** section above — it manages all Fig 1 instances internally and provides `bkr94acsRetry` for BPR retries. See `example/bkr94acs.c` for a runnable version of this pattern.
 
-For reliable broadcast (Fig 1 only), use `bracha87Fig1Input` per message plus `bracha87Fig1PumpStep` on the caller-owned Fig 1 array per tick. See `example/bracha87Fig1.c` for a runnable version.
+For reliable broadcast (Fig 1 only), use `bracha87Fig1Input` per message plus `bracha87Fig1RetryStep` on the caller-owned Fig 1 array per tick. See `example/bracha87Fig1.c` for a runnable version.
 
 Direct use of Fig 3 (`bracha87Fig3Accept` / `RoundComplete` / `GetValid`) and Fig 4 (`bracha87Fig4Round`) is supported but those layers exist primarily as internal mechanism feeding `bkr94acs`; the realistic application surfaces are the two above. The low-level Fig 3 and Fig 4 entry points remain public for callers that need them (and for `test_predicates.c`, which exercises the algorithmic predicates beneath the dispatch).
 
@@ -333,9 +333,9 @@ Direct use of Fig 3 (`bracha87Fig3Accept` / `RoundComplete` / `GetValid`) and Fi
 | `vLen` | unsigned char | 1-256 (vLen+1) | Value length in bytes |
 | `maxPhases` | unsigned char | 1-85 | `85 * BRACHA87_ROUNDS_PER_PHASE = 255` rounds fits in unsigned char |
 
-Counts compared against the *actual* process count must hold 256 — one past what an unsigned char can hold, so a byte counter wraps on the 256th increment and the comparison can never be satisfied. The Fig 2 / Fig 3 per-round counts are therefore `unsigned short` (a full house validating in one round would otherwise read 0 and stall the next round); the bkr94acs step-2/step-3 decision counts are not stored at all — they are derived by scanning `baDecision[]` at each BA decision (a stored counter is a denormalization of that array, and as a byte it suppressed COMPLETE at 256 peers).
+Counts compared against the *actual* process count must hold 256 — one past what an unsigned char can hold, so a byte counter wraps on the 256th increment and the comparison can never be satisfied. The Fig 2 / Fig 3 per-round counts are therefore `unsigned short` (a full house validating in one round would otherwise read 0 and stall the next round); the bkr94acs step-2/step-3 decision counts are not stored at all — they are derived by scanning `baDecision[]` at each BA decision (a stored counter is a denormalization of that array, and as a byte it suppressed COMPLETE at 256 processes).
 
-Round indices range from 0 to `BRACHA87_ROUNDS_PER_PHASE * maxPhases - 1` (max 254).  Fig 3 is keyed by round (paper's `round(k)`); Fig 4 by phase (paper's `Phase(i)` with sub-actions `3i+1, 3i+2, 3i+3`).  `BRACHA87_ROUNDS_PER_PHASE` (= 3) names the conversion at the boundary so callers do not write the bare `* 3` / `/ 3`.  The paper-vocabulary `(phase, subRound)` view of any `round` value is `phase = round / BRACHA87_ROUNDS_PER_PHASE`, `subRound = round % BRACHA87_ROUNDS_PER_PHASE`; Fig 4 also exposes `bracha87Fig4.phase` / `.subRound` directly for diagnostic use.
+Round indices range from 0 to `BRACHA87_ROUNDS_PER_PHASE * maxPhases - 1` (max 254).  Fig 3 is keyed by round (paper's `round(k)`); Fig 4 by phase (paper's `Phase(i)` with sub-actions `3i+1, 3i+2, 3i+3`).  `BRACHA87_ROUNDS_PER_PHASE` (= 3) names the conversion at the boundary so callers do not write the bare `* 3` / `/ 3`.  The paper-vocabulary `(phase, subRound)` form of any `round` value is `phase = round / BRACHA87_ROUNDS_PER_PHASE`, `subRound = round % BRACHA87_ROUNDS_PER_PHASE`; Fig 4 also exposes `bracha87Fig4.phase` / `.subRound` directly for diagnostic use.
 
 ## Building
 
@@ -357,36 +357,36 @@ Compiler flags: `-std=c89 -pedantic -Wall -Wextra -Os -g`
 | Binary | Scope | What it asserts |
 |---|---|---|
 | `test_predicates` | Algorithmic primitives | Paper-direct correspondence at n=4, t=1: `fig4Nfn` (960 inputs), `fig3IsValid` (165 evaluations), Fig 3 cascade (4 delivery permutations). White-box: `#include`s `bracha87.c` and enumerates inputs against a paper-direct subset-enumeration reference. Anchors the algorithmic primitives that sit below the DTC dispatch. |
-| `test_bracha87` | Protocol white-box (bracha87) | Unit tests on each Bracha rule, composed simulation, lemma assertions inline (Lemmas 1, 2, 3, 4, 9), Theorem 2, shuffled delivery, Byzantine equivocation, post-decide multi-phase + adversarial-majority preservation, value-switch tests, BPR replay invariants (INITIAL/ECHO retire at ACCEPTED and INITIAL at echoSenders==n; post-accept READY-only survival; `bracha87Fig1AllEchoed` 0→1 transition at the n-th distinct echo + NULL guard), `testBprLargeN` (n≫3t reliable broadcast at 37/6 — the deployment regime where `2t+1 ≪ n−t`, which the n=3t+1 boundary suite can't reach: under heterogeneous loss a fast group accepts early and retires INITIAL/ECHO while a slow group is carried to ACCEPT solely by the fast group's never-retired READY replay; asserts all n accept and that acceptance was staggered), Fig 1 array Pump coverage (`bracha87PumpInit` / `bracha87Fig1PumpStep` / `bracha87Fig1CommittedCount`), defensive null-pointer guards. Reads internal flags directly. |
-| `test_bracha87_blackbox` | Protocol black-box (bracha87) | 160 checks via the public bracha87.h surface only. Validity, agreement, totality, and Lemma-2 invariants at n=4 t=1; precise echo-threshold tests at n=4 and n=7; BPR retirement contract (post-accept READY-only; `bracha87Fig1AllEchoed` 1 exactly at echoSenders==n + NULL guard); Fig 1 array Pump cursor walk, sparse-slot skip, multi-act emission; low-level `bracha87Fig4Round` post-EXHAUSTED safety. Tests are derived from the header contract and `Bracha87.txt` only — no `bracha87.c` reads. |
-| `test_bkr94acs` | Protocol white-box (bkr94acs) | All-to-all simulation with shuffled delivery, multi-byte values, identical proposals, larger N, post-decide continuation regression, step-2 trigger regression, BPR pump tests (50% drop end-to-end, cursor coverage, decided-0 skip, Byzantine-silent canary at 50000+ sweeps for pitfall 11, 75%/87.5% drop convergence), `bkr94acsProposalAllEchoed` (0 until n-th echo, latched 1 across accept, null/range guards), EXHAUSTED single-emission + 0xFE sentinel, ProposalValue ACCEPT-gate transition (ECHOED-only → NULL, post-ACCEPT → value, ORIGIN-bit carve-out for self-origin). Reaches into `a->flags & BKR94ACS_F_THRESHOLD` and the `data[]` layout for setup and assertion. |
-| `test_bkr94acs_blackbox` | Protocol black-box (bkr94acs) | Section A: Sz/Init contract, Propose round-trip + idempotency, defensive nulls. Section B: Lemma 2 Parts A/B/C/D explicit at n=4/n=7, identical proposals, multi-byte values, step-2 trigger uses BA-decision count not Fig1-ACCEPT count, single-input-per-BA-per-peer (paper Implementer remark), honest-exclusion contract, `bkr94acsProposalAllEchoed` contract (1 for fully-echoed origins latched across accept, 0 for un-echoed, null/range guards) and `bkr94acsProposalSkip` contract (all bits set for a fully-echoed origin, empty for an un-echoed one, null/range guards). Section C: Pump idle on fresh peer, Pump after Propose, MAX_ACTS bound, CommittedFig1Count monotone, full-sweep idle (0-return) signal, 50% drop convergence, silent-Byzantine canary. Section D: BA_EXHAUSTED single emission + sentinel + permanent !complete, Pump continues post-EXHAUSTED. Section E: equivocating proposer (Bracha Lemma 2 inheritance). Tests derived from `bkr94acs.h`, `bracha87.h`, `BKR94ACS.txt`, `Bracha87.txt`, and the bracha87 black-box style — no `.c` reads. |
+| `test_bracha87` | Protocol white-box (bracha87) | Unit tests on each Bracha rule, composed simulation, lemma assertions inline (Lemmas 1, 2, 3, 4, 9), Theorem 2, shuffled delivery, Byzantine equivocation, post-decide multi-phase + adversarial-majority preservation, value-switch tests, BPR retry invariants (INITIAL/ECHO retire at ACCEPTED and INITIAL at echoSenders==n; post-accept READY-only survival; `bracha87Fig1AllEchoed` 0→1 transition at the n-th distinct echo + NULL guard), `testBprLargeN` (n≫3t reliable broadcast at 37/6 — the deployment regime where `2t+1 ≪ n−t`, which the n=3t+1 boundary suite can't reach: under heterogeneous loss a fast group accepts early and retires INITIAL/ECHO while a slow group is carried to ACCEPT solely by the fast group's never-retired READY retry; asserts all n accept and that acceptance was staggered), Fig 1 array Retry coverage (`bracha87RetryInit` / `bracha87Fig1RetryStep` / `bracha87Fig1SentCount`), defensive null-pointer guards. Reads internal flags directly. |
+| `test_bracha87_blackbox` | Protocol black-box (bracha87) | 160 checks via the public bracha87.h surface only. Validity, agreement, totality, and Lemma-2 invariants at n=4 t=1; precise echo-threshold tests at n=4 and n=7; BPR retirement contract (post-accept READY-only; `bracha87Fig1AllEchoed` 1 exactly at echoSenders==n + NULL guard); Fig 1 array Retry cursor walk, sparse-slot skip, multi-act output; low-level `bracha87Fig4Round` post-EXHAUSTED safety. Tests are derived from the header contract and `Bracha87.txt` only — no `bracha87.c` reads. |
+| `test_bkr94acs` | Protocol white-box (bkr94acs) | All-to-all simulation with shuffled delivery, multi-byte values, identical A-Casts, larger N, post-decide continuation regression, step-2 trigger regression, BPR retry tests (50% drop end-to-end, cursor coverage, decided-0 skip, Byzantine-silent canary at 50000+ sweeps for pitfall 11, 75%/87.5% drop convergence), `bkr94acsAcastAllEchoed` (0 until n-th echo, latched 1 across accept, null/range guards), EXHAUSTED single-output + 0xFE sentinel, AcastValue ACCEPT-gate transition (ECHOED-only → NULL, post-ACCEPT → value, INITIATOR-bit carve-out for self). Reaches into `a->flags & BKR94ACS_F_THRESHOLD` and the `data[]` layout for setup and assertion. |
+| `test_bkr94acs_blackbox` | Protocol black-box (bkr94acs) | Section A: Sz/Init contract, A-Cast round-trip + idempotency, defensive nulls. Section B: Lemma 2 Parts A/B/C/D explicit at n=4/n=7, identical A-Casts, multi-byte values, step-2 trigger uses BA-decision count not Fig1-ACCEPT count, single-input-per-BA-per-process (paper Implementer remark), honest-exclusion contract, `bkr94acsAcastAllEchoed` contract (1 for fully-echoed processes latched across accept, 0 for un-echoed, null/range guards) and `bkr94acsAcastSkip` contract (all bits set for a fully-echoed process, empty for an un-echoed one, null/range guards). Section C: Retry idle on fresh process, Retry after A-Cast, MAX_ACTS bound, SentFig1Count monotone, full-sweep idle (0-return) signal, 50% drop convergence, silent-Byzantine canary. Section D: BA_EXHAUSTED single output + sentinel + permanent !complete, Retry continues post-EXHAUSTED. Section E: equivocating A-Caster (Bracha Lemma 2 inheritance). Tests derived from `bkr94acs.h`, `bracha87.h`, `BKR94ACS.txt`, `Bracha87.txt`, and the bracha87 black-box style — no `.c` reads. |
 
-The white-box / black-box pairing surfaces a different class of bug at each layer. White-box catches internal-invariant regressions (a state-machine flag set wrong, a ledger field unbumped). Black-box catches API contract drift — header text and code behavior pulling apart over time. Recent contract-drift fix caught by the black-box suite: `bkr94acsProposalValue`'s ACCEPT-gate (header documented "0 if not yet accepted" but pre-fix returned ECHOED-stored bytes, exposing pre-Lemma-2 values to callers).
+The white-box / black-box pairing surfaces a different class of bug at each layer. White-box catches internal-invariant regressions (a state-machine flag set wrong, a count left unbumped). Black-box catches API contract drift — header text and code behavior pulling apart over time. Recent contract-drift fix caught by the black-box suite: `bkr94acsAcastValue`'s ACCEPT-gate (header documented "0 if not yet accepted" but pre-fix returned ECHOED-stored bytes, exposing pre-Lemma-2 values to callers).
 
 The black-box suites stay strict about scope: only `*.h`, paper-extract `.txt`, and the matching black-box-style sibling are read while writing tests. When a test fails, the contract sources alone determine whether to tighten the code or rewrite the comment.
 
 ## Examples
 
-Two runnable examples sit in `example/`, one per application-facing API surface. Each runs in a single process with a synchronous in-memory queue (no loss, no reordering, no asynchrony) — they exercise the protocol state machines and the BPR pump but do **not** exercise a deployment-time termination policy (when to give up, abandonment) needed under real asynchronous transport.
+Two runnable examples sit in `example/`, one per application-facing API surface. Each runs in a single process with a synchronous in-memory queue (no loss, no reordering, no asynchrony) — they exercise the protocol state machines and the BPR retry but do **not** exercise a deployment-time termination policy (when to give up, abandonment) needed under real asynchronous transport.
 
 The low-level Fig 3 and Fig 4 entry points (`bracha87Fig3Accept`, `bracha87Fig4Round`) have no dedicated examples — those layers exist as internal mechanism feeding `bkr94acs`.  Fig 4 (raw single-bit binary BA) has no realistic standalone caller, evidenced by the seven-year gap between Bracha 1987 and BKR94 1994; Fig 3 (the VALID-set framework) exists to feed Fig 4 and inherits the same "no standalone need" through it.  Their behaviour is exercised through `bkr94acs` and through the test suites.
 
-`example/bracha87Fig1.c` — reliable broadcast (Theorem 1). One designated origin broadcasts a multi-byte value; all correct peers either accept the same value or none accept (Lemmas 3 and 4):
+`example/bracha87Fig1.c` — reliable broadcast (Theorem 1). One designated initiator broadcasts a multi-byte value; all correct processes either accept the same value or none accept (Lemmas 3 and 4):
 
 ```bash
-./example_bracha87Fig1 4 1 hello                # 4 peers, 1 Byzantine fault, broadcast "hello"
+./example_bracha87Fig1 4 1 hello                # 4 processes, 1 Byzantine fault, broadcast "hello"
 ./example_bracha87Fig1 -s 42 7 2 transactionXYZ # shuffled delivery
-./example_bracha87Fig1 -b 2 4 1 hello           # Byzantine origin equivocates (split=2 stalls; split=1 or 3 converges)
-./example_bracha87Fig1 -v -o 1 4 1 ping         # verbose trace, peer 1 is origin
+./example_bracha87Fig1 -b 2 4 1 hello           # Byzantine initiator equivocates (split=2 stalls; split=1 or 3 converges)
+./example_bracha87Fig1 -v -o 1 4 1 ping         # verbose trace, process 1 is initiator
 ```
 
 `example/bkr94acs.c` — multi-value agreement on arbitrary strings:
 
 ```bash
-./example_bkr94acs 4 1 joe sam sally tim        # 4 peers propose strings
+./example_bkr94acs 4 1 joe sam sally tim        # 4 processes A-Cast strings
 ./example_bkr94acs -s 42 4 1 joe sam sally tim  # shuffled delivery (different subset)
-./example_bkr94acs 4 0 joe sam sally tim        # t=0: all proposals included
+./example_bkr94acs 4 0 joe sam sally tim        # t=0: all A-Casts included
 ./example_bkr94acs -v 7 2 alpha bravo charlie delta echo foxtrot golf
 ```
 
@@ -394,32 +394,32 @@ The low-level Fig 3 and Fig 4 entry points (`bracha87Fig3Accept`, `bracha87Fig4R
 
 This library is protocol-only. A working deployment needs a transport layer satisfying the three System Model assumptions above, plus identity, keys, a coin source, and a termination policy. The points below are load-bearing; do not "optimize" them away.
 
-### BPR replaces the application-layer ledger
+### BPR replaces the application-layer retry bookkeeping
 
-A previous deployment pattern wrapped this library in a per-record ledger: `peerHasPsk[]` / `peerOriginAck[]` / `peerRound[]` evidence tracking, `destMask` per-record bitmaps, a cursor over the record list, per-record `pumpNs` floors. With BPR, that machinery is no longer needed — the library's own `bkr94acsPump` (or `bracha87Fig1Bpr` at the bare-bracha87 layer) is the only mechanism that guarantees eventual delivery, and replay state is intrinsic to the protocol's own committed flags. The application loop is two operations: drain ingress, tick the pump (see the BPR section above for the loop sketch).
+A previous deployment pattern wrapped this library in per-record retry bookkeeping: `processHasPsk[]` / `processOriginAck[]` / `processRound[]` evidence tracking, `destMask` per-record bitmaps, a cursor over the record list, per-record `retryNs` floors. With BPR, that machinery is no longer needed — the library's own `bkr94acsRetry` (or `bracha87Fig1Bpr` at the bare-bracha87 layer) is the only mechanism that guarantees eventual delivery, and retry state is intrinsic to the protocol's own sent flags. The application loop is two operations: drain ingress, tick the retry (see the BPR section above for the loop sketch).
 
 ### Termination is an application choice
 
 The library does not terminate and does not prescribe when an application should. It **requires** two things, **provides** the signals a policy reads, and leaves the policy itself to the deployment — there is no single right answer.
 
-The library exposes exactly one **stop** condition — `BKR94ACS_ACT_BA_EXHAUSTED` — and it is a *failure* stop: a BA provably cannot decide, so the ACS instance can never complete. There is no library *success* stop. `BKR94ACS_ACT_COMPLETE` and `BKR94ACS_ACT_BA_DECIDED` report that a decision was reached, but post-decide continuation forbids stopping on them, and under unbounded latency no peer can ever know that stopping is safe. *When* to stop after success is therefore unspecifiable by the library; it is the application's policy (e.g. abandon).
+The library exposes exactly one **stop** condition — `BKR94ACS_ACT_BA_EXHAUSTED` — and it is a *failure* stop: a BA provably cannot decide, so the ACS instance can never complete. There is no library *success* stop. `BKR94ACS_ACT_COMPLETE` and `BKR94ACS_ACT_BA_DECIDED` report that a decision was reached, but post-decide continuation forbids stopping on them, and under unbounded latency no process can ever know that stopping is safe. *When* to stop after success is therefore unspecifiable by the library; it is the application's policy (e.g. abandon).
 
 **Required:**
 
-- **Post-decide continuation** (Implementation Note 1): a decided peer must keep broadcasting so slower peers can decide. Do not stop on `BKR94ACS_ACT_COMPLETE`.
-- **One Pump call per tick** — see the NETWORK FLOOD WARNING in `bracha87.h`. `bkr94acsPump` emits one Fig1's replays per call; do **not** loop it (`while (Pump(...))` empties the committed-instance space onto the wire as fast as the CPU runs, causing the very drops the pump exists to recover from). The application's tick rate is the wire rate limit.
+- **Post-decide continuation** (Implementation Note 1): a decided process must keep broadcasting so slower processes can decide. Do not stop on `BKR94ACS_ACT_COMPLETE`.
+- **One Retry call per tick** — see the NETWORK FLOOD WARNING in `bracha87.h`. `bkr94acsRetry` outputs one Fig1's retries per call; do **not** loop it (`while (Retry(...))` empties the sent-instance space onto the wire as fast as the CPU runs, causing the very drops the retry exists to recover from). The application's tick rate is the wire rate limit.
 
 **Provided** (signals a termination policy can build on):
 
-- `bkr94acsPump` returns 0 only on a full-sweep idle — no committed instance found, or every committed instance has retired all its replays (quiescence: every peer announced accepted). Not a termination signal by itself; one sweep = `bkr94acsCommittedFig1Count(a)` Pump calls (that count grows as rounds advance).
+- `bkr94acsRetry` returns 0 only on a full-sweep idle — no sent instance found, or every sent instance has retired all its retries (quiescence: every process announced accepted). Not a termination signal by itself; one sweep = `bkr94acsSentFig1Count(a)` Retry calls (that count grows as rounds advance).
 - `BKR94ACS_ACT_BA_DECIDED` / `BKR94ACS_ACT_COMPLETE` — *success* signals (a BA decided; all N decided). **Not** stop conditions: post-decide continuation requires broadcasting past both.
 - `BKR94ACS_ACT_BA_EXHAUSTED` — the library's one stop condition, and a *failure* one (the BA gave up). Surfaces Fig 4's `BRACHA87_EXHAUSTED`.
-- Per-input progress: an Input returning `nacts > 0` is a state advance; duplicate replays return 0 (so a progress signal built on `nacts` is stable under retransmission).
+- Per-input progress: an Input returning `nacts > 0` is a state advance; duplicate retries return 0 (so a progress signal built on `nacts` is stable under retransmission).
 
 **Two invariants any policy must respect**, whatever its shape:
 
-- A peer that stops without `COMPLETE` must **not** commit a unilateral decision — any substitute could disagree with a peer that did decide (Lemma 2 Part C). Surface "gave up without a decision" as its own outcome, with empty membership.
-- `BKR94ACS_ACT_BA_EXHAUSTED` is a distinct fatal outcome (Implementation Note 12): the local ACS cannot complete; the application must surface it and abort the epoch.
+- A process that stops without `COMPLETE` must **not** substitute a unilateral decision — any substitute could disagree with a process that did decide (Lemma 2 Part C). Surface "gave up without a decision" as its own outcome, with empty membership.
+- `BKR94ACS_ACT_BA_EXHAUSTED` is a distinct fatal outcome (Implementation Note 12): the local ACS cannot complete; the application must surface it and abort the process.
 
 ### Coin choice — caller responsibility
 
@@ -427,15 +427,15 @@ The library exposes exactly one **stop** condition — `BKR94ACS_ACT_BA_EXHAUSTE
 
 Fig 4 step 3 case (iii) — when neither decision-count rule fires — calls the coin. The coin is how Bracha escapes FLP impossibility: deterministic asynchronous consensus is impossible, and randomization buys probabilistic termination. Bracha's own Theorem 2 bounds the expected number of phases at O(1) under a **common-coin** assumption; under other coin choices the theoretical bound depends on the choice. (This is the same FLP-escape mechanism as other randomized async BFT protocols; partial-synchrony designs like PBFT/Tendermint/HotStuff escape FLP through timing assumptions instead.) Options the caller may supply via `bracha87CoinFn`:
 
-- **Common coin** (same value across all peers per phase): a verifiable random beacon, a distributed coin protocol, or a threshold-signature-based scheme. Brings additional setup (DKG, threshold keys, etc.) that the library does not require for any other reason.
-- **Local coin** (each peer flips independently): e.g. `arc4random_buf` per peer. The simplest adversarial-safe option; no shared-randomness infrastructure required. Termination is provably constant in expectation when `t = O(√n)` (Ben-Or 1983 Theorem 3, "Another Advantage of Free Choice (Extended Abstract): Completely Asynchronous Agreement Protocols," PODC '83); outside that regime the theoretical bound degrades toward `O(2^(n-t-1))`.
+- **Common coin** (same value across all processes per phase): a verifiable random beacon, a distributed coin protocol, or a threshold-signature-based scheme. Brings additional setup (DKG, threshold keys, etc.) that the library does not require for any other reason.
+- **Local coin** (each process flips independently): e.g. `arc4random_buf` per process. The simplest adversarial-safe option; no shared-randomness infrastructure required. Termination is provably constant in expectation when `t = O(√n)` (Ben-Or 1983 Theorem 3, "Another Advantage of Free Choice (Extended Abstract): Completely Asynchronous Agreement Protocols," PODC '83); outside that regime the theoretical bound degrades toward `O(2^(n-t-1))`.
 - **Deterministic coin** (e.g. `phase & 1`): zero entropy under an adversarial scheduler. Useful for reproducible tests and for non-adversarial deployments — used by the bundled examples for demo reproducibility, not safe under an adaptive adversary.
 
-A slow-converging coin drives Fig 4 step 3 case (iii) ties round after round, advancing the phase counter toward the encoding-imposed `maxPhases=85` ceiling (Operational Limits). Hitting that ceiling raises `BRACHA87_EXHAUSTED`, which is fatal at the BKR94 layer — Lemma 2 Part C admits no unilateral substitute, so the local epoch must abort (Implementation Note 12).
+A slow-converging coin drives Fig 4 step 3 case (iii) ties round after round, advancing the phase counter toward the encoding-imposed `maxPhases=85` ceiling (Operational Limits). Hitting that ceiling raises `BRACHA87_EXHAUSTED`, which is fatal at the BKR94 layer — Lemma 2 Part C admits no unilateral substitute, so the local process must abort (Implementation Note 12).
 
 ### No timing in the protocol
 
-The protocol's correctness — both safety and eventual termination — depends on no timing assumption; this is the asynchronous-BFT model. Any timing parameters in a deployment (retransmit cadence, termination thresholds, pump tick) govern the transport wrapper and termination policy, not the state machines in this library. Correctness holds under arbitrary asynchrony; termination speed depends on the operator's tuning.
+The protocol's correctness — both safety and eventual termination — depends on no timing assumption; this is the asynchronous-BFT model. Any timing parameters in a deployment (retransmit cadence, termination thresholds, retry tick) govern the transport wrapper and termination policy, not the state machines in this library. Correctness holds under arbitrary asynchrony; termination speed depends on the operator's tuning.
 
 ---
 
@@ -453,7 +453,7 @@ fig3IsValid, fig4Nfn, Fig 3 cascade                  test/test_predicates.c —
                                                      n=4, t=1
 ```
 
-The decision-table layer (`*.dtc`) is paper vocabulary, rule-by-rule commented with the paper's rule numbers. `dtc` enforces exhaustiveness and exclusivity at compile time and emits depth-optimal dispatch. The C wrapper sits below the dispatch and is one line per boundary input/output — each line is either a flag/count/bit-test mapping or a boolean-to-side-effect; small enough to read.
+The decision-table layer (`*.dtc`) is paper vocabulary, rule-by-rule commented with the paper's rule numbers. `dtc` enforces exhaustiveness and exclusivity at compile time and outputs depth-optimal dispatch. The C wrapper sits below the dispatch and is one line per boundary input/output — each line is either a flag/count/bit-test mapping or a boolean-to-side-effect; small enough to read.
 
 The two algorithmic predicates that the dispatch delegates to — `fig3IsValid` (recursive existential), `fig4Nfn` (case analysis with permissive D_FLAG encoding) — and the Fig 3 cascade (iterative re-validation) are the only places where search/recursion/iteration sits below the bridge. They are anchored by `test_predicates.c`: 960 `fig4Nfn` inputs, 165 `fig3IsValid` evaluations, 4 cascade delivery permutations, all at n=4 t=1, against a paper-direct subset-enumeration reference. All agree.
 
@@ -461,7 +461,7 @@ The two algorithmic predicates that the dispatch delegates to — `fig3IsValid` 
 
 ## Implementation Notes
 
-Each item below is a paper-vs-code divergence that any from-scratch implementation will encounter. We caught them by reading the paper rule-by-rule against composed-simulation runs and against fair-loss replay; isolation testing missed almost all of them, because the divergences only manifest under multi-figure interaction or under network conditions that simulated reliable channels never produce. They are the cost of building this from the papers — listed here so a porter does not pay it twice, and so a reader evaluating "should I trust this implementation?" can see what was actually verified and what regression test catches each one.
+Each item below is a paper-vs-code divergence that any from-scratch implementation will encounter. We caught them by reading the paper rule-by-rule against composed-simulation runs and against fair-loss retry; isolation testing missed almost all of them, because the divergences only manifest under multi-figure interaction or under network conditions that simulated reliable channels never produce. They are the cost of building this from the papers — listed here so a porter does not pay it twice, and so a reader evaluating "should I trust this implementation?" can see what was actually verified and what regression test catches each one.
 
 1. **Post-decide continuation.** The paper says "Go to round 1 of phase i+1" after all three step 3 cases. A decided process must continue broadcasting so others can reach consensus. `BRACHA87_DECIDE | BRACHA87_BROADCAST` is returned exactly once; subsequent rounds return `BRACHA87_BROADCAST` only.
 
@@ -471,7 +471,7 @@ Each item below is a paper-vs-code divergence that any from-scratch implementati
 
 4. **Dead cascade after INITIAL.** The cascade after INITIAL could never fire -- if any threshold were met, `echoed` would already be set via Rule 2/3. Removed; comment explains the proof.
 
-5. **Committed value memcpy.** The memcpy on Rules 4/5/6 appears redundant but is essential. A Byzantine initial can cause commitment to the wrong value; the memcpy corrects it when the threshold-reaching value differs from the committed value.
+5. **Echoed value memcpy.** The memcpy on Rules 4/5/6 appears redundant but is essential. A Byzantine initial can store the wrong value first; the memcpy corrects it when the threshold-reaching value differs from the echoed value.
 
 6. **Subset-majority reachability threshold (step 1).** Under N's tie-break-to-0, value 0 is reachable in some n-t subset iff `cnt[0] >= (nt+1)/2` (unified formula: equals `nt/2` for even n-t, `nt/2+1` for odd); value 1 is reachable iff `cnt[1] >= nt/2+1` (strict majority). Permissive iff both reachable. Using the symmetric `>= nt/2+1` test on both sides wrongly rejects honest tie-subset 0s when n-t is even. Verified by exhaustive enumeration for n=4..16.
 
@@ -481,15 +481,15 @@ Each item below is a paper-vs-code divergence that any from-scratch implementati
 
 9. **Post-decide value preservation across sub-rounds.** During post-decide continuation (Note 1), `b->value` is preserved as the decision through every sub-round of subsequent phases. The .dtc-faithful Fig 4 dispatch zeroes the `setMajority` and `setDMajority` outputs when `have_decided = yes`, so adversarial inputs whose majority disagrees with the decision cannot drift the broadcast value away from it. Verified by `testFig4PostDecideAdversarial` (which would have failed against a pre-DTC version that overwrote `b->value` with majority/(d, majority) at sub-rounds 0 and 1 of post-decide phases).
 
-10. **BPR (ready, v) replay must NOT short-circuit on accepted.** An accepted peer owes its READY to peers still below the 2t+1 threshold; replay is the only mechanism Bracha provides for getting it there under loss. The "ACCEPTED → stop replaying READY" optimisation strands slow peers — READY is exactly what the ready-amplification tail consumes. This is the asymmetry with Note 11: ACCEPTED *does* retire INITIAL and ECHO (they are bootstrap-only) but must *never* retire READY. Regression check: `testFig1Bpr` post-accept assertions (READY survives; INITIAL/ECHO retired).
+10. **BPR (ready, v) retry must NOT short-circuit on accepted.** An accepted process owes its READY to processes still below the 2t+1 threshold; retry is the only mechanism Bracha provides for getting it there under loss. The "ACCEPTED → stop retrying READY" optimisation strands slow processes — READY is exactly what the ready-amplification tail consumes. This is the asymmetry with Note 11: ACCEPTED *does* retire INITIAL and ECHO (they are bootstrap-only) but must *never* retire READY. Regression check: `testFig1Bpr` post-accept assertions (READY survives; INITIAL/ECHO retired).
 
-11. **BPR (initial, v) / (echo, v) replay: retire only on a stop strictly stronger than local-echo.** INITIAL and ECHO are bootstrap-only — they drive the system to the point where `t+1` correct peers have sent READY, after which amplification is self-sustaining and consumes neither. Two stops are sound and minimal: (a) **ACCEPTED** — accept requires `2t+1` readys, ≥ `t+1` of them correct and re-emitted forever, so every correct peer reaches accept on readys alone; this retires both INITIAL and ECHO. (b) **all-echoed** (`echoSenders == n`) — INITIAL only induces echoes, so if every peer has echoed there is nothing to induce; this retires INITIAL. The *forbidden* gate is the weaker "stop INITIAL once we ECHOed locally": at the n = 3t+1 boundary the (n+t)/2 + 1 echo threshold equals the honest count, so at local-echo time no readys may exist yet, the rescue set is not established, and a peer that missed the bootstrap can be left one echo short forever — only the originator breaks it. ACCEPTED and all-echoed are both strictly stronger than that gate. Under ≤t byzantine-silent peers `echoSenders` cannot reach `n`, so that path self-disables and ACCEPTED carries the retirement. Regression checks: `testBprByzantineSilent` (n=4 t=1, one silent Byzantine peer — converges in 1 sweep; the original `!ECHOED` gate stalled at |SubSet|=1 over 50000+ sweeps) and `testFig1Bpr` all-echoed assertions (echoSenders==n retires INITIAL without accept).
+11. **BPR (initial, v) / (echo, v) retry: retire only on a stop strictly stronger than local-echo.** INITIAL and ECHO are bootstrap-only — they drive the system to the point where `t+1` correct processes have sent READY, after which amplification is self-sustaining and consumes neither. Two stops are sound and minimal: (a) **ACCEPTED** — accept requires `2t+1` readys, ≥ `t+1` of them correct and retried forever, so every correct process reaches accept on readys alone; this retires both INITIAL and ECHO. (b) **all-echoed** (`echoSenders == n`) — INITIAL only induces echoes, so if every process has echoed there is nothing to induce; this retires INITIAL. The *forbidden* gate is the weaker "stop INITIAL once we ECHOed locally": at the n = 3t+1 boundary the (n+t)/2 + 1 echo threshold equals the honest count, so at local-echo time no readys may exist yet, the rescue set is not established, and a process that missed the bootstrap can be left one echo short forever — only the initiator breaks it. ACCEPTED and all-echoed are both strictly stronger than that gate. Under ≤t byzantine-silent processes `echoSenders` cannot reach `n`, so that path self-disables and ACCEPTED carries the retirement. Regression checks: `testBprByzantineSilent` (n=4 t=1, one silent Byzantine process — converges in 1 sweep; the original `!ECHOED` gate stalled at |SubSet|=1 over 50000+ sweeps) and `testFig1Bpr` all-echoed assertions (echoSenders==n retires INITIAL without accept).
 
-12. **Fig 4 EXHAUSTED is fatal at the BKR94 layer; no unilateral substitute.** When `bracha87Fig4Round` returns `BRACHA87_EXHAUSTED` (probabilistic termination did not converge within the unsigned-char round encoding's 85-phase ceiling), the local BA has no decision. BKR94 Lemma 2 Part B's "all BAs terminate" assumption is violated, and Part C (SubSet agreement) is unrecoverable locally — any unilateral substitute (decide 0 or 1) could disagree with another peer's actual decision (different local-coin sequence or message ordering). The library surfaces `BKR94ACS_ACT_BA_EXHAUSTED` and marks the affected origin's BA state as exhausted (`bkr94acsBaDecision(acs, origin)` returns 0xFE thereafter); the 0xFE sentinel does not match the decided-count scan, so an exhausted BA never counts as decided (no decision was made) and `BKR94ACS_F_COMPLETE` stays clear in `acs->flags`. The application must abort the local epoch and surface this as a distinct outcome (see Termination under Deployment Notes). BPR continues pumping replays for that origin so other peers may still benefit from earlier-round echoes/readys. EXHAUSTED is mutually exclusive with DECIDE per Fig 4 semantics, so single emission is structural — no dedup guard needed. Regression check: `testExhausted`.
+12. **Fig 4 EXHAUSTED is fatal at the BKR94 layer; no unilateral substitute.** When `bracha87Fig4Round` returns `BRACHA87_EXHAUSTED` (probabilistic termination did not converge within the unsigned-char round encoding's 85-phase ceiling), the local BA has no decision. BKR94 Lemma 2 Part B's "all BAs terminate" assumption is violated, and Part C (SubSet agreement) is unrecoverable locally — any unilateral substitute (decide 0 or 1) could disagree with another process's actual decision (different local-coin sequence or message ordering). The library surfaces `BKR94ACS_ACT_BA_EXHAUSTED` and marks the affected process's BA state as exhausted (`bkr94acsBaDecision(acs, process)` returns 0xFE thereafter); the 0xFE sentinel does not match the decided-count scan, so an exhausted BA never counts as decided (no decision was made) and `BKR94ACS_F_COMPLETE` stays clear in `acs->flags`. The application must abort the local process and surface this as a distinct outcome (see Termination under Deployment Notes). BPR continues retrying for that process so other processes may still benefit from earlier-round echoes/readys. EXHAUSTED is mutually exclusive with DECIDE per Fig 4 semantics, so single output is structural — no dedup guard needed. Regression check: `testExhausted`.
 
-13. **READY's only sound retire is *remote* all-accepted — never *local* accept (the per-peer refinement of Note 10).** Per-peer suppression and the all-`n`-accepted READY quiescence gate both read PEERS' accepts, announced via the `BKR94ACS_ACCEPTED` wire bit and recorded in `acFrom` — not the local `ACCEPTED` flag that Note 10 forbids. Per-peer: skip READY to a peer once *it* has accepted (its Rule 6 fired on 2t+1 readys, so it consumes no further ready). Whole-action: stop emitting only when *all* `n` have accepted. Two byzantine-safety facts are load-bearing: a forged `ACCEPTED` marks only its own sender, so it retires our replay to that liar but can never strand a correct laggard (whose bit is set solely by its own true accept); and reaching the all-`n` gate requires every *correct* peer's true accept regardless of what the ≤t Byzantine peers claim. Do **not** add a `≥2t+1 accepted → stop` threshold shortcut — Byzantine forgeries could trip it while a correct peer is still below 2t+1 readys. Regression checks: `testFig1SkipAccept`, `testBprSkipAccept`, and `runWithPump` drop-convergence with suppression active.
+13. **READY's only sound retire is *remote* all-accepted — never *local* accept (the per-process refinement of Note 10).** Per-process suppression and the all-`n`-accepted READY quiescence gate both read PROCESSES' accepts, announced via the `BKR94ACS_ACCEPTED` wire bit and recorded in `acFrom` — not the local `ACCEPTED` flag that Note 10 forbids. Per-process: skip READY to a process once *it* has accepted (its Rule 6 fired on 2t+1 readys, so it consumes no further ready). Whole-action: stop outputting only when *all* `n` have accepted. Two byzantine-safety facts are load-bearing: a forged `ACCEPTED` marks only its own sender, so it retires our retry to that liar but can never strand a correct laggard (whose bit is set solely by its own true accept); and reaching the all-`n` gate requires every *correct* process's true accept regardless of what the ≤t Byzantine processes claim. Do **not** add a `≥2t+1 accepted → stop` threshold shortcut — Byzantine forgeries could trip it while a correct process is still below 2t+1 readys. Regression checks: `testFig1SkipAccept`, `testBprSkipAccept`, and `runWithRetry` drop-convergence with suppression active.
 
-14. **INITIAL must come from the designated broadcaster — `from == origin` (proposal) / `from == broadcaster` (consensus) is enforced, not assumed.** A Fig 1 instance is keyed to ONE designated broadcaster. Only that broadcaster may send `(initial, v)`; ECHO and READY arrive legitimately from any peer (`from != origin` is normal for them and is sender-deduped). A non-broadcaster INITIAL is a *forged broadcast* — a Byzantine peer injecting a value the correct origin never sent — and because Rule 1 echoes the first INITIAL unconditionally, an attacker reaching every correct peer drives the `(n+t)/2+1` echo cascade to a false ACCEPT, violating reliable-broadcast validity. Authenticated channels do **not** close this: they bind `from` to the true sender but not the message's *claimed* broadcaster (origin ≠ from is a valid ECHO/READY), so the binding is a protocol-semantic check, not a transport one. `bkr94acsProposalInput` / `bkr94acsConsensusInput` drop the message when `type == BRACHA87_INITIAL && from != origin/broadcaster`. The bare `bracha87Fig1Input` cannot self-enforce (it is not told its own broadcaster index — see the INITIAL-sender obligation in its header doc), so a direct bare-layer caller must filter before calling — `example/bracha87Fig1.c` shows the filter in its delivery loops. This trap is invisible to honest-only tests: every honest generator sends INITIALs with `from == origin`, and even an equivocating *origin* still has `from == origin` — so nothing exercised the forged-non-origin path until it was added explicitly. Regression checks: `testForgedInitial` (white-box) and Section A's forged-INITIAL contract case (black-box).
+14. **INITIAL must come from the designated initiator — `from == process` (A-Cast) / `from == initiator` (consensus) is enforced, not assumed.** A Fig 1 instance is keyed to ONE designated initiator. Only that initiator may send `(initial, v)`; ECHO and READY arrive legitimately from any process (`from != initiator` is normal for them and is sender-deduped). A non-initiator INITIAL is a *forged broadcast* — a Byzantine process injecting a value the correct initiator never sent — and because Rule 1 echoes the first INITIAL unconditionally, an attacker reaching every correct process drives the `(n+t)/2+1` echo cascade to a false ACCEPT, violating reliable-broadcast validity. Authenticated channels do **not** close this: they bind `from` to the true sender but not the message's *claimed* initiator (initiator ≠ from is a valid ECHO/READY), so the binding is a protocol-semantic check, not a transport one. `bkr94acsAcastInput` / `bkr94acsBaInput` drop the message when `type == BRACHA87_INITIAL && from != process/initiator`. The bare `bracha87Fig1Input` cannot self-enforce (it is not told its own initiator index — see the INITIAL-sender obligation in its header doc), so a direct bare-layer caller must filter before calling — `example/bracha87Fig1.c` shows the filter in its delivery loops. This trap is invisible to honest-only tests: every honest generator sends INITIALs with `from == process`, and even an equivocating *initiator* still has `from == process` — so nothing exercised the forged-non-initiator path until it was added explicitly. Regression checks: `testForgedInitial` (white-box) and Section A's forged-INITIAL contract case (black-box).
 
 ---
 

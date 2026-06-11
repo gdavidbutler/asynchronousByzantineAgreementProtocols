@@ -55,9 +55,13 @@ dkms.conf
 # Local Build
 
 bracha87Fig1.psu
+bracha87Fig1.c
 bracha87Fig3.psu
+bracha87Fig3.c
 bracha87Fig4.psu
+bracha87Fig4.c
 bkr94acs.psu
+bkr94acsRules.c
 
 # Local Executables
 example_bracha87Fig1

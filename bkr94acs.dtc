@@ -5,20 +5,20 @@
 # Paper-faithful capture of the BKR94 Asynchronous Common Subset
 # (ACS) protocol's rules.  Identifier and predicate translation,
 # and any C-side bridge decisions (sender validation, message
-# routing across origin/round/broadcaster, etc.), live in
+# routing across process/round/initiator, etc.), live in
 # bkr94acsToC.dtc.
 #
 # Composition.  BKR94 ACS is built on top of N reliable-broadcast
-# instances (one per origin proposing a value) and N binary-
-# agreement instances BA_j (one per origin, deciding whether to
-# include that origin's proposal in the agreed subset).  The
+# instances (one per process A-Casting a value) and N binary-
+# agreement instances BA_j (one per process, deciding whether to
+# include that process's A-Cast in the agreed subset).  The
 # rules below describe what the ACS layer does in response to
 # the events those underlying primitives surface; the primitives
 # themselves are specified in bracha87.dtc.
 #
 # In this deployment Q(j) = 1 - the BKR94 predicate "P_j has
 # broadcast a value" - is realised by Bracha87's Figure 1
-# accepting the reliable broadcast of P_j's proposal.  Bracha's
+# accepting the reliable broadcast of P_j's A-Cast.  Bracha's
 # Lemma 4 makes this realisation satisfy BKR94's assumption (2)
 # on Q (if any honest accepts, every honest eventually accepts).
 # The realisation choice is recorded in bkr94acsToC.dtc and is
@@ -28,12 +28,12 @@
 # events".  These coincide in benign runs but diverge under
 # asynchrony or Byzantine scheduling; only the BA-output-1
 # trigger satisfies Part A case (i) of the BKR94 Lemma 2 proof.
-# A HoneyBadger-style optimisation that fires Step 2 on the
+# An optimisation seen in derived presentations fires Step 2 on the
 # count of Q(j) = 1 events would be the wrong reading of the
 # paper.
 #
 # Inputs (the situation when an ACS-layer event is processed;
-# j is the origin to which the event refers):
+# j is the process to which the event refers):
 #   "kind of ACS event"     { Q(j) = 1, BA_j outputs 0, BA_j outputs 1 }
 #   "input to BA_j"         { none, 0, 1 }
 #                             - the value, if any, this process
@@ -51,7 +51,7 @@
 #
 # Outputs:
 #   "input 1 to BA_j"               { yes, no }
-#   "input 0 to all unvoted BAs"    { yes, no }
+#   "input 0 to all unentered BAs"    { yes, no }
 #   "output SubSet"                 { yes, no }
 #                                     - SubSet := { j : BA_j had output 1 }
 #                                       computed when this output fires
@@ -73,7 +73,7 @@ no,"BA_j outputs 0",
 no,"BA_j outputs 1",
 
 # ================================================================
-# Step 2 - Input 0 to all unvoted BAs at n-t BA outputs of 1
+# Step 2 - Input 0 to all unentered BAs at n-t BA outputs of 1
 # ================================================================
 
 # Rule 2.  Upon BA_j outputting 1, if the count of BAs that have
@@ -84,9 +84,9 @@ no,"BA_j outputs 1",
 #
 # The fanout itself - iterating over the N BAs and inputting 0
 # where input is none - is a C-side loop; the DTC fires the
-# go-signal "input 0 to all unvoted BAs" and the C does the
+# go-signal "input 0 to all unentered BAs" and the C does the
 # enumeration.
-@"input 0 to all unvoted BAs","kind of ACS event","post-output BA-output-1 count >= n-t","input-0 fanout already triggered"
+@"input 0 to all unentered BAs","kind of ACS event","post-output BA-output-1 count >= n-t","input-0 fanout already triggered"
 yes,"BA_j outputs 1",yes,no
 no,"BA_j outputs 1",yes,yes
 no,"BA_j outputs 1",no,
@@ -115,27 +115,27 @@ no,"BA_j outputs 1",no
 no,"BA_j outputs 0",no
 no,"Q(j) = 1",
 
-# Bracha Phase Re-emitter (BPR) per-origin pump gate -- not in
+# Bracha Phase Retry (BPR) per-process retry gate -- not in
 # this dispatch.
 #
 # Justification for BPR's placement at this layer: end-to-end
 # argument (Saltzer/Reed/Clark 1984; see SRC84.txt).  The
-# "still owed" predicate for proposal-Fig1 replay combines
-# Bracha's committed flags with this layer's per-origin
+# "still owed" predicate for A-Cast-Fig1 retry combines
+# Bracha's sent flags with this layer's per-process
 # BA-decided state (undecided / decided 0 / decided 1); both
-# live at the BKR endpoint, so the retire-or-pump decision is
+# live at the BKR endpoint, so the retire-or-retry decision is
 # made here rather than below.
 #
-# bkr94acsPump walks per-origin proposal Fig1 instances and
-# decides whether to emit replays based on the local BA
+# bkr94acsRetry walks per-process A-Cast Fig1 instances and
+# decides whether to output retries based on the local BA
 # decision state ({ undecided, decided 0, decided 1 }):
-#   - undecided  -> pump  (Q(j)=1 may still be learned by
-#                          other honest peers; their Fig1(j)
+#   - undecided  -> retry  (Q(j)=1 may still be learned by
+#                          other honest processes; their Fig1(j)
 #                          needs our echoes / readys)
 #   - decided 0  -> skip  (j excluded from SubSet; Step 2's
-#                          fanout already conveyed our vote)
-#   - decided 1  -> pump  (Bracha post-decide continuation:
-#                          peers that have not yet observed
+#                          fanout already conveyed our enter)
+#   - decided 1  -> retry  (Bracha post-decide continuation:
+#                          processes that have not yet observed
 #                          Fig1 ACCEPT for j still need our
 #                          echoes / readys, else their BA_j
 #                          stays undecided and may go to 0
@@ -145,7 +145,7 @@ no,"Q(j) = 1",
 # Three-rule single-input single-output guard with no
 # interaction with the Rules 1-3 dispatch and no test ordering
 # to optimise; captured in C as a switch over the BA decision
-# byte rather than a sub-table (same call as the Fig1 origin
-# INITIAL replay gate -- see bracha87Fig1.dtc BPR section).
+# byte rather than a sub-table (same call as the Fig1 initiator
+# INITIAL retry gate -- see bracha87Fig1.dtc BPR section).
 # The pitfall #1 (post-decide continuation) reasoning lives in
-# the comment at the bkr94acsPump cursor site.
+# the comment at the bkr94acsRetry cursor site.

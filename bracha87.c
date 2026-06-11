@@ -45,19 +45,19 @@
  * F1_VLEN: actual value length (vLen + 1, range 1..256).
  *
  * Layout (N = B_N, L = F1_VLEN, BS = BIT_SZ(N)):
- *   value[L]             committed value
+ *   value[L]             echoed value
  *   ecFrom[BS]           echo bitmap
- *   ecVal[N * L]         echo value per peer
+ *   ecVal[N * L]         echo value per process
  *   rdFrom[BS]           ready bitmap
- *   rdVal[N * L]         ready value per peer
- *   acFrom[BS]           accepted bitmap (per-peer "has accepted v")
+ *   rdVal[N * L]         ready value per process
+ *   acFrom[BS]           accepted bitmap (per-process "has accepted v")
  *
- * acFrom records peers known to have ACCEPTED this instance, learned
- * from the ACCEPTED annotation an accepted peer rides on its (ready, v)
- * re-emits (bracha87Fig1PeerAccepted).  It is the suppress mask that
- * retires READY replay per peer (bracha87Fig1Skip): an accepted peer
+ * acFrom records processes known to have ACCEPTED this instance, learned
+ * from the ACCEPTED annotation an accepted process rides on its (ready, v)
+ * retries (bracha87Fig1ProcessAccepted).  It is the suppress mask that
+ * retires READY retry per process (bracha87Fig1Skip): an accepted process
  * has its 2t+1 readys and consumes no further one (Rule 6 already
- * fired), so re-emitting READY to it is dead weight.  acFrom carries no
+ * fired), so retrying READY to it is dead weight.  acFrom carries no
  * value (accept is value-determined by Lemma 2) -- only the bitmap.
  */
 
@@ -191,11 +191,11 @@ fig1RdCnt(
 
 /*
  * Count distinct senders recorded in a from-bitmap (echo or ready).
- * Value-agnostic by design: a peer that has echoed/readied ANY value
+ * Value-agnostic by design: a process that has echoed/readied ANY value
  * has crossed the corresponding gate for good (Rule 2 echo and Rule 3
- * ready each fire at most once per peer), so the bitmap -- not the
- * per-value tally -- is the authoritative "has this peer moved past
- * the point where it consumes the replay" record the BPR retire gates
+ * ready each fire at most once per process), so the bitmap -- not the
+ * per-value tally -- is the authoritative "has this process moved past
+ * the point where it consumes the retry" record the BPR retire gates
  * need.  O(N/8); only the once-per-tick Bpr slow path calls it.
  */
 static unsigned int
@@ -214,7 +214,7 @@ fig1FromCnt(
 }
 
 /*
- * Record that peer 'from' sent echo with value v.
+ * Record that process 'from' sent echo with value v.
  */
 static void
 fig1SetEc(
@@ -229,7 +229,7 @@ fig1SetEc(
 }
 
 /*
- * Record that peer 'from' sent ready with value v.
+ * Record that process 'from' sent ready with value v.
  */
 static void
 fig1SetRd(
@@ -244,10 +244,10 @@ fig1SetRd(
 }
 
 /*
- * Commit to value v (set echoed, store committed value).
+ * Echo value v (set ECHOED, store the echoed value).
  */
 static void
-fig1Commit(
+fig1Echo(
   struct bracha87Fig1 *b
  ,const unsigned char *v
 ){
@@ -256,14 +256,14 @@ fig1Commit(
 }
 
 void
-bracha87Fig1Origin(
+bracha87Fig1Initiator(
   struct bracha87Fig1 *b
  ,const unsigned char *value
 ){
   if (!b || !value)
     return;
   memcpy(F1_VALUE(b), value, F1_VLEN(b));
-  b->flags |= BRACHA87_F1_ORIGIN;
+  b->flags |= BRACHA87_F1_INITIATOR;
 }
 
 unsigned int
@@ -285,8 +285,8 @@ bracha87Fig1Input(
   unsigned char sendEcho;
   unsigned char sendReady;
   unsigned char acceptV;
-  unsigned char replayEcho;
-  unsigned char replayReady;
+  unsigned char retryEcho;
+  unsigned char retryReady;
 
   if (!b || !value || !out || from > b->n || (b->flags & BRACHA87_F1_ACCEPTED))
     return (0);
@@ -322,19 +322,19 @@ bracha87Fig1Input(
   sendEcho    = 0;
   sendReady   = 0;
   acceptV     = 0;
-  replayEcho  = 0;
-  replayReady = 0;
+  retryEcho  = 0;
+  retryReady = 0;
 
 #include "bracha87Fig1.c"
 
-  /* Entry-point discriminator: BPR replay outputs are
+  /* Entry-point discriminator: BPR retry outputs are
    * exhaustiveness-only on the Input path and discarded. */
-  (void)replayEcho;
-  (void)replayReady;
+  (void)retryEcho;
+  (void)retryReady;
 
   nout = 0;
   if (sendEcho) {
-    fig1Commit(b, value);
+    fig1Echo(b, value);
     out[nout++] = BRACHA87_ECHO_ALL;
   }
   if (sendReady) {
@@ -354,7 +354,7 @@ const unsigned char *
 bracha87Fig1Value(
   const struct bracha87Fig1 *b
 ){
-  if (!b || !(b->flags & (BRACHA87_F1_ECHOED | BRACHA87_F1_ORIGIN)))
+  if (!b || !(b->flags & (BRACHA87_F1_ECHOED | BRACHA87_F1_INITIATOR)))
     return (0);
   return (F1_VALUE(b));
 }
@@ -374,14 +374,14 @@ bracha87Fig1Bpr(
   unsigned char sendEcho;
   unsigned char sendReady;
   unsigned char acceptV;
-  unsigned char replayEcho;
-  unsigned char replayReady;
+  unsigned char retryEcho;
+  unsigned char retryReady;
 
   if (!b || !out)
     return (0);
 
-  /* Nothing committed yet and not the originator -> nothing to replay. */
-  if (!(b->flags & (BRACHA87_F1_ECHOED | BRACHA87_F1_ORIGIN)))
+  /* Nothing sent yet and not the initiator -> nothing to retry. */
+  if (!(b->flags & (BRACHA87_F1_ECHOED | BRACHA87_F1_INITIATOR)))
     return (0);
 
   nout = 0;
@@ -396,12 +396,12 @@ bracha87Fig1Bpr(
    * ACCEPTED is the locally-observable proof that this point has
    * passed: accept requires 2t+1 distinct readys, of which at most
    * t are byzantine, so >= t+1 came from correct processes.  Those
-   * correct processes have RDSENT and re-emit (ready, v) forever
+   * correct processes have RDSENT and retry (ready, v) forever
    * (READY never retires), so under fair loss every correct process
    * eventually collects t+1 of them, amplifies, sends ready, and --
    * once n-t >= 2t+1 correct readys circulate -- accepts.  No
    * INITIAL or ECHO is consumed anywhere in that tail.  So once THIS
-   * instance has ACCEPTED, its INITIAL and ECHO replays are provably
+   * instance has ACCEPTED, its INITIAL and ECHO retries are provably
    * dead weight: retire them.
    *
    * This is NOT the forbidden local-saturation gate.  Pitfall 11
@@ -411,16 +411,16 @@ bracha87Fig1Bpr(
    * ACCEPTED is strictly stronger: it is the witness that the t+1
    * correct readys now exist.  (Pitfall 10's ban on retiring READY
    * at accept is untouched -- READY is exactly what the amplification
-   * tail consumes; see the READY emit below.)  Retiring AT accept
+   * tail consumes; see the READY output below.)  Retiring AT accept
    * also sidesteps the Input accept-guard's bitmap freeze: nothing
    * downstream of accept is counted, but nothing needs to be.
    *
    * INITIAL carries a second, independent retire: echoSenders == n.
-   * INITIAL induces only echoes (Rule 1/2); once every peer has
+   * INITIAL induces only echoes (Rule 1/2); once every process has
    * echoed there is nothing left to induce.  Trivially sound,
    * value-agnostic, monotone-latched, and fires before accept for a
-   * fast origin -- so emit only while NEITHER condition holds.
-   * Under <= t byzantine-silent peers echoSenders cannot reach n, so
+   * fast initiator -- so output only while NEITHER condition holds.
+   * Under <= t byzantine-silent processes echoSenders cannot reach n, so
    * that path self-disables and ACCEPTED carries the retirement.
    *
    * Single-input guards, captured in C rather than as a DTC
@@ -428,15 +428,15 @@ bracha87Fig1Bpr(
    * "Cross-Domain Bridge Pattern" -- guards with no ordering
    * insight stay in C).
    */
-  if ((b->flags & BRACHA87_F1_ORIGIN)
+  if ((b->flags & BRACHA87_F1_INITIATOR)
    && !(b->flags & BRACHA87_F1_ACCEPTED)
    && fig1FromCnt(F1_ECFROM(b), B_N(b)) < B_N(b))
     out[nout++] = BRACHA87_INITIAL_ALL;
 
   /*
-   * Echo / ready replay: chain on the merged paper+BPR
+   * Echo / ready retry: chain on the merged paper+BPR
    * dispatch.  Bpr enters with a "kind of message" that cannot
-   * fire any paper rule given current committed state -- type =
+   * fire any paper rule given current sent state -- type =
    * INITIAL with have echoed = yes leaves Rules 1-3 inhibited
    * (need !echoed) and Rules 4-6 unmet (need kind = (echo, v)
    * or (ready, v)).  Bracha outputs come back all "no" and the
@@ -444,10 +444,10 @@ bracha87Fig1Bpr(
    * yes".  Threshold predicates are immaterial to the chained
    * BPR rules in this state; 0 suffices.
    *
-   * In the origin-but-not-echoed branch (above), the INITIAL
-   * replay is already emitted; the dispatch is skipped because
-   * ECHOED clear means the BPR echo / ready rules would emit
-   * no-replay regardless of their other inputs (their guards
+   * In the initiator-but-not-echoed branch (above), the INITIAL
+   * retry is already output; the dispatch is skipped because
+   * ECHOED clear means the BPR echo / ready rules would output
+   * no-retry regardless of their other inputs (their guards
    * require haveEchoed = yes / haveSentReady = yes).
    */
   if (b->flags & BRACHA87_F1_ECHOED) {
@@ -460,13 +460,13 @@ bracha87Fig1Bpr(
     sendEcho    = 0;
     sendReady   = 0;
     acceptV     = 0;
-    replayEcho  = 0;
-    replayReady = 0;
+    retryEcho  = 0;
+    retryReady = 0;
 
 #include "bracha87Fig1.c"
 
     /* Bracha outputs are guaranteed 0 by the type/state passed;
-     * Bpr applies BPR replay outputs only. */
+     * Bpr applies BPR retry outputs only. */
     (void)sendEcho;
     (void)sendReady;
     (void)acceptV;
@@ -477,25 +477,25 @@ bracha87Fig1Bpr(
      * every correct process reaches accept on readys alone, via
      * amplification, with no echo consumed.  READY does NOT retire
      * (pitfall 10) -- it is precisely what that amplification tail
-     * consumes, so it replays forever until application abandonment.
+     * consumes, so it retries forever until application abandonment.
      */
-    if (replayEcho && !(b->flags & BRACHA87_F1_ACCEPTED))
+    if (retryEcho && !(b->flags & BRACHA87_F1_ACCEPTED))
       out[nout++] = BRACHA87_ECHO_ALL;
     /*
-     * READY never retires on LOCAL state (pitfall 10): an accepted peer
-     * still owes (ready, v) to peers below 2t+1.  But it DOES retire on
-     * the REMOTE fact that every peer has accepted -- then no peer
+     * READY never retires on LOCAL state (pitfall 10): an accepted process
+     * still owes (ready, v) to processes below 2t+1.  But it DOES retire on
+     * the REMOTE fact that every process has accepted -- then no process
      * consumes a ready anywhere and the instance is quiescent.  acFrom
-     * records peers' own accepts (bracha87Fig1PeerAccepted, fed from the
-     * ACCEPTED annotation on their ready re-emits, self included via the
-     * caller).  Reaching N requires every CORRECT peer's true accept --
-     * a byzantine peer's forged ACCEPTED only marks itself, never
+     * records processes' own accepts (bracha87Fig1ProcessAccepted, fed from the
+     * ACCEPTED annotation on their ready retries, self included via the
+     * caller).  Reaching N requires every CORRECT process's true accept --
+     * a byzantine process's forged ACCEPTED only marks itself, never
      * strands a correct laggard -- so the gate is byzantine-safe.  Below
-     * N, the per-peer suppress mask (bracha87Fig1Skip) still drops READY
-     * to the already-accepted peers; this guard only avoids emitting an
+     * N, the per-process suppress mask (bracha87Fig1Skip) still drops READY
+     * to the already-accepted processes; this guard only avoids outputting an
      * all-suppressed action at full coverage.
      */
-    if (replayReady && fig1FromCnt(F1_ACFROM(b), B_N(b)) < B_N(b))
+    if (retryReady && fig1FromCnt(F1_ACFROM(b), B_N(b)) < B_N(b))
       out[nout++] = BRACHA87_READY_ALL;
   }
   return (nout);
@@ -511,20 +511,20 @@ bracha87Fig1AllEchoed(
 }
 
 /*
- * Record that peer 'from' has ACCEPTED this instance.  Idempotent and
+ * Record that process 'from' has ACCEPTED this instance.  Idempotent and
  * value-agnostic (Lemma 2: all correct accepts agree).  Sets the acFrom
  * bit consumed by bracha87Fig1Skip(READY) and the READY quiescence gate.
  *
- * 'from' is the peer that announced its accept -- on the wire this is
+ * 'from' is the process that announced its accept -- on the wire this is
  * the sender of a (ready, v) carrying the ACCEPTED annotation, so the
  * caller has already fed that ready through bracha87Fig1Input (setting
  * rdFrom[from]) before calling this; acFrom is thus a subset of rdFrom.
  * Pass the local index for self-accept so the quiescence count can reach
- * n (a Fig1 instance does not know its own peer index -- the caller,
+ * n (a Fig1 instance does not know its own process index -- the caller,
  * which routes by it, supplies it).
  */
 void
-bracha87Fig1PeerAccepted(
+bracha87Fig1ProcessAccepted(
   struct bracha87Fig1 *b
  ,unsigned char from
 ){
@@ -534,27 +534,27 @@ bracha87Fig1PeerAccepted(
 }
 
 /*
- * BPR per-peer suppress mask for a replay action: the set of peers that
+ * BPR per-process suppress mask for a retry action: the set of processes that
  * provably no longer consume that action, so the caller's broadcast
- * skips them (a peer p is skipped iff bit p is set).  Returns 0 for a
- * null instance or a non-replay act (caller then broadcasts to all).
+ * skips them (a process p is skipped iff bit p is set).  Returns 0 for a
+ * null instance or a non-retry act (caller then broadcasts to all).
  * The returned pointer is borrowed library state, valid until the next
  * mutating call on this instance.
  *
  *   INITIAL_ALL -> ecFrom : INITIAL only induces an echo (Rule 1); a
- *     peer that has echoed will never echo again, so it induces nothing.
+ *     process that has echoed will never echo again, so it induces nothing.
  *   ECHO_ALL    -> rdFrom : ECHO feeds Rule 2 (-> echo) and Rule 4
- *     (-> ready); a peer that has sent ready satisfies neither again,
+ *     (-> ready); a process that has sent ready satisfies neither again,
  *     and accept (Rule 6) consumes readys, not echoes.
- *   READY_ALL   -> acFrom : READY feeds Rules 3/5/6; only after a peer
+ *   READY_ALL   -> acFrom : READY feeds Rules 3/5/6; only after a process
  *     ACCEPTS (Rule 6 fired on 2t+1 readys) does it consume no further
  *     ready.  Accept is wire-silent in base Bracha, so this mask is
- *     populated from the ACCEPTED annotation peers ride on their ready
- *     re-emits (bracha87Fig1PeerAccepted).
+ *     populated from the ACCEPTED annotation processes ride on their ready
+ *     retries (bracha87Fig1ProcessAccepted).
  *
  * Each mask uses only the soonest sound evidence: ecFrom (not rdFrom)
  * would under-suppress INITIAL; rdFrom (not ecFrom) would over-suppress
- * ECHO to peers still collecting echoes toward Rule 4.
+ * ECHO to processes still collecting echoes toward Rule 4.
  */
 const unsigned char *
 bracha87Fig1Skip(
@@ -586,8 +586,8 @@ bracha87Fig1Skip(
  *                              would wrap an unsigned char)
  *   complete[(maxRounds+7)/8]  round-complete bitmap
  *   Per round (maxRounds rounds):
- *     received[(N+7)/8]        bitmap per peer
- *     values[N]                value per peer
+ *     received[(N+7)/8]        bitmap per process
+ *     values[N]                value per process
  */
 
 #define F2_RCNT(b, k) ((b)->data[k])
@@ -708,9 +708,9 @@ bracha87Fig2GetReceived(
  *                              validation and the cascade gate)
  *   complete[(maxRounds+7)/8]  round-complete bitmap
  *   Per round (maxRounds rounds):
- *     arrived[(N+7)/8]         bitmap per peer
- *     valid[(N+7)/8]           bitmap per peer
- *     values[N]                value per peer
+ *     arrived[(N+7)/8]         bitmap per process
+ *     valid[(N+7)/8]           bitmap per process
+ *     values[N]                value per process
  */
 
 #define F3_VCNT(b, k) ((b)->data[k])
@@ -929,9 +929,9 @@ bracha87Fig3Accept(
         break;
 
       /*
-       * VALID^r check (paper Fig 3), hoisted out of the per-peer
+       * VALID^r check (paper Fig 3), hoisted out of the per-process
        * loop: collect the validated set from round r-1 once and
-       * call N once, then test each peer's value against the result.
+       * call N once, then test each process's value against the result.
        */
       pvbm = F3_VALD(b, r - 1);
       pvls = F3_VALS(b, r - 1);
@@ -1133,7 +1133,7 @@ fig4Nfn(
     /*
      * Round 3i+2 broadcast: step-2 output.  v|D_FLAG if >n/2 of the
      * round-3i+1 (step-1 majority) inputs agree on v, else v unchanged
-     * (unchanged path is non-deterministic across peers).
+     * (unchanged path is non-deterministic across processes).
      *
      * With n_msgs > nt, a subset might reach >n/2 even when the full
      * set does not, or vice versa.  Worst-case n-t subset for v
@@ -1164,8 +1164,8 @@ fig4Nfn(
      * No strict majority in full set.  In Bracha's t < n/3 regime
      * nt > N/2, so max s[v] = min(cnt[v], nt).  Given cnt[v]*2 <= N
      * (and cnt[v] <= nt by n_msgs <= N), no subset has strict
-     * majority either — D_FLAG is not legitimate for any honest peer.
-     * Value is the peer's prior value (non-deterministic), so
+     * majority either — D_FLAG is not legitimate for any honest process.
+     * Value is the process's prior value (non-deterministic), so
      * permissive on the base value only.
      */
     *result = 0;
@@ -1180,7 +1180,7 @@ fig4Nfn(
      * Input S is the round 3i+2 messages (step-2 outputs, which may
      * carry D_FLAG).  Exact result only when case (i) holds across
      * every n-t subset: dc[dm] - excess > 2t.  Otherwise the output
-     * depends on the peer's own (d,v) set and/or a coin, so permissive.
+     * depends on the process's own (d,v) set and/or a coin, so permissive.
      *
      * Invariant: excess <= t and dc[dm] > 2t together imply
      * dc[dm] > excess, so the unsigned subtraction below does not
@@ -1315,7 +1315,7 @@ bracha87Fig4Round(
    * holds one value per sender (Fig 3 dedup) and at most t senders
    * are byzantine, so dc[v] > t requires a CORRECT sender of (d, v)
    * -- and correct (d, 0) and (d, 1) senders cannot coexist in one
-   * round.  Each requires >n/2 of its peers' round-(3i+1) values,
+   * round.  Each requires >n/2 of its processes' round-(3i+1) values,
    * those values are per-sender globally consistent (Fig 1 accept,
    * Lemma 2), and the two supporter camps are disjoint, so two >n/2
    * camps would need more than n senders. */
@@ -1389,16 +1389,16 @@ bracha87Fig4Round(
 }
 
 /*************************************************************************/
-/*  Pump infrastructure (cursor type shared across the library)          */
+/*  Retry infrastructure (cursor type shared across the library)          */
 /*                                                                       */
-/*  Mirrors the bracha87.h "Pump infrastructure" section.  The cursor    */
-/*  struct + init are shared between bracha87Fig1PumpStep below and      */
-/*  bkr94acsPump (bkr94acs.c).                                           */
+/*  Mirrors the bracha87.h "Retry infrastructure" section.  The cursor    */
+/*  struct + init are shared between bracha87Fig1RetryStep below and      */
+/*  bkr94acsRetry (bkr94acs.c).                                           */
 /*************************************************************************/
 
 void
-bracha87PumpInit(
-  struct bracha87Pump *p
+bracha87RetryInit(
+  struct bracha87Retry *p
 ){
   if (p) {
     p->pos = 0;
@@ -1407,41 +1407,41 @@ bracha87PumpInit(
 }
 
 /*************************************************************************/
-/*  Fig 1 array Pump — BPR sweep over a caller-owned Fig 1 array         */
+/*  Fig 1 array Retry — BPR sweep over a caller-owned Fig 1 array         */
 /*************************************************************************/
 
 /*
- * One Fig 1's worth of replay actions per call.
+ * One Fig 1's worth of retry actions per call.
  *
  * NETWORK FLOOD WARNING.  This entry is meant to be called ONCE per
  * application tick.  It must NOT be invoked in a loop.  Bracha BPR
- * replays persist until their retire gates close (ACCEPTED /
- * all-echoed / all-n-accepted; committed flags live forever), so
- * until convergence every committed instance has actions to emit; a
+ * retries persist until their retire gates close (ACCEPTED /
+ * all-echoed / all-n-accepted; sent flags live forever), so
+ * until convergence every sent instance has actions to output; a
  * tight loop will empty the cursor space onto the wire as fast as
- * the CPU can run, causing the very drops the pump is meant to
+ * the CPU can run, causing the very drops the retry is meant to
  * recover from.  The application's tick rate is the rate limit.
  *
  * Walks the cursor forward from p->pos to the next instance with
- * replay actions and returns them.  Returns 0 ONLY when a full
+ * retry actions and returns them.  Returns 0 ONLY when a full
  * sweep across the entire array found no actions — either nothing
- * committed (no Fig 1 has ORIGIN / ECHOED / RDSENT; pre-broadcast /
- * fully-shutdown state) or every committed instance has quiesced
- * (all replays retired).  Neither is a per-tick termination signal
+ * sent (no Fig 1 has INITIATOR / ECHOED / RDSENT; pre-broadcast /
+ * fully-shutdown state) or every sent instance has quiesced
+ * (all retries retired).  Neither is a per-tick termination signal
  * by itself.
  *
- * Termination is the application's responsibility: count PumpStep
- * calls across ticks; one sweep = (bracha87Fig1CommittedCount
- * return value) PumpStep calls; K sweeps + silence-quorum = exit.
+ * Termination is the application's responsibility: count RetryStep
+ * calls across ticks; one sweep = (bracha87Fig1SentCount
+ * return value) RetryStep calls; K sweeps + silence-threshold = exit.
  * See README.md "Termination policy."  Bounded: at most one wrap
  * per call (one to drain a partial sweep with actions, one to
  * detect truly-idle).
  */
 unsigned int
-bracha87Fig1PumpStep(
+bracha87Fig1RetryStep(
   struct bracha87Fig1 *const *instances
  ,unsigned int count
- ,struct bracha87Pump *p
+ ,struct bracha87Retry *p
  ,struct bracha87Fig1Act *out
  ,unsigned int outCap
 ){
@@ -1452,7 +1452,7 @@ bracha87Fig1PumpStep(
   const unsigned char *v;
 
   if (!instances || !p || !out || !count
-   || outCap < BRACHA87_FIG1_PUMP_MAX_ACTS)
+   || outCap < BRACHA87_FIG1_RETRY_MAX_ACTS)
     return (0);
 
   for (;;) {
@@ -1483,7 +1483,7 @@ bracha87Fig1PumpStep(
 }
 
 unsigned int
-bracha87Fig1CommittedCount(
+bracha87Fig1SentCount(
   struct bracha87Fig1 *const *instances
  ,unsigned int count
 ){
@@ -1495,7 +1495,7 @@ bracha87Fig1CommittedCount(
   cnt = 0;
   for (i = 0; i < count; ++i)
     if (instances[i]
-     && (instances[i]->flags & (BRACHA87_F1_ORIGIN
+     && (instances[i]->flags & (BRACHA87_F1_INITIATOR
                               | BRACHA87_F1_ECHOED
                               | BRACHA87_F1_RDSENT)))
       ++cnt;

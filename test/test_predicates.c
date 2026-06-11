@@ -46,12 +46,12 @@ check(const char *what, int cond) {
  *   s=0: result := majority of the n-t base values (tie -> 0).
  *   s=1: result := v|D_FLAG iff strictly more than half of n
  *                  inputs carry the same v; else "unchanged"
- *                  (each peer keeps its prior value).
+ *                  (each process keeps its prior value).
  *   s=2: result := dm iff strictly more than 2t inputs carry
  *                  (d, dm) for the same dm; else "adopt" (>t)
  *                  or "coin" (otherwise).
  *
- * "Unchanged"/"adopt"/"coin" are non-deterministic across peers
+ * "Unchanged"/"adopt"/"coin" are non-deterministic across processes
  * and are reported as a paper-direct "no exact result for this
  * subset" via a sentinel (rc < 0 from refSubset).
  *

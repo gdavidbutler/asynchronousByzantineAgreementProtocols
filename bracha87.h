@@ -119,16 +119,16 @@
 #define BRACHA87_TYPE_MASK 0x03
 
 /* Figure 1 output actions */
-#define BRACHA87_INITIAL_ALL 1  /* send (initial, v) to all peers (BPR) */
-#define BRACHA87_ECHO_ALL    2  /* send echo(v) to all peers */
-#define BRACHA87_READY_ALL   3  /* send ready(v) to all peers */
+#define BRACHA87_INITIAL_ALL 1  /* send (initial, v) to all processes (BPR) */
+#define BRACHA87_ECHO_ALL    2  /* send echo(v) to all processes */
+#define BRACHA87_READY_ALL   3  /* send ready(v) to all processes */
 #define BRACHA87_ACCEPT      4  /* accept(v) */
 
 /* Figure 1 state flags (bitmap) */
 #define BRACHA87_F1_ECHOED   0x01
 #define BRACHA87_F1_RDSENT   0x02
 #define BRACHA87_F1_ACCEPTED 0x04
-#define BRACHA87_F1_ORIGIN   0x08  /* this peer is the broadcast originator */
+#define BRACHA87_F1_INITIATOR   0x08  /* this process is the broadcast initiator */
 
 /*
  * Figure 1 state.
@@ -138,9 +138,9 @@
  *
  * The value v is a fixed-length byte string of vLen + 1 bytes.
  * vLen encodes the value length: 0 = 1 byte, 255 = 256 bytes.
- * Per-peer echo/ready values are stored so echo_count[v]
+ * Per-process echo/ready values are stored so echo_count[v]
  * is computed correctly for any v, avoiding the liveness bug
- * where committing to the first value seen blocks the honest one.
+ * where echoing the first value seen blocks the honest one.
  */
 struct bracha87Fig1 {
   unsigned short ecCnt[2];/* incremental echo counts for binary (vLen==0) */
@@ -171,34 +171,34 @@ bracha87Fig1Init(
 );
 
 /*
- * Mark this Fig1 instance as the broadcast originator and store
- * the value to be broadcast.  Sets BRACHA87_F1_ORIGIN; copies
- * value into the committed-value slot so bracha87Fig1Value
+ * Mark this Fig1 instance as the broadcast initiator and store
+ * the value to be broadcast.  Sets BRACHA87_F1_INITIATOR; copies
+ * value into the echoed-value slot so bracha87Fig1Value
  * returns it (without setting BRACHA87_F1_ECHOED -- Rule 1 still
  * fires from the receipt of (initial, v) via bracha87Fig1Input).
  *
- * BPR replays BRACHA87_INITIAL_ALL on every bracha87Fig1Bpr
- * call while ORIGIN is set and the instance has neither ACCEPTED
- * nor observed an echo from every peer.  Stopping at "we ECHOED
+ * BPR retries BRACHA87_INITIAL_ALL on every bracha87Fig1Bpr
+ * call while INITIATOR is set and the instance has neither ACCEPTED
+ * nor observed an echo from every process.  Stopping at "we ECHOED
  * locally" would be wrong -- in the n = 3t + 1 regime the
- * (n+t)/2+1 echo threshold equals the count of honest peers, so
- * any honest peer that missed the bootstrap INITIAL can leave the
- * cascade one echo short forever, and only the originator can
+ * (n+t)/2+1 echo threshold equals the count of honest processes, so
+ * any honest process that missed the bootstrap INITIAL can leave the
+ * cascade one echo short forever, and only the initiator can
  * break it.  The two retirements above are the sound stops:
- * echoSenders == n means there is no un-echoed peer left to
+ * echoSenders == n means there is no un-echoed process left to
  * induce; ACCEPTED means t+1 correct readys now circulate, so
- * ready-amplification carries every correct peer to accept with
+ * ready-amplification carries every correct process to accept with
  * no INITIAL consumed.  Both are strictly stronger than the
  * forbidden ECHOED gate.
  *
- * Caller emits BRACHA87_INITIAL_ALL once at origin time and
+ * Caller outputs BRACHA87_INITIAL_ALL once at initiator time and
  * relies on BPR thereafter.
  *
  * Idempotent: re-calling overwrites the stored value.  The
- * intended use is one call at proposal time.
+ * intended use is one call at A-Cast time.
  */
 void
-bracha87Fig1Origin(
+bracha87Fig1Initiator(
   struct bracha87Fig1 *
  ,const unsigned char *    /* value: vLen + 1 bytes */
 );
@@ -208,21 +208,21 @@ bracha87Fig1Origin(
  * Actions written to out[] in order (echo, ready, accept).
  * Caller provides out[] with room for 3 entries.
  *
- * On any action, the committed value is available via bracha87Fig1Value.
+ * On any action, the echoed value is available via bracha87Fig1Value.
  *
  * Deduplication: at most one echo and one ready per sender.
  *
  * INITIAL sender obligation: this instance is keyed to ONE designated
- * broadcaster.  Only that broadcaster may send (initial, v); ECHO and
- * READY arrive legitimately from any peer (and are sender-deduped).
- * This entry does NOT know its own broadcaster index, so it cannot
+ * initiator.  Only that initiator may send (initial, v); ECHO and
+ * READY arrive legitimately from any process (and are sender-deduped).
+ * This entry does NOT know its own initiator index, so it cannot
  * enforce the binding -- the CALLER must drop any INITIAL whose
- * authenticated sender is not the designated broadcaster before calling
+ * authenticated sender is not the designated initiator before calling
  * here.  Authenticated channels alone do not close this: they bind the
- * sender identity but not the message's claimed broadcaster, and a
- * non-broadcaster INITIAL is a forged broadcast the echo cascade would
- * carry to a false ACCEPT.  (bkr94acsProposalInput / bkr94acsConsensus-
- * Input enforce from == origin / broadcaster on the caller's behalf.)
+ * sender identity but not the message's claimed initiator, and a
+ * non-initiator INITIAL is a forged broadcast the echo cascade would
+ * carry to a false ACCEPT.  (bkr94acsAcastInput / bkr94acsBa-
+ * Input enforce from == initiator / initiator on the caller's behalf.)
  */
 unsigned int
 bracha87Fig1Input(
@@ -234,15 +234,15 @@ bracha87Fig1Input(
 );
 
 /*
- * Committed value.
+ * Echoed value.
  *
  * Returns non-null when either:
- *   - this instance is the originator (BRACHA87_F1_ORIGIN set via
- *     bracha87Fig1Origin), or
+ *   - this instance is the initiator (BRACHA87_F1_INITIATOR set via
+ *     bracha87Fig1Initiator), or
  *   - Rule 1, 2, or 3 has fired (BRACHA87_F1_ECHOED set).
  *
- * Originator-only state returns the value supplied at
- * bracha87Fig1Origin so BPR can re-broadcast it before any
+ * Initiator-only state returns the value supplied at
+ * bracha87Fig1Initiator so BPR can re-broadcast it before any
  * loopback or echo-cascade has set ECHOED.
  */
 const unsigned char *
@@ -251,76 +251,76 @@ bracha87Fig1Value(
 );
 
 /*
- * BPR - Bracha Phase Re-emitter.
+ * BPR - Bracha Phase Retry.
  *
  * End-to-end argument applied to Bracha (Saltzer/Reed/Clark
  * 1984; see SRC84.txt and the BPR section of README.md): the
  * "still owed" predicate lives at the Bracha endpoint, so
  * retransmission is placed here.
  *
- * Re-emit the broadcast actions this instance is still owed under
+ * Retry the broadcast actions this instance is still owed under
  * fair-loss, so eventual delivery holds without an application-
- * layer ledger.  Returns the number of actions (0..3) to broadcast.
+ * layer retry bookkeeping.  Returns the number of actions (0..3) to broadcast.
  *
  * Reactive: rules fire only when called.  No wall-clock predicate
- * appears anywhere; the application's pump tick IS the event, so
- * asynchrony is preserved.  The rate of pump calls bounds replay
+ * appears anywhere; the application's retry tick IS the event, so
+ * asynchrony is preserved.  The rate of retry calls bounds retry
  * volume.
  *
- * Minimal re-emission -- each action retires at the soonest point
- * it is provably no longer owed to ANY correct peer:
- *   INITIAL (origin only): retires at ACCEPTED, or once an echo has
- *     been observed from every peer (echoSenders == n).  INITIAL
+ * Minimal retry -- each action retires at the soonest point
+ * it is provably no longer owed to ANY correct process:
+ *   INITIAL (initiator only): retires at ACCEPTED, or once an echo has
+ *     been observed from every process (echoSenders == n).  INITIAL
  *     only induces echoes, so all-echoed leaves nothing to induce;
  *     ACCEPTED witnesses t+1 correct readys, after which ready-
  *     amplification needs no initial.
  *   ECHO (echoed): retires at ACCEPTED, for the same amplification
- *     reason -- past t+1 correct readys no peer consumes an echo.
+ *     reason -- past t+1 correct readys no process consumes an echo.
  *   READY (rdSent): never retires on LOCAL state.  It is exactly
- *     what the amplification tail consumes; an accepted peer still
- *     owes its (ready, v) to peers below 2t+1, and replay is the
+ *     what the amplification tail consumes; an accepted process still
+ *     owes its (ready, v) to processes below 2t+1, and retry is the
  *     only delivery mechanism under loss.  It DOES retire on the
- *     REMOTE fact that every peer has accepted (acFrom count == n),
- *     after which no peer consumes a ready anywhere -- genuine
+ *     REMOTE fact that every process has accepted (acFrom count == n),
+ *     after which no process consumes a ready anywhere -- genuine
  *     quiescence, where the application's termination policy would
  *     otherwise carry the never-retired tail.  Below that, the
- *     per-peer suppress mask (bracha87Fig1Skip) still drops READY to
- *     the peers already known accepted.
+ *     per-process suppress mask (bracha87Fig1Skip) still drops READY to
+ *     the processes already known accepted.
  *
  *     The all-n quiescence is best-effort under loss, NOT a guaranteed
- *     terminal state: once a peer's own acFrom reaches n it stops
- *     re-emitting READY -- and with it the ACCEPTED annotation -- so a
- *     peer that lost those final announcements may never set the last
+ *     terminal state: once a process's own acFrom reaches n it stops
+ *     retrying READY -- and with it the ACCEPTED annotation -- so a
+ *     process that lost those final announcements may never set the last
  *     acFrom bit and never quiesces.  This is safe: it can only happen
- *     once every peer has accepted, i.e. consensus is already complete,
- *     and the un-quiesced peer merely keeps replaying a READY no correct
- *     peer consumes.  The application's abandonment policy is the real
+ *     once every process has accepted, i.e. consensus is already complete,
+ *     and the un-quiesced process merely keeps retrying a READY no correct
+ *     process consumes.  The application's abandonment policy is the real
  *     backstop; acFrom == n is an optimisation that collapses the tail
  *     when the announcements arrive, not a liveness guarantee.
  *
- * Per-peer suppression: every replay action carries a suppress mask
+ * Per-process suppression: every retry action carries a suppress mask
  * (bracha87Fig1Skip; on the array path, struct bracha87Fig1Act.skip)
- * naming peers that provably no longer consume it -- echoed peers for
- * INITIAL, readied peers for ECHO, accepted peers for READY.  The
- * caller's broadcast skips them.  This is the individual-peer refinement
- * of the all-or-nothing retires above: a fast peer is dropped from the
- * recipient set the moment IT crosses, not when the last peer does.
+ * naming processes that provably no longer consume it -- echoed processes for
+ * INITIAL, readied processes for ECHO, accepted processes for READY.  The
+ * caller's broadcast skips them.  This is the individual-process refinement
+ * of the all-or-nothing retires above: a fast process is dropped from the
+ * recipient set the moment IT crosses, not when the last process does.
  * INITIAL and ECHO are bootstrap-only; ACCEPTED is the local
  * witness (>= t+1 of 2t+1 readys are correct) that the bootstrap
  * is complete.  These stops are strictly stronger than the
  * "stop once locally echoed/accepted-so-stop-ready" gates that
- * would strand slow peers -- those remain forbidden.
+ * would strand slow processes -- those remain forbidden.
  *
- * Returns 0 when there is nothing committed to replay (a non-origin
+ * Returns 0 when there is nothing sent to retry (a non-initiator
  * instance that has not echoed -- the natural "idle" signal at the
- * Fig1 level), or when every committed action has hit its retire
+ * Fig1 level), or when every sent action has hit its retire
  * gate above: INITIAL and ECHO at ACCEPTED (INITIAL also at
  * all-echoed), READY at all-n-accepted.  An RDSENT instance
- * therefore emits at least READY until the all-n-accepted gate
+ * therefore outputs at least READY until the all-n-accepted gate
  * closes; past that it is quiescent and returns 0.
  *
  * Out actions reuse BRACHA87_INITIAL_ALL / BRACHA87_ECHO_ALL /
- * BRACHA87_READY_ALL; the committed value is read via
+ * BRACHA87_READY_ALL; the echoed value is read via
  * bracha87Fig1Value, same as after Input.  Order of actions in
  * out[]: initial, echo, ready.
  */
@@ -332,19 +332,19 @@ bracha87Fig1Bpr(
 
 /*
  * Returns 1 iff this instance has recorded an echo from every one of
- * the n peers (distinct echo senders == n), else 0 (and 0 for a null
+ * the n processes (distinct echo senders == n), else 0 (and 0 for a null
  * pointer).
  *
- * This is the same monotone quantity that retires INITIAL replay (see
- * bracha87Fig1Bpr): once every peer has echoed there is nothing left
+ * This is the same monotone quantity that retires INITIAL retry (see
+ * bracha87Fig1Bpr): once every process has echoed there is nothing left
  * for (initial, v) to induce.  It is exposed because an application
  * that pairs a side-channel payload with the broadcast -- and gates
  * its own ECHO on having validated that payload -- needs all-echoed,
- * NOT the proposal's ACCEPTED, as the retirement point for the side
- * channel: all-echoed implies every peer validated the payload, which
+ * NOT the A-Cast's ACCEPTED, as the retirement point for the side
+ * channel: all-echoed implies every process validated the payload, which
  * ACCEPTED (2t+1 readys, of which up to t may be byzantine and t the
  * un-validated tail above the n=3t+1 boundary) does not.  Under <= t
- * silent peers this never reaches 1, so such a side channel replays
+ * silent processes this never reaches 1, so such a side channel retries
  * until the application abandons -- the conservative, correct default.
  */
 unsigned int
@@ -353,28 +353,28 @@ bracha87Fig1AllEchoed(
 );
 
 /*
- * Record that peer 'from' has ACCEPTED this instance (idempotent,
+ * Record that process 'from' has ACCEPTED this instance (idempotent,
  * value-agnostic).  Drives the READY suppress mask and the all-accepted
- * READY quiescence gate.  'from' is the announcing peer -- the sender of
+ * READY quiescence gate.  'from' is the announcing process -- the sender of
  * a (ready, v) carrying the ACCEPTED annotation, already fed through
  * bracha87Fig1Input -- or the local index, supplied by the caller for
- * self-accept (a Fig1 instance does not know its own peer index).
+ * self-accept (a Fig1 instance does not know its own process index).
  * Out-of-range 'from' and a null instance are ignored.
  */
 void
-bracha87Fig1PeerAccepted(
+bracha87Fig1ProcessAccepted(
   struct bracha87Fig1 *
- ,unsigned char            /* from: announcing peer, or self */
+ ,unsigned char            /* from: announcing process, or self */
 );
 
 /*
- * BPR per-peer suppress mask for one replay action: a bitmap of peers
+ * BPR per-process suppress mask for one retry action: a bitmap of processes
  * that provably no longer consume it, so the caller's broadcast skips
- * them (peer p skipped iff bit p set).  INITIAL_ALL -> echoed peers,
- * ECHO_ALL -> readied peers, READY_ALL -> accepted peers; 0 for a null
- * instance or non-replay act (broadcast to all).  Borrowed pointer into
+ * them (process p skipped iff bit p set).  INITIAL_ALL -> echoed processes,
+ * ECHO_ALL -> readied processes, READY_ALL -> accepted processes; 0 for a null
+ * instance or non-retry act (broadcast to all).  Borrowed pointer into
  * library state, valid until the next mutating call on this instance.
- * The array Pump fills struct bracha87Fig1Act.skip from this.
+ * The array Retry fills struct bracha87Fig1Act.skip from this.
  */
 const unsigned char *
 bracha87Fig1Skip(
@@ -385,15 +385,15 @@ bracha87Fig1Skip(
 /*
  * Test a BPR suppress mask -- the bitmap returned by bracha87Fig1Skip
  * (or carried on struct bracha87Fig1Act.skip / bkr94acsAct.skip):
- * non-zero iff peer 'p' is to be skipped.  This names the mask's bit
- * convention (a little-endian per-peer bitmap, BIT_SZ(n) bytes) so a
+ * non-zero iff process 'p' is to be skipped.  This names the mask's bit
+ * convention (a little-endian per-process bitmap, BIT_SZ(n) bytes) so a
  * broadcast loop reads it without re-deriving the layout:
  *
  *   for (p = 0; p < n; ++p)
  *     if (p != self && !(skip && BRACHA87_SKIP_TST(skip, p)))
  *       send_to(p, ...);
  *
- * Macro, not a function, so it inlines in the per-peer loop; 'mask' is
+ * Macro, not a function, so it inlines in the per-process loop; 'mask' is
  * evaluated once, 'p' twice (pass a simple expression).  A null mask
  * means "broadcast to all" -- guard with `skip &&` as above.
  */
@@ -421,7 +421,7 @@ bracha87Fig1Skip(
 /*
  * Figure 2 state.
  *
- * Tracks received messages per round for up to n peers, maxRounds rounds.
+ * Tracks received messages per round for up to n processes, maxRounds rounds.
  * Caller allocates bracha87Fig2Sz(n, maxRounds) bytes and calls
  * bracha87Fig2Init. No dynamic allocation.
  *
@@ -547,7 +547,7 @@ typedef int (*bracha87Nfn)(
 /*
  * Figure 3 state.
  *
- * Manages VALID sets for up to maxRounds rounds, n peers.
+ * Manages VALID sets for up to maxRounds rounds, n processes.
  * Caller allocates bracha87Fig3Sz(n, maxRounds) bytes and
  * calls bracha87Fig3Init.
  */
@@ -759,7 +759,7 @@ bracha87Fig4Init(
  * the caller must never treat DECIDE as "done, stop."  The same
  * holds for Fig 1's BRACHA87_ACCEPT — reliable broadcast has no stop
  * condition at all (no EXHAUSTED, no phase ceiling).  Under unbounded
- * latency no peer can know that stopping is safe, so when to stop
+ * latency no process can know that stopping is safe, so when to stop
  * after a decision is an application policy, not a library event.
  * The one stop this library specifies is BRACHA87_EXHAUSTED — a
  * failure — surfaced upward as BKR94ACS_ACT_BA_EXHAUSTED.
@@ -767,7 +767,7 @@ bracha87Fig4Init(
  * BRACHA87_EXHAUSTED is also returned at most once: it is mutually
  * exclusive with BRACHA87_DECIDE (decideV requires !haveDecided;
  * EXHAUSTED requires sub=2 of the last phase with !haveDecided &&
- * !decideV) and the maxPhases ceiling makes single emission structural.
+ * !decideV) and the maxPhases ceiling makes single output structural.
  * Subsequent calls to bracha87Fig4Round on an EXHAUSTED instance are
  * safe and return 0 actions; the state machine remains in EXHAUSTED.
  * No unilateral substitute decision is produced -- exhaustion is a
@@ -800,79 +800,79 @@ bracha87Fig4Round(
 
 /*************************************************************************/
 /*                                                                       */
-/*  Pump infrastructure (cursor type shared across the library)          */
+/*  Retry infrastructure (cursor type shared across the library)          */
 /*                                                                       */
 /*  The cursor lives in caller storage; the library does not own it      */
 /*  (no library-internal cursor, no hidden mutation, parallel sweeps     */
 /*  over the same state are permitted).  Initialize with                 */
-/*  bracha87PumpInit before first use by any Pump consumer —             */
-/*  bracha87Fig1PumpStep below, or bkr94acsPump (bkr94acs.h).            */
+/*  bracha87RetryInit before first use by any Retry consumer —             */
+/*  bracha87Fig1RetryStep below, or bkr94acsRetry (bkr94acs.h).            */
 /*                                                                       */
-/*  NETWORK FLOOD WARNING.  Every Pump consumer is one-call-per-tick.    */
-/*  Do NOT loop.  BPR replays persist until their retire gates close     */
-/*  (ACCEPTED / all-echoed / all-n-accepted; committed flags live        */
-/*  forever), so until convergence every committed instance has          */
-/*  actions; a `while (Pump(...))` loop empties the cursor space onto    */
+/*  NETWORK FLOOD WARNING.  Every Retry consumer is one-call-per-tick.    */
+/*  Do NOT loop.  BPR retries persist until their retire gates close     */
+/*  (ACCEPTED / all-echoed / all-n-accepted; sent flags live        */
+/*  forever), so until convergence every sent instance has          */
+/*  actions; a `while (Retry(...))` loop empties the cursor space onto    */
 /*  the wire as fast as the CPU runs, burning through kernel buffers     */
-/*  and causing the very drops the pump exists to recover from.  The     */
+/*  and causing the very drops the retry exists to recover from.  The     */
 /*  application's tick rate is the rate limit.  In healthy operation a   */
-/*  Pump consumer returns >0 on every call until quiescence.             */
+/*  Retry consumer returns >0 on every call until quiescence.             */
 /*                                                                       */
 /*  The 0 return appears only when a full sweep across the whole cursor  */
-/*  space found no actions: either no committed instance exists yet      */
-/*  (pre-broadcast / fully-shutdown state) or every committed instance   */
-/*  has retired all its replays (quiescence — every peer announced       */
+/*  space found no actions: either no sent instance exists yet      */
+/*  (pre-broadcast / fully-shutdown state) or every sent instance   */
+/*  has retired all its retries (quiescence — every process announced       */
 /*  accepted).  Neither is a termination signal by itself.               */
 /*                                                                       */
 /*  Termination is the application's policy, not the library's,          */
 /*  which prescribes none — see README.md "Termination is an             */
-/*  application choice."  Count Pump calls across ticks if a policy      */
-/*  needs sweep coverage; one sweep covers every currently-committed     */
+/*  application choice."  Count Retry calls across ticks if a policy      */
+/*  needs sweep coverage; one sweep covers every currently-sent     */
 /*  instance once.                                                       */
 /*                                                                       */
 /*************************************************************************/
 
-struct bracha87Pump {
+struct bracha87Retry {
   unsigned int pos;        /* next index to visit */
-  unsigned int sweepActs;  /* actions emitted in current sweep */
+  unsigned int sweepActs;  /* actions output in current sweep */
 };
 
 void
-bracha87PumpInit(
-  struct bracha87Pump *
+bracha87RetryInit(
+  struct bracha87Retry *
 );
 
 /*-----------------------------------------------------------------------*/
-/*  Fig 1 array Pump — BPR sweep over a caller-owned Fig 1 array         */
+/*  Fig 1 array Retry — BPR sweep over a caller-owned Fig 1 array         */
 /*                                                                       */
 /*  Wraps the per-instance bracha87Fig1Bpr above with a cursor that      */
 /*  walks an application-owned array of Fig 1 instances.                 */
 /*                                                                       */
-/*  bracha87Fig1PumpStep's outCap parameter must be >= 3                 */
-/*  (BRACHA87_FIG1_PUMP_MAX_ACTS); the library does not range-check it,  */
+/*  bracha87Fig1RetryStep's outCap parameter must be >= 3                 */
+/*  (BRACHA87_FIG1_RETRY_MAX_ACTS); the library does not range-check it,  */
 /*  and supplying a smaller value is undefined behavior (the library     */
 /*  may write past out[]).                                               */
 /*-----------------------------------------------------------------------*/
 
-#define BRACHA87_FIG1_PUMP_MAX_ACTS 3
+#define BRACHA87_FIG1_RETRY_MAX_ACTS 3
 
 /*
- * One BPR replay action for one Fig 1 instance.
+ * One BPR retry action for one Fig 1 instance.
  *
  *   act       BRACHA87_INITIAL_ALL / ECHO_ALL / READY_ALL
- *   accepted  READY_ALL replay only: 1 iff this instance has ACCEPTED,
- *             so the caller sets the wire ACCEPTED bit on the re-emitted
- *             READY -- the announcement that drives peers' per-peer READY
- *             retire and the all-n quiescence gate (bracha87Fig1Peer-
+ *   accepted  READY_ALL retry only: 1 iff this instance has ACCEPTED,
+ *             so the caller sets the wire ACCEPTED bit on the retried
+ *             READY -- the announcement that drives processes' per-process READY
+ *             retire and the all-n quiescence gate (bracha87Fig1Process-
  *             Accepted on ingress).  0 otherwise.  Mirror of
  *             bkr94acsAct.accepted; a bare-layer caller that wires this
- *             back (plus bracha87Fig1PeerAccepted) gets the same READY
+ *             back (plus bracha87Fig1ProcessAccepted) gets the same READY
  *             quiescence the bkr94acs layer has.  Without it READY simply
- *             replays until application abandonment -- safe, just not
+ *             retries until application abandonment -- safe, just not
  *             quiescent.
  *   idx       index in the caller's instances array
  *   value     borrowed pointer into the Fig 1 instance's
- *             committed-value slot, vLen+1 bytes; valid until the
+ *             echoed-value slot, vLen+1 bytes; valid until the
  *             next call into that instance.  Caller copies if
  *             persistence is required past that boundary.
  */
@@ -881,41 +881,41 @@ struct bracha87Fig1Act {
   unsigned char accepted;     /* READY_ALL: 1 = set wire ACCEPTED bit */
   unsigned int  idx;
   const unsigned char *value;
-  const unsigned char *skip;  /* BPR per-peer suppress mask, or 0 = all;
+  const unsigned char *skip;  /* BPR per-process suppress mask, or 0 = all;
                                * see bracha87Fig1Skip.  Borrowed, valid
                                * until the next mutating call. */
 };
 
 /*
- * One Fig 1's replay actions per call.  Walks the cursor forward to
- * the next committed instance and returns its actions.
+ * One Fig 1's retry actions per call.  Walks the cursor forward to
+ * the next sent instance and returns its actions.
  *
  * Call ONCE per application tick.  Do NOT loop — see the network
  * flood warning above.  0 means a full sweep found no actions:
- * nothing committed yet, or every committed instance has quiesced
- * (all replays retired — see the warning block above).
+ * nothing sent yet, or every sent instance has quiesced
+ * (all retries retired — see the warning block above).
  *
  * Null entries in instances[] are skipped (useful when the
- * application's array is sparse — e.g. one slot per (origin, round)
+ * application's array is sparse — e.g. one slot per (initiator, round)
  * but only some pairs have been allocated).
  */
 unsigned int
-bracha87Fig1PumpStep(
+bracha87Fig1RetryStep(
   struct bracha87Fig1 *const *  /* instances */
  ,unsigned int                  /* count */
- ,struct bracha87Pump *         /* init with bracha87PumpInit */
+ ,struct bracha87Retry *         /* init with bracha87RetryInit */
  ,struct bracha87Fig1Act *      /* out */
- ,unsigned int                  /* outCap, must be >= BRACHA87_FIG1_PUMP_MAX_ACTS */
+ ,unsigned int                  /* outCap, must be >= BRACHA87_FIG1_RETRY_MAX_ACTS */
 );
 
 /*
- * Count of instances with any committed flag (ORIGIN, ECHOED, or
- * RDSENT) — i.e., the number of instances the pump will visit per
+ * Count of instances with any sent flag (INITIATOR, ECHOED, or
+ * RDSENT) — i.e., the number of instances the retry will visit per
  * sweep.  Useful for sweep-cadence calibration in the caller's
  * termination policy.
  */
 unsigned int
-bracha87Fig1CommittedCount(
+bracha87Fig1SentCount(
   struct bracha87Fig1 *const *  /* instances */
  ,unsigned int                  /* count */
 );

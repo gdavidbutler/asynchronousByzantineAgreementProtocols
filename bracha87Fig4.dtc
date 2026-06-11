@@ -17,7 +17,7 @@
 #   Step 2 (sub-round 1, paper round 3i+1):
 #     if more than n/2 round-(3i) messages have the same value v
 #       then V_i := (d, v)
-#       else V_i unchanged (non-deterministic across peers)
+#       else V_i unchanged (non-deterministic across processes)
 #   Step 3 (sub-round 2, paper round 3i+2):
 #     case (i)   more than 2t round-(3i+1) messages of form (d, v)
 #                  agree on v: decide v
@@ -29,7 +29,7 @@
 # decided MUST continue broadcasting, with V := decision, until
 # the surrounding application releases it.  The "have decided"
 # guard in each step's update rule preserves the decision value
-# while still emitting broadcast and advance side-effects.
+# while still outputting broadcast and advance side-effects.
 #
 # Predicates appearing as inputs are computed by C functions over
 # the validated set delivered by Figure 3 (majority counts,

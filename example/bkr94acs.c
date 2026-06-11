@@ -23,17 +23,17 @@
  * Common Subset protocol (Ben-Or/Kelmer/Rabin 1994 Section 4
  * Figure 3, composing Bracha87 Figures 1 and 4).
  *
- * Each of N peers proposes a string value. The BKR94 ACS protocol
- * ensures all honest peers agree on the same common subset of
- * proposals (at least n-t). The subset is then sorted
- * deterministically so every peer outputs the same ordering — the
+ * Each of N processes A-Casts a string value. The BKR94 ACS protocol
+ * ensures all honest processes agree on the same common subset of
+ * A-Casts (at least n-t). The subset is then sorted
+ * deterministically so every process outputs the same ordering — the
  * core of atomic broadcast.
  *
  * Scope: this demo runs in a single process with a synchronous
  * deterministic in-memory queue — every input is delivered, no
  * loss, no reordering, no asynchrony. It exercises the protocol
- * state machines and the BPR pump but does NOT exercise the
- * deployment-time termination policies (silence-quorum + K-sweep
+ * state machines and the BPR retry but does NOT exercise the
+ * deployment-time termination policies (silence-threshold + K-sweep
  * gate, abandonment) needed under real asynchronous transport;
  * those are inherently coupled to message loss, partial ordering,
  * and the failure modes those introduce. See README.md
@@ -43,7 +43,7 @@
  *   (from project root) make example_bkr94acs
  *
  * Usage:
- *   ./example_bkr94acs [-v] [-s seed] n t proposal0 proposal1 ...
+ *   ./example_bkr94acs [-v] [-s seed] n t acast0 acast1 ...
  *
  * Example:
  *   ./example_bkr94acs 4 1 joe sam sally tim
@@ -58,37 +58,37 @@
 /*  Constants                                                             */
 /*------------------------------------------------------------------------*/
 
-#define MAX_PEERS  16
+#define MAX_PROCESSES  16
 #define MAX_PHASES 10
-#define MAX_VLEN   256  /* max proposal bytes (including \0); bracha87 vLen encoding 255 */
+#define MAX_VLEN   256  /* max A-Cast bytes (including \0); bracha87 vLen encoding 255 */
 
 /*------------------------------------------------------------------------*/
 /*  Message queue — simulated network                                     */
 /*                                                                        */
 /*  Two message classes share one queue:                                   */
-/*    BKR94ACS_CLS_PROPOSAL  — Fig1 messages carrying proposal values      */
-/*    BKR94ACS_CLS_CONSENSUS — Fig1 messages for per-origin binary        */
-/*                             consensus                                  */
+/*    BKR94ACS_CLS_ACAST  — Fig1 messages carrying A-Cast values      */
+/*    BKR94ACS_CLS_BA — Fig1 messages for per-process binary        */
+/*                             BA                                  */
 /*                                                                        */
-/*  Class + Bracha87 type (and, for CONSENSUS, the binary value + D_FLAG) */
+/*  Class + Bracha87 type (and, for BA, the binary value + D_FLAG) */
 /*  ride in ONE clsType byte per the canonical packed-byte layout in      */
 /*  bkr94acs.h.  qPush composes it; the process loop recovers it.  A      */
-/*  PROPOSAL carries its value in value[]; CONSENSUS folds its payload     */
+/*  ACAST carries its value in value[]; BA folds its payload     */
 /*  into clsType and leaves value[] unused.  A READY also carries the     */
 /*  BKR94ACS_ACCEPTED bit (bit 4, class-independent): egress sets it from */
 /*  the act's .accepted flag, ingress routes it to bkr94acs*Accepted --   */
-/*  the BPR per-peer READY retire and the all-n quiescence gate.          */
+/*  the BPR per-process READY retire and the all-n quiescence gate.          */
 /*------------------------------------------------------------------------*/
 
 struct msg {
   unsigned char clsType;     /* class|type; +ACCEPTED on a READY;
-                              * +cv,D_FLAG for CONSENSUS (see above) */
-  unsigned char origin;      /* which origin */
-  unsigned char round;       /* consensus round (class=CONSENSUS only) */
-  unsigned char broadcaster; /* who initiated this Fig1 broadcast (CONSENSUS) */
+                              * +cv,D_FLAG for BA (see above) */
+  unsigned char process;      /* which process */
+  unsigned char round;       /* BA round (class=BA only) */
+  unsigned char initiator; /* who initiated this Fig1 broadcast (BA) */
   unsigned char from;        /* sender */
   unsigned char to;          /* recipient */
-  unsigned char value[MAX_VLEN];  /* PROPOSAL value (vLen+1 bytes); unused for CONSENSUS */
+  unsigned char value[MAX_VLEN];  /* ACAST value (vLen+1 bytes); unused for BA */
 };
 
 static struct msg *MsgQ;
@@ -119,9 +119,9 @@ qFree(
 static void
 qPush(
   unsigned char cls
- ,unsigned char origin
+ ,unsigned char process
  ,unsigned char round
- ,unsigned char broadcaster
+ ,unsigned char initiator
  ,unsigned char type
  ,unsigned char accepted /* READY only: act's .accepted -> wire bit 4 */
  ,unsigned char from
@@ -131,14 +131,14 @@ qPush(
 ){
   if (Qtail >= Qcap)
     return;
-  MsgQ[Qtail].origin = origin;
+  MsgQ[Qtail].process = process;
   MsgQ[Qtail].round = round;
-  MsgQ[Qtail].broadcaster = broadcaster;
+  MsgQ[Qtail].initiator = initiator;
   MsgQ[Qtail].from = from;
   MsgQ[Qtail].to = to;
-  if (cls == BKR94ACS_CLS_CONSENSUS)
+  if (cls == BKR94ACS_CLS_BA)
     /*
-     * Consensus payload is two live bits: the binary value (placed at
+     * BA payload is two live bits: the binary value (placed at
      * bit 3) and BRACHA87_D_FLAG (kept at its native bit 7).  Fold both
      * into the wire byte alongside class, type, and the ACCEPTED
      * annotation; no value byte is sent.
@@ -149,7 +149,7 @@ qPush(
        | ((value[0] & 1) << 3)
        | (value[0] & BRACHA87_D_FLAG));
   else {
-    /* Proposal payload is real bytes; pack class, type, ACCEPTED. */
+    /* A-Cast payload is real bytes; pack class, type, ACCEPTED. */
     MsgQ[Qtail].clsType = (unsigned char)
       (cls | type
        | (accepted ? BKR94ACS_ACCEPTED : 0));
@@ -241,12 +241,12 @@ main(
   unsigned int origSeed;
   unsigned int vLen;
 
-  /* Per-peer BKR94 ACS state */
-  struct bkr94acs *peers[MAX_PEERS];
+  /* Per-process BKR94 ACS state */
+  struct bkr94acs *processes[MAX_PROCESSES];
   unsigned long acsSize;
 
-  /* Proposal strings */
-  char proposals[MAX_PEERS][MAX_VLEN];
+  /* A-Cast strings */
+  char acasts[MAX_PROCESSES][MAX_VLEN];
 
   /* Loop / temp */
   unsigned int i;
@@ -281,8 +281,8 @@ main(
   n = (unsigned int)atoi(argv[arg++]);
   t = (unsigned int)atoi(argv[arg++]);
 
-  if (n < 1 || n > MAX_PEERS) {
-    fprintf(stderr, "n must be 1..%d\n", MAX_PEERS);
+  if (n < 1 || n > MAX_PROCESSES) {
+    fprintf(stderr, "n must be 1..%d\n", MAX_PROCESSES);
     return (1);
   }
   if (n <= 3 * t) {
@@ -290,54 +290,54 @@ main(
     return (1);
   }
   if ((unsigned int)(argc - arg) < n) {
-    fprintf(stderr, "need %u proposal strings\n", n);
+    fprintf(stderr, "need %u A-Cast strings\n", n);
     return (1);
   }
 
   origSeed = shuffleSeed;
 
-  /* Read proposals, find max length for vLen */
+  /* Read acasts, find max length for vLen */
   vLen = 1;
-  memset(proposals, 0, sizeof (proposals));
+  memset(acasts, 0, sizeof (acasts));
   for (i = 0; i < n; ++i) {
     unsigned int len;
 
     len = (unsigned int)strlen(argv[arg]) + 1; /* include \0 */
     if (len > MAX_VLEN) {
-      fprintf(stderr, "proposal too long: %s (max %d chars + \\0)\n",
+      fprintf(stderr, "A-Cast too long: %s (max %d chars + \\0)\n",
               argv[arg], MAX_VLEN - 1);
       return (1);
     }
-    memcpy(proposals[i], argv[arg], len);
+    memcpy(acasts[i], argv[arg], len);
     if (len > vLen)
       vLen = len;
     ++arg;
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Allocate per-peer BKR94 ACS state                                   */
+  /*  Allocate per-process BKR94 ACS state                                   */
   /*----------------------------------------------------------------------*/
 
   /* vLen encoding: actual length = vLen, encoding = vLen - 1 */
   acsSize = bkr94acsSz((unsigned int)(n - 1), (unsigned int)(vLen - 1), MAX_PHASES);
 
-  memset(peers, 0, sizeof (peers));
+  memset(processes, 0, sizeof (processes));
   for (i = 0; i < n; ++i) {
-    peers[i] = (struct bkr94acs *)calloc(1, acsSize);
-    if (!peers[i]) {
+    processes[i] = (struct bkr94acs *)calloc(1, acsSize);
+    if (!processes[i]) {
       fprintf(stderr, "allocation failed\n");
       exitCode = 1;
       goto cleanup;
     }
-    bkr94acsInit(peers[i], (unsigned char)(n - 1), (unsigned char)t,
+    bkr94acsInit(processes[i], (unsigned char)(n - 1), (unsigned char)t,
                  (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i,
                  demoCoin, 0);
   }
 
   /*----------------------------------------------------------------------*/
   /*  Allocate message queue                                              */
-  /*  BKR94 ACS generates more messages than plain consensus:             */
-  /*  N proposal broadcasts + N consensus pipelines, each with rounds.    */
+  /*  BKR94 ACS generates more messages than plain BA:             */
+  /*  N A-Cast broadcasts + N BA pipelines, each with rounds.    */
   /*----------------------------------------------------------------------*/
 
   if (qAlloc(64u * n * n * (unsigned int)MAX_PHASES * BRACHA87_ROUNDS_PER_PHASE + 1024)) {
@@ -347,29 +347,29 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Bootstrap: each peer Proposes their value                           */
+  /*  Bootstrap: each process A-Casts their value                           */
   /*                                                                      */
-  /*  bkr94acsPropose marks the local proposal Fig1 as the broadcast      */
-  /*  originator and emits one BKR94ACS_ACT_PROP_SEND action (.type =     */
-  /*  BRACHA87_INITIAL) for the application to broadcast to all peers.    */
-  /*  Replay thereafter is intrinsic to BPR (bkr94acsPump) -- no          */
-  /*  application ledger required.                                        */
+  /*  bkr94acsAcast marks the local A-Cast Fig1 as the broadcast      */
+  /*  initiator and outputs one BKR94ACS_ACT_ACAST_SEND action (.type =     */
+  /*  BRACHA87_INITIAL) for the application to broadcast to all processes.    */
+  /*  Retry thereafter is intrinsic to BPR (bkr94acsRetry) -- no          */
+  /*  application bookkeeping required.                                        */
   /*----------------------------------------------------------------------*/
 
   for (i = 0; i < n; ++i) {
-    struct bkr94acsAct propAct;
+    struct bkr94acsAct acastAct;
     unsigned int nProp;
 
-    nProp = bkr94acsPropose(peers[i],
-                            (const unsigned char *)proposals[i],
-                            &propAct);
+    nProp = bkr94acsAcast(processes[i],
+                            (const unsigned char *)acasts[i],
+                            &acastAct);
     if (nProp != 1)
       continue;
     for (j = 0; j < n; ++j)
-      qPush(BKR94ACS_CLS_PROPOSAL, propAct.origin, 0, 0,
-            BRACHA87_INITIAL, propAct.accepted,
+      qPush(BKR94ACS_CLS_ACAST, acastAct.process, 0, 0,
+            BRACHA87_INITIAL, acastAct.accepted,
             (unsigned char)i, (unsigned char)j,
-            (const unsigned char *)proposals[i], vLen);
+            (const unsigned char *)acasts[i], vLen);
   }
 
   if (shuffleSeed)
@@ -382,49 +382,49 @@ main(
   while (Qhead < Qtail) {
     struct msg *m;
     struct bkr94acs *st;
-    struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PEERS, MAX_PHASES)];
+    struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
     unsigned int nacts;
     unsigned int k;
     unsigned int oldTail;
     unsigned char cls;
     unsigned char type;
-    unsigned char conValue;
+    unsigned char baValue;
 
     m = &MsgQ[Qhead++];
-    st = peers[m->to];
+    st = processes[m->to];
 
     /* Unpack the wire byte back into class and Bracha87 type. */
     cls = m->clsType & BKR94ACS_CLS_MASK;
     type = m->clsType & BRACHA87_TYPE_MASK;
 
     /*
-     * Do NOT skip messages addressed to locally-complete peers.
-     * A peer that has decided all N BAs must keep processing
+     * Do NOT skip messages addressed to locally-complete processes.
+     * A process that has decided all N BAs must keep processing
      * incoming messages so its Fig1 echoes/readys continue to
-     * reach peers still working on some BAs.  Skipping replicates
+     * reach processes still working on some BAs.  Skipping replicates
      * the post-decide stall the library itself was fixed to avoid
-     * (see bkr94acs.c bkr94acsConsensusInput comment on
+     * (see bkr94acs.c bkr94acsBaInput comment on
      * BKR94ACS_F_COMPLETE).  The simulation loop terminates when the
-     * message queue drains, not when any one peer reaches complete.
+     * message queue drains, not when any one process reaches complete.
      */
     oldTail = Qtail;
 
     /*
      * Sender (m->from) is the authenticated message sender; for INITIAL
-     * messages the library checks it against the designated broadcaster
-     * (origin for proposals, broadcaster for consensus) and drops a
-     * forged non-broadcaster INITIAL, so this no-loss honest demo needs
-     * no extra filter here.  A deployment with Byzantine peers relies on
+     * messages the library checks it against the designated initiator
+     * (process for acasts, initiator for BA) and drops a
+     * forged non-initiator INITIAL, so this no-loss honest demo needs
+     * no extra filter here.  A deployment with Byzantine processes relies on
      * that library check -- do NOT strip it by pre-validating away the
      * 'from' argument.
      */
-    if (cls == BKR94ACS_CLS_PROPOSAL) {
+    if (cls == BKR94ACS_CLS_ACAST) {
       if (verbose)
-        printf("peer %u: recv PROP %s(origin=%u) from %u\n",
+        printf("process %u: recv PROP %s(process=%u) from %u\n",
                (unsigned)m->to, typeName(type),
-               (unsigned)m->origin, (unsigned)m->from);
+               (unsigned)m->process, (unsigned)m->from);
 
-      nacts = bkr94acsProposalInput(st, m->origin, type, m->from,
+      nacts = bkr94acsAcastInput(st, m->process, type, m->from,
                                     m->value, acts);
       /*
        * ACCEPTED-annotation ingress: bit 4 on a READY says its sender
@@ -433,24 +433,24 @@ main(
        * recorded first and acFrom stays a subset of rdFrom.
        */
       if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
-        bkr94acsProposalAccepted(st, m->origin, m->from);
+        bkr94acsAcastAccepted(st, m->process, m->from);
     } else {
-      /* Recover the consensus binary value (+D_FLAG) from the wire byte. */
-      conValue = (unsigned char)
+      /* Recover the BA binary value (+D_FLAG) from the wire byte. */
+      baValue = (unsigned char)
         (((m->clsType >> 3) & 1) | (m->clsType & BRACHA87_D_FLAG));
       if (verbose)
-        printf("peer %u: recv CON %s(origin=%u, round=%u, val=%u) from %u\n",
+        printf("process %u: recv CON %s(process=%u, round=%u, val=%u) from %u\n",
                (unsigned)m->to, typeName(type),
-               (unsigned)m->origin, (unsigned)m->round,
-               (unsigned)conValue, (unsigned)m->from);
+               (unsigned)m->process, (unsigned)m->round,
+               (unsigned)baValue, (unsigned)m->from);
 
-      nacts = bkr94acsConsensusInput(st, m->origin, m->round,
-                                     m->broadcaster, type,
-                                     m->from, conValue, acts);
-      /* Same ACCEPTED ingress as the proposal class (Input first). */
+      nacts = bkr94acsBaInput(st, m->process, m->round,
+                                     m->initiator, type,
+                                     m->from, baValue, acts);
+      /* Same ACCEPTED ingress as the A-Cast class (Input first). */
       if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
-        bkr94acsConsensusAccepted(st, m->origin, m->round,
-                                  m->broadcaster, m->from);
+        bkr94acsBaAccepted(st, m->process, m->round,
+                                  m->initiator, m->from);
     }
 
     /* Enqueue output actions as network messages */
@@ -459,57 +459,57 @@ main(
 
       switch (acts[k].act) {
 
-      case BKR94ACS_ACT_PROP_SEND:
+      case BKR94ACS_ACT_ACAST_SEND:
         if (!acts[k].value)
           break;
         if (verbose)
-          printf("peer %u: -> PROP %s(origin=%u)\n",
+          printf("process %u: -> PROP %s(process=%u)\n",
                  (unsigned)m->to, typeName(acts[k].type),
-                 (unsigned)acts[k].origin);
+                 (unsigned)acts[k].process);
         for (p = 0; p < n; ++p) {
-          /* BPR per-peer suppression: a transport skips recipients the
+          /* BPR per-process suppression: a transport skips recipients the
            * action is provably no longer owed to (echoed -> INITIAL,
            * readied -> ECHO, accepted -> READY).  Sound under loss; here
-           * (no loss) it merely trims redundant replays.  The READY
+           * (no loss) it merely trims redundant retries.  The READY
            * suppress mask is fed by the ACCEPTED wire bit this loop
            * round-trips (egress .accepted -> bit 4 -> ingress
            * bkr94acs*Accepted); the same round-trip is exercised under
            * loss in test_bkr94acs_blackbox.c. */
           if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
             continue;
-          qPush(BKR94ACS_CLS_PROPOSAL, acts[k].origin, 0, 0,
+          qPush(BKR94ACS_CLS_ACAST, acts[k].process, 0, 0,
                 acts[k].type, acts[k].accepted, m->to, (unsigned char)p,
                 acts[k].value, vLen);
         }
         break;
 
-      case BKR94ACS_ACT_CON_SEND:
+      case BKR94ACS_ACT_BA_SEND:
         if (verbose)
-          printf("peer %u: -> CON %s(origin=%u, round=%u, bcaster=%u, val=%u)\n",
+          printf("process %u: -> CON %s(process=%u, round=%u, bcaster=%u, val=%u)\n",
                  (unsigned)m->to, typeName(acts[k].type),
-                 (unsigned)acts[k].origin, (unsigned)acts[k].round,
-                 (unsigned)acts[k].broadcaster,
-                 (unsigned)acts[k].conValue);
+                 (unsigned)acts[k].process, (unsigned)acts[k].round,
+                 (unsigned)acts[k].initiator,
+                 (unsigned)acts[k].baValue);
         for (p = 0; p < n; ++p) {
           if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
             continue;
-          qPush(BKR94ACS_CLS_CONSENSUS, acts[k].origin, acts[k].round,
-                acts[k].broadcaster, acts[k].type, acts[k].accepted,
+          qPush(BKR94ACS_CLS_BA, acts[k].process, acts[k].round,
+                acts[k].initiator, acts[k].type, acts[k].accepted,
                 m->to, (unsigned char)p,
-                &acts[k].conValue, 1);
+                &acts[k].baValue, 1);
         }
         break;
 
       case BKR94ACS_ACT_BA_DECIDED:
         if (verbose)
-          printf("peer %u: BA[%u] decided %u\n",
-                 (unsigned)m->to, (unsigned)acts[k].origin,
-                 (unsigned)acts[k].conValue);
+          printf("process %u: BA[%u] decided %u\n",
+                 (unsigned)m->to, (unsigned)acts[k].process,
+                 (unsigned)acts[k].baValue);
         break;
 
       case BKR94ACS_ACT_COMPLETE:
         if (verbose)
-          printf("peer %u: BKR94 ACS COMPLETE\n", (unsigned)m->to);
+          printf("process %u: BKR94 ACS COMPLETE\n", (unsigned)m->to);
         break;
 
       case BKR94ACS_ACT_BA_EXHAUSTED:
@@ -520,9 +520,9 @@ main(
          * BA_DECIDED / COMPLETE.  An application's silence on this
          * action would teach the wrong pattern.
          */
-        printf("peer %u: BA[%u] EXHAUSTED -- ACS cannot complete "
+        printf("process %u: BA[%u] EXHAUSTED -- ACS cannot complete "
                "(no decision in %u phases)\n",
-               (unsigned)m->to, (unsigned)acts[k].origin,
+               (unsigned)m->to, (unsigned)acts[k].process,
                (unsigned)MAX_PHASES);
         break;
       }
@@ -533,97 +533,97 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Pump tick                                                           */
+  /*  Retry tick                                                           */
   /*                                                                      */
-  /*  In a real deployment, the BPR pump is called once per tick.         */
+  /*  In a real deployment, the BPR retry is called once per tick.         */
   /*  Looping until idle would flood the network — see bracha87.h's       */
   /*  flood warning.  The call is shown here as a representative tick.    */
   /*----------------------------------------------------------------------*/
 
   for (i = 0; i < n; ++i) {
-    struct bracha87Pump pump;
-    struct bkr94acsAct pacts[BKR94ACS_PUMP_MAX_ACTS];
+    struct bracha87Retry retry;
+    struct bkr94acsAct pacts[BKR94ACS_RETRY_MAX_ACTS];
     unsigned int n_pacts;
     unsigned int k;
     unsigned int p;
 
-    bracha87PumpInit(&pump);
-    n_pacts = bkr94acsPump(peers[i], &pump, pacts);
+    bracha87RetryInit(&retry);
+    n_pacts = bkr94acsRetry(processes[i], &retry, pacts);
     for (k = 0; k < n_pacts; ++k) {
       switch (pacts[k].act) {
-      case BKR94ACS_ACT_PROP_SEND:
+      case BKR94ACS_ACT_ACAST_SEND:
         if (!pacts[k].value) break;
         for (p = 0; p < n; ++p) {
           if (pacts[k].skip && BRACHA87_SKIP_TST(pacts[k].skip, p))
             continue;
-          qPush(BKR94ACS_CLS_PROPOSAL, pacts[k].origin, 0, 0,
+          qPush(BKR94ACS_CLS_ACAST, pacts[k].process, 0, 0,
                 pacts[k].type, pacts[k].accepted,
                 (unsigned char)i, (unsigned char)p,
                 pacts[k].value, vLen);
         }
         break;
-      case BKR94ACS_ACT_CON_SEND:
+      case BKR94ACS_ACT_BA_SEND:
         for (p = 0; p < n; ++p) {
           if (pacts[k].skip && BRACHA87_SKIP_TST(pacts[k].skip, p))
             continue;
-          qPush(BKR94ACS_CLS_CONSENSUS, pacts[k].origin, pacts[k].round,
-                pacts[k].broadcaster, pacts[k].type, pacts[k].accepted,
+          qPush(BKR94ACS_CLS_BA, pacts[k].process, pacts[k].round,
+                pacts[k].initiator, pacts[k].type, pacts[k].accepted,
                 (unsigned char)i, (unsigned char)p,
-                &pacts[k].conValue, 1);
+                &pacts[k].baValue, 1);
         }
         break;
       default:
-        /* BA_DECIDED / COMPLETE / BA_EXHAUSTED don't appear in pump
-         * output (no replay component); ignore. */
+        /* BA_DECIDED / COMPLETE / BA_EXHAUSTED don't appear in retry
+         * output (no retry component); ignore. */
         break;
       }
     }
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Drain the post-pump replay queue.  Receivers dedup at Fig1Input,    */
-  /*  so under perfect delivery these replays produce no new state.       */
+  /*  Drain the post-retry retry queue.  Receivers dedup at Fig1Input,    */
+  /*  so under perfect delivery these retries produce no new state.       */
   /*----------------------------------------------------------------------*/
 
   while (Qhead < Qtail) {
     struct msg *m;
-    struct bkr94acsAct dacts[BKR94ACS_MAX_ACTS(MAX_PEERS, MAX_PHASES)];
+    struct bkr94acsAct dacts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
 
     m = &MsgQ[Qhead++];
-    if ((m->clsType & BKR94ACS_CLS_MASK) == BKR94ACS_CLS_PROPOSAL) {
-      bkr94acsProposalInput(peers[m->to], m->origin,
+    if ((m->clsType & BKR94ACS_CLS_MASK) == BKR94ACS_CLS_ACAST) {
+      bkr94acsAcastInput(processes[m->to], m->process,
                             m->clsType & BRACHA87_TYPE_MASK, m->from,
                             m->value, dacts);
       /* Same ACCEPTED ingress as the main loop (Input first). */
       if ((m->clsType & BRACHA87_TYPE_MASK) == BRACHA87_READY
        && (m->clsType & BKR94ACS_ACCEPTED))
-        bkr94acsProposalAccepted(peers[m->to], m->origin, m->from);
+        bkr94acsAcastAccepted(processes[m->to], m->process, m->from);
     } else {
-      bkr94acsConsensusInput(peers[m->to], m->origin, m->round,
-                             m->broadcaster, m->clsType & BRACHA87_TYPE_MASK,
+      bkr94acsBaInput(processes[m->to], m->process, m->round,
+                             m->initiator, m->clsType & BRACHA87_TYPE_MASK,
                              m->from,
                              (unsigned char)(((m->clsType >> 3) & 1)
                                              | (m->clsType & BRACHA87_D_FLAG)),
                              dacts);
       if ((m->clsType & BRACHA87_TYPE_MASK) == BRACHA87_READY
        && (m->clsType & BKR94ACS_ACCEPTED))
-        bkr94acsConsensusAccepted(peers[m->to], m->origin, m->round,
-                                  m->broadcaster, m->from);
+        bkr94acsBaAccepted(processes[m->to], m->process, m->round,
+                                  m->initiator, m->from);
     }
-    /* Replay-induced acts are duplicates; discarded. */
+    /* Retry-induced acts are duplicates; discarded. */
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Output: each peer's agreed common subset in sorted order            */
+  /*  Output: each process's agreed common subset in sorted order            */
   /*----------------------------------------------------------------------*/
 
   printf("\n--- BKR94 ACS Results (n=%u, t=%u, seed=%u) ---\n", n, t, origSeed);
 
   {
-    /* Verify all honest peers agree on the same subset and ordering */
+    /* Verify all honest processes agree on the same subset and ordering */
     int allAgree;
     int haveBaseline;
-    unsigned char firstSubset[MAX_PEERS];
+    unsigned char firstSubset[MAX_PROCESSES];
     unsigned int firstCnt;
 
     allAgree = 1;
@@ -631,11 +631,11 @@ main(
     firstCnt = 0;
 
     for (i = 0; i < n; ++i) {
-      unsigned char subset[MAX_PEERS];
+      unsigned char subset[MAX_PROCESSES];
       unsigned int cnt;
-      const char *sorted[MAX_PEERS];
+      const char *sorted[MAX_PROCESSES];
 
-      if (!(peers[i]->flags & BKR94ACS_F_COMPLETE)) {
+      if (!(processes[i]->flags & BKR94ACS_F_COMPLETE)) {
         /*
          * Distinguish exhaustion from other incompleteness causes:
          * the library exposes 0xFE in bkr94acsBaDecision for BAs
@@ -646,10 +646,10 @@ main(
          */
         unsigned int exhaustedCnt;
 
-        printf("Peer %u: BKR94 ACS did not complete", i);
+        printf("Process %u: BKR94 ACS did not complete", i);
         exhaustedCnt = 0;
         for (j = 0; j < n; ++j) {
-          if (bkr94acsBaDecision(peers[i], (unsigned char)j) == 0xFE) {
+          if (bkr94acsBaDecision(processes[i], (unsigned char)j) == 0xFE) {
             printf("%s BA[%u]",
                    exhaustedCnt ? "," : " (exhausted:",
                    j);
@@ -663,14 +663,14 @@ main(
         continue;
       }
 
-      cnt = bkr94acsSubset(peers[i], subset);
-      printf("Peer %u: common subset (%u/%u proposals):\n", i, cnt, n);
+      cnt = bkr94acsSubset(processes[i], subset);
+      printf("Process %u: common subset (%u/%u acasts):\n", i, cnt, n);
 
-      /* Collect proposal strings for sorted output */
+      /* Collect A-Cast strings for sorted output */
       for (j = 0; j < cnt; ++j) {
         const unsigned char *pv;
 
-        pv = bkr94acsProposalValue(peers[i], subset[j]);
+        pv = bkr94acsAcastValue(processes[i], subset[j]);
         sorted[j] = pv ? (const char *)pv : "(null)";
       }
 
@@ -681,9 +681,9 @@ main(
         printf("  %s\n", sorted[j]);
 
       /*
-       * Track the baseline by first-completion, not peer index.
-       * If peer 0 fails to complete (e.g. exhausted BA), comparing
-       * subsequent peers' subsets against an unset firstCnt would
+       * Track the baseline by first-completion, not process index.
+       * If process 0 fails to complete (e.g. exhausted BA), comparing
+       * subsequent processes' subsets against an unset firstCnt would
        * spuriously flag disagreement.
        */
       if (!haveBaseline) {
@@ -697,7 +697,7 @@ main(
       }
     }
 
-    printf("\nAll peers agree on subset: %s\n",
+    printf("\nAll processes agree on subset: %s\n",
            allAgree ? "ok" : "FAIL");
     if (!allAgree)
       exitCode = 1;
@@ -709,19 +709,19 @@ main(
 
 cleanup:
   for (i = 0; i < n; ++i)
-    free(peers[i]);
+    free(processes[i]);
   qFree();
 
   return (exitCode);
 
 usage:
   fprintf(stderr,
-    "usage: example_bkr94acs [-v] [-s seed] n t proposal0 proposal1 ...\n"
-    "  n            total peers (1-%d)\n"
+    "usage: example_bkr94acs [-v] [-s seed] n t acast0 acast1 ...\n"
+    "  n            total processes (1-%d)\n"
     "  t            max Byzantine faults\n"
-    "  proposal*    per-peer proposal strings\n"
+    "  A-Cast*    per-process A-Cast strings\n"
     "  -v           verbose: trace every message\n"
     "  -s seed      shuffle seed (0 = ordered delivery)\n",
-    MAX_PEERS);
+    MAX_PROCESSES);
   return (1);
 }
