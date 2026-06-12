@@ -152,9 +152,10 @@
  * BA_DECIDED and COMPLETE are success signals — a decision was
  * reached — and are NOT stop conditions: post-decide continuation
  * requires the process to keep broadcasting past both.  BA_EXHAUSTED
- * is the library's one stop condition, and it is a failure (the BA
- * cannot decide).  Successful stopping is unspecified by the library
- * under unbounded latency; it is the application's policy.
+ * reports that the BA can issue no new phase/round and so will never
+ * decide -- COMPLETE is unreachable.  Stopping is unspecified by the
+ * library under unbounded latency; it is the application's
+ * abandonment policy.
  *
  * Field usage by act:
  *   ACAST_SEND     .process, .type (BRACHA87_INITIAL/ECHO/READY), .value (vLen+1 bytes)
@@ -168,9 +169,10 @@
  *                 No safe in-protocol recovery: any unilateral
  *                 substitute decision could disagree with a remote
  *                 process's actual decision, breaking SubSet agreement
- *                 (Part C).  Application must abort and (optionally)
- *                 restart with fresh state.  Output exactly once per
- *                 BA per ACS instance.)
+ *                 (Part C).  The application surfaces it as the run's
+ *                 failure cause and exits through its abandonment
+ *                 policy, optionally restarting with fresh state.
+ *                 Output exactly once per BA per ACS instance.)
  *
  * .value is a borrowed pointer into library-owned storage (the
  * Fig1's echoed-value slot — populated as soon as INITIATOR, Rule
@@ -473,7 +475,7 @@ bkr94acsAcast(
  * Returns 0 only when a full sweep finds no sent instance —
  * pre-broadcast / shutdown state, not a per-tick termination
  * signal.  Termination is an application choice; the library
- * prescribes no policy (see README.md Deployment Notes).
+ * prescribes no policy (see README.md "Abandonment").
  *
  * Replaces the application-layer retry bookkeeping entirely.  Per-record
  * destination masks, per-process evidence tracking, and retry

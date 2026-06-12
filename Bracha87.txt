@@ -108,6 +108,10 @@ Key properties from the paper:
            correct process validates m (VALID sets are eventually equal).
   Lemma 7: If a correct process broadcasts a k-message m, every
            correct process eventually validates m.
+  Lemma 8: If a correct process p is at round i, then p will eventually
+           progress to round i + 1 (Section 5, no deadlock: by choice of
+           the first blocked round, all correct processes have broadcast
+           there, and by Lemma 7 those messages are eventually validated).
   Lemma 9: If all correct processes start a phase with the same value v,
            they all decide v at that phase.
   Lemma 10: If at phase r, two correct processes validate messages with
@@ -115,6 +119,11 @@ Key properties from the paper:
 
   Theorem 1: Figure 1 is a reliable broadcast protocol (for t < n/3).
   Theorem 2: Figure 4 is a t-resilient consensus protocol (for t < n/3).
+  Theorem 3 (Section 6, Performance): (i) if t = c*n for some constant c,
+           the expected number of phases to reach agreement is exponential
+           in n; (ii) if t = c*sqrt(n) for some constant c, it is a
+           constant that does not depend on n (although it is exponential
+           in c).  Proof: "The proof can be found in (Ben-Or, 1983)."
 
   Termination: probability of not terminating is
   lim_{r->inf} (1 - p)^r = 0, where p > 2^{-(n-1)}.

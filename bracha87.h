@@ -34,7 +34,7 @@
  *
  * Each module boundary matches the paper exactly.
  * Proofs apply per-module: Lemmas 1-4 to Fig1, Lemmas 5-7 to Fig2/3,
- * Lemma 9-10 and Theorems 1-2 to Fig4.
+ * Lemmas 8-10 and Theorems 1-3 to Fig4.
  *
  * Operational limits:
  *   n:         unsigned char, encodes process count 1..256 (n + 1)
@@ -259,8 +259,8 @@ bracha87Fig1Value(
  * retransmission is placed here.
  *
  * Retry the broadcast actions this instance is still owed under
- * fair-loss, so eventual delivery holds without an application-
- * layer retry bookkeeping.  Returns the number of actions (0..3) to broadcast.
+ * fair-loss -- offered to recover eventual delivery without an
+ * application-layer retry bookkeeping.  Returns the number of actions (0..3) to broadcast.
  *
  * Reactive: rules fire only when called.  No wall-clock predicate
  * appears anywhere; the application's retry tick IS the event, so
@@ -746,9 +746,9 @@ bracha87Fig4Init(
  * On BRACHA87_BROADCAST: caller reads fig4->value for the broadcast value
  *   and fig4->phase/fig4->subRound for the round number.
  * On BRACHA87_DECIDE: caller reads fig4->decision.
- * On BRACHA87_EXHAUSTED: all phases consumed without decision. This is
- *   the only stop condition this state machine has, and it is a *failure*
- *   stop — see the success-vs-stop note below.
+ * On BRACHA87_EXHAUSTED: all phases consumed without decision -- the
+ *   machine can issue no new phase/round, so it will never decide.
+ *   See the success-vs-stop note below.
  *
  * BRACHA87_DECIDE is returned exactly once (the first time >2t d-messages
  * are seen), combined with BRACHA87_BROADCAST. Per the paper, a decided
@@ -761,8 +761,10 @@ bracha87Fig4Init(
  * condition at all (no EXHAUSTED, no phase ceiling).  Under unbounded
  * latency no process can know that stopping is safe, so when to stop
  * after a decision is an application policy, not a library event.
- * The one stop this library specifies is BRACHA87_EXHAUSTED — a
- * failure — surfaced upward as BKR94ACS_ACT_BA_EXHAUSTED.
+ * BRACHA87_EXHAUSTED is not a stop either: it reports that no new
+ * phase/round can be issued (surfaced upward as
+ * BKR94ACS_ACT_BA_EXHAUSTED); the application factors that into the
+ * same abandonment policy.
  *
  * BRACHA87_EXHAUSTED is also returned at most once: it is mutually
  * exclusive with BRACHA87_DECIDE (decideV requires !haveDecided;
@@ -770,8 +772,9 @@ bracha87Fig4Init(
  * !decideV) and the maxPhases ceiling makes single output structural.
  * Subsequent calls to bracha87Fig4Round on an EXHAUSTED instance are
  * safe and return 0 actions; the state machine remains in EXHAUSTED.
- * No unilateral substitute decision is produced -- exhaustion is a
- * fatal protocol event the application must handle (e.g. abort).
+ * No unilateral substitute decision is produced -- exhaustion means
+ * no new phase/round can be issued; the application folds that into
+ * its abandonment policy.
  *
  * Inbound message integrity is the caller's responsibility (sender
  * authentication, well-formed framing).  Within those bounds, malformed
@@ -825,10 +828,9 @@ bracha87Fig4Round(
 /*  accepted).  Neither is a termination signal by itself.               */
 /*                                                                       */
 /*  Termination is the application's policy, not the library's,          */
-/*  which prescribes none — see README.md "Termination is an             */
-/*  application choice."  Count Retry calls across ticks if a policy      */
-/*  needs sweep coverage; one sweep covers every currently-sent     */
-/*  instance once.                                                       */
+/*  which prescribes none — see README.md "Abandonment."  Count Retry     */
+/*  calls across ticks if a policy needs sweep coverage; one sweep        */
+/*  covers every currently-sent instance once.                            */
 /*                                                                       */
 /*************************************************************************/
 
