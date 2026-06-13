@@ -200,6 +200,10 @@ main(int argc, char **argv)
     CHECK(s_small >= sizeof (struct bracha87Fig1), "Fig1Sz >= sizeof");
     CHECK(s_large > s_small, "Fig1Sz grows with n");
     CHECK(s_long  > s_small, "Fig1Sz grows with vLen");
+    /* vLen is unsigned short: encoding spans 0..65535 (1..65536 bytes).   */
+    /* Sz arithmetic must keep growing past the former 256-byte cap.       */
+    CHECK(bracha87Fig1Sz(N_ENC, 65535) > bracha87Fig1Sz(N_ENC, 255),
+          "Fig1Sz grows with vLen past the former 256-byte cap");
 
     s_small = bracha87Fig2Sz(N_ENC, 4);
     s_large = bracha87Fig2Sz(15, 4);
@@ -231,6 +235,21 @@ main(int argc, char **argv)
                      | BRACHA87_F1_ACCEPTED | BRACHA87_F1_INITIATOR)) == 0,
           "Fig1Init.flags clear");
     CHECK(bracha87Fig1Value(b) == 0, "Fig1Value null pre-initiator pre-echo");
+  }
+
+  /* Init must preserve a vLen > 255: the widened param/field no longer    */
+  /* truncates at a byte (a byte field would store 300 & 0xFF == 44).      */
+  {
+    struct bracha87Fig1 *b;
+    unsigned int vEnc = 300;            /* actual 301 bytes, past old cap */
+    unsigned long bsz = bracha87Fig1Sz(N_ENC, vEnc);
+    b = (struct bracha87Fig1 *) malloc(bsz);
+    CHECK(b != 0, "wide-vLen Init alloc");
+    if (b) {
+      bracha87Fig1Init(b, N_ENC, T_VAL, (unsigned short) vEnc);
+      CHECK(b->vLen == vEnc, "Fig1Init preserves vLen > 255 (no truncation)");
+      free(b);
+    }
   }
 
   /* ---------------------------------------------------------------- */
