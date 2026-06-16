@@ -33,8 +33,8 @@
  * Fig 3 refines Fig 2: replaces receive with validate (VALID sets).
  *
  * Each module boundary matches the paper exactly.
- * Proofs apply per-module: Lemmas 1-4 to Fig1, Lemmas 5-7 to Fig2/3,
- * Lemmas 8-10 and Theorems 1-3 to Fig4.
+ * Proofs apply per-module: Lemmas 1-4 and Theorem 1 to Fig1,
+ * Lemmas 5-7 to Fig2/3, Lemmas 8-10 and Theorems 2-3 to Fig4.
  *
  * Operational limits:
  *   n:         unsigned char, encodes process count 1..256 (n + 1)

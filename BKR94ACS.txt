@@ -18,14 +18,21 @@ t Byzantine faults. The MPC construction targets optimal resilience
 
 ACS takes two subprotocols as inputs:
 
-  A-Cast — asynchronous broadcast channel (Bracha 1984). Reliable
-    broadcast: if one honest player delivers v, every honest player
-    eventually delivers v; all honest players deliver the same v; if
-    the sender is honest, every honest player delivers.
+  A-Cast — asynchronous broadcast channel: reliable broadcast — if one
+    honest player delivers v, every honest player eventually delivers v;
+    all honest players deliver the same v; if the sender is honest,
+    every honest player delivers. ACS is generic in this subprotocol;
+    this repo uses Bracha 1987 Figure 1. (The primitive is the classic
+    Bracha broadcast, originally Bracha 1984.)
 
-  BA — fast asynchronous Byzantine Agreement (Canetti-Rabin 1993).
-    Standard binary BA with termination (in the probabilistic sense
-    of the Canetti-Rabin construction), agreement, and validity.
+  BA — binary asynchronous Byzantine Agreement: agreement, validity,
+    and probabilistic termination. ACS is generic in this subprotocol —
+    any binary BA with these properties works; the construction is not
+    part of the ACS interface. This repo uses Bracha 1987 Figure 4
+    (caller-supplied coin; probabilistic termination per Bracha
+    Theorem 2/3, proof in Ben-Or 1983). BKR94's own MPC instantiated
+    this slot with Canetti-Rabin 1993 — a paper-internal choice, not
+    used here.
 
 
 Problem setup
