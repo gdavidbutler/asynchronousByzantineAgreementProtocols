@@ -39,7 +39,7 @@
  * Operational limits:
  *   n:         unsigned char, encodes process count 1..256 (n + 1)
  *   t:         unsigned char, max 85 (n + 1 > 3t required)
- *   vLen:      unsigned short, encodes value length 1..65536 (vLen + 1 bytes)
+ *   vLen:      unsigned char, encodes value length 1..256 (vLen + 1 bytes)
  *   maxPhases: unsigned char, max BRACHA87_MAX_PHASES (85)
  *   rounds:    unsigned char, 0-based, max 3 * BRACHA87_MAX_PHASES - 1 (254)
  */
@@ -137,7 +137,7 @@
  * bracha87Fig1Init before use. No dynamic allocation.
  *
  * The value v is a fixed-length byte string of vLen + 1 bytes.
- * vLen encodes the value length: 0 = 1 byte, 65535 = 65536 bytes.
+ * vLen encodes the value length: 0 = 1 byte, 255 = 256 bytes.
  * Per-process echo/ready values are stored so echo_count[v]
  * is computed correctly for any v, avoiding the liveness bug
  * where echoing the first value seen blocks the honest one.
@@ -145,9 +145,9 @@
 struct bracha87Fig1 {
   unsigned short ecCnt[2];/* incremental echo counts for binary (vLen==0) */
   unsigned short rdCnt[2];/* incremental ready counts for binary (vLen==0) */
-  unsigned short vLen;    /* value length encoding: actual = vLen + 1 */
   unsigned char n;        /* process count encoding: actual = n + 1 */
   unsigned char t;        /* max Byzantine (n + 1 > 3t) */
+  unsigned char vLen;     /* value length encoding: actual = vLen + 1 */
   unsigned char flags;    /* BRACHA87_F1_ECHOED/RDSENT/ACCEPTED */
   unsigned char data[1];  /* variable: see bracha87Fig1Sz */
 };
@@ -167,7 +167,7 @@ bracha87Fig1Init(
   struct bracha87Fig1 *
  ,unsigned char            /* n: actual process count = n + 1 */
  ,unsigned char            /* t */
- ,unsigned short           /* vLen: actual value length = vLen + 1 */
+ ,unsigned char            /* vLen: actual value length = vLen + 1 */
 );
 
 /*

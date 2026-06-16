@@ -42,7 +42,7 @@
  * B_N: actual process count (n + 1, range 1..256).
  * Works for any struct with an unsigned char n field.
  *
- * F1_VLEN: actual value length (vLen + 1, range 1..65536).
+ * F1_VLEN: actual value length (vLen + 1, range 1..256).
  *
  * Layout (N = B_N, L = F1_VLEN, BS = BIT_SZ(N)):
  *   value[L]             echoed value
@@ -78,7 +78,7 @@ bracha87Fig1Sz(
   unsigned int N;
   unsigned int L;
 
-  /* actual: n encodes 0..255 as 1..256; vLen 0..65535 as 1..65536 */
+  /* actual counts: n/vLen encode 0..255 as 1..256 */
   N = n + 1;
   L = vLen + 1;
   /*
@@ -100,7 +100,7 @@ bracha87Fig1Init(
   struct bracha87Fig1 *b
  ,unsigned char n
  ,unsigned char t
- ,unsigned short vLen
+ ,unsigned char vLen
 ){
   /* n is encoded: actual process count = n + 1. Bracha requires
    * actual > 3t.  Use unsigned int to avoid wrap at n = 255. */
