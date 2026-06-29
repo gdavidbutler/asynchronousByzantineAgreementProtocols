@@ -145,7 +145,7 @@ static unsigned int
 maxRounds(
   const struct bkr94acs *a
 ){
-  return ((unsigned int)a->maxPhases * 3);
+  return (a->maxPhases * 3);
 }
 
 /* Base of A-Cast Fig1 area */
@@ -283,7 +283,7 @@ bkr94acsInit(
     return;
   if (self > n)
     return;
-  assert((unsigned int)n + 1 > 3u * (unsigned int)t);
+  assert((unsigned int)n + 1 > 3u * t);
 
   memset(a, 0, bkr94acsSz(n, vLen, maxPhases));
   a->n = n;
@@ -292,7 +292,7 @@ bkr94acsInit(
   a->maxPhases = maxPhases;
   a->self = self;
 
-  N = (unsigned int)n + 1;
+  N = n + 1;
 
   /* Mark all BA decisions as undecided */
   memset(bkr94acsDecision(a), 0xFF, N);
@@ -305,7 +305,7 @@ bkr94acsInit(
   {
     unsigned int mr2;
 
-    mr2 = (unsigned int)maxPhases * 3;
+    mr2 = maxPhases * 3;
     for (i = 0; i < N; ++i) {
       for (r = 0; r < mr2; ++r)
         for (j = 0; j < N; ++j)
@@ -367,7 +367,7 @@ bkr94acsEnter(
   out->value = 0;
   out->skip = 0;            /* fresh initiation: nothing to suppress yet */
   out->act = BKR94ACS_ACT_BA_SEND;
-  out->process = (unsigned char)process;
+  out->process = process;
   out->round = 0;
   out->type = BRACHA87_INITIAL;
   out->baValue = enter;
@@ -571,7 +571,7 @@ bkr94acsBaInput(
   mr = maxRounds(a);
   cf1sz = baF1Sz(a);
   f4off = (unsigned long)mr * N * cf1sz;
-  pipe = baBase(a) + (unsigned int)process * baPipelineSz(a);
+  pipe = baBase(a) + process * baPipelineSz(a);
   f1 = (struct bracha87Fig1 *)(pipe
     + ((unsigned long)round * N + initiator) * cf1sz);
   f4 = (struct bracha87Fig4 *)(pipe + f4off);
@@ -843,7 +843,7 @@ bkr94acsSubset(
   cnt = 0;
   for (i = 0; i < A_N(a); ++i) {
     if (dec[i] == 1)
-      processes[cnt++] = (unsigned char)i;
+      processes[cnt++] = i;
   }
   return (cnt);
 }
@@ -983,7 +983,7 @@ bkr94acsRetryOutputAcast(
     out[nact].value = cv;
     out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
     out[nact].act = BKR94ACS_ACT_ACAST_SEND;
-    out[nact].process = (unsigned char)process;
+    out[nact].process = process;
     out[nact].round = 0;
     out[nact].type = (f1out[k] == BRACHA87_INITIAL_ALL)
                      ? BRACHA87_INITIAL
@@ -1027,15 +1027,15 @@ bkr94acsRetryOutputBa(
     out[nact].value = 0;
     out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
     out[nact].act = BKR94ACS_ACT_BA_SEND;
-    out[nact].process = (unsigned char)process;
-    out[nact].round = (unsigned char)round;
+    out[nact].process = process;
+    out[nact].round = round;
     out[nact].type = (f1out[k] == BRACHA87_INITIAL_ALL)
                      ? BRACHA87_INITIAL
                    : (f1out[k] == BRACHA87_ECHO_ALL)
                      ? BRACHA87_ECHO
                    :   BRACHA87_READY;
     out[nact].baValue = cv[0];
-    out[nact].initiator = (unsigned char)initiator;
+    out[nact].initiator = initiator;
     out[nact].accepted = (f1out[k] == BRACHA87_READY_ALL
                        && (f1->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
     ++nact;
@@ -1084,7 +1084,7 @@ bkr94acsRetry(
     if (idx < N) {
       unsigned char process;
 
-      process = (unsigned char)idx;
+      process = idx;
       if (bkr94acsRetryProcessGate(a, process))
         nact = bkr94acsRetryOutputAcast(a, process, out);
     } else {
@@ -1094,9 +1094,9 @@ bkr94acsRetry(
       unsigned char initiator;
 
       rel = idx - N;
-      process = (unsigned char)(rel / (mr * N));
-      round = (unsigned char)((rel / N) % mr);
-      initiator = (unsigned char)(rel % N);
+      process = (rel / (mr * N));
+      round = ((rel / N) % mr);
+      initiator = (rel % N);
       nact = bkr94acsRetryOutputBa(a, process, round,
                                        initiator, out);
     }
@@ -1164,7 +1164,7 @@ bkr94acsAcastAllEchoed(
 ){
   if (!a || process > a->n)
     return (0);
-  return (bracha87Fig1AllEchoed(acastF1((struct bkr94acs *)a, process)));
+  return (bracha87Fig1AllEchoed(acastF1(a, process)));
 }
 
 const unsigned char *
@@ -1174,7 +1174,7 @@ bkr94acsAcastSkip(
 ){
   if (!a || process > a->n)
     return (0);
-  return (bracha87Fig1Skip(acastF1((struct bkr94acs *)a, process),
+  return (bracha87Fig1Skip(acastF1(a, process),
                            BRACHA87_INITIAL_ALL));
 }
 
@@ -1200,7 +1200,7 @@ bkr94acsSentFig1Count(
    * piggybacks on F1_RDSENT remaining set post-accept (pitfall 10),
    * so it is implicitly counted.
    */
-  sentMask = (unsigned char)(BRACHA87_F1_ECHOED
+  sentMask = (BRACHA87_F1_ECHOED
                                 | BRACHA87_F1_RDSENT
                                 | BRACHA87_F1_INITIATOR);
 
@@ -1209,7 +1209,7 @@ bkr94acsSentFig1Count(
   count = 0;
 
   for (process = 0; process < N; ++process) {
-    f1 = acastF1((struct bkr94acs *)a, (unsigned char)process);
+    f1 = acastF1(a, process);
     if (f1->flags & sentMask)
       ++count;
   }
@@ -1225,10 +1225,10 @@ bkr94acsSentFig1Count(
   for (process = 0; process < N; ++process) {
     for (round = 0; round < mr; ++round) {
       for (bcast = 0; bcast < N; ++bcast) {
-        f1 = baF1((struct bkr94acs *)a,
-                   (unsigned char)process,
-                   (unsigned char)round,
-                   (unsigned char)bcast);
+        f1 = baF1(a,
+                   process,
+                   round,
+                   bcast);
         if (f1->flags & sentMask)
           ++count;
       }

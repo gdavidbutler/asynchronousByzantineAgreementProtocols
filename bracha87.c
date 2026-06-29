@@ -104,7 +104,7 @@ bracha87Fig1Init(
 ){
   /* n is encoded: actual process count = n + 1. Bracha requires
    * actual > 3t.  Use unsigned int to avoid wrap at n = 255. */
-  assert((unsigned int)n + 1 > 3u * (unsigned int)t);
+  assert((unsigned int)n + 1 > 3u * t);
   memset(b, 0, bracha87Fig1Sz(n, vLen));
   b->n = n;
   b->t = t;
@@ -608,7 +608,7 @@ bracha87Fig2Sz(
 
   N = n + 1;
   return (sizeof (struct bracha87Fig2) - sizeof (unsigned short)
-    + (unsigned long)maxRounds * sizeof (unsigned short)
+    + maxRounds * sizeof (unsigned short)
     + BIT_SZ(maxRounds)
     + (unsigned long)maxRounds * (BIT_SZ(N) + N));
 }
@@ -620,7 +620,7 @@ bracha87Fig2Init(
  ,unsigned char t
  ,unsigned char maxRounds
 ){
-  assert((unsigned int)n + 1 > 3u * (unsigned int)t);
+  assert((unsigned int)n + 1 > 3u * t);
   memset(b, 0, bracha87Fig2Sz(n, maxRounds));
   b->n = n;
   b->t = t;
@@ -686,7 +686,7 @@ bracha87Fig2GetReceived(
   for (i = 0; i < B_N(b); ++i) {
     if (BIT_TST(recv, i)) {
       if (senders)
-        senders[cnt] = (unsigned char)i;
+        senders[cnt] = i;
       if (values)
         values[cnt] = vals[i];
       ++cnt;
@@ -732,7 +732,7 @@ bracha87Fig3Sz(
 
   N = n + 1;
   return (sizeof (struct bracha87Fig3) - sizeof (unsigned short)
-    + (unsigned long)maxRounds * sizeof (unsigned short)
+    + maxRounds * sizeof (unsigned short)
     + BIT_SZ(maxRounds)
     + (unsigned long)maxRounds * (2 * BIT_SZ(N) + N));
 }
@@ -746,7 +746,7 @@ bracha87Fig3Init(
  ,bracha87Nfn N
  ,void *Nclosure
 ){
-  assert((unsigned int)n + 1 > 3u * (unsigned int)t);
+  assert((unsigned int)n + 1 > 3u * t);
   memset(b, 0, bracha87Fig3Sz(n, maxRounds));
   b->n = n;
   b->t = t;
@@ -823,7 +823,7 @@ fig3IsValid(
        * *result's base — at most one of (0|D_FLAG) or (1|D_FLAG) can
        * be legitimate per evaluation (see fig4Nfn case 1).
        */
-      if ((value & (unsigned char)~BRACHA87_D_FLAG) > 1)
+      if ((value & ~BRACHA87_D_FLAG) > 1)
         return (0);
       if (value & BRACHA87_D_FLAG) {
         if (!(result & BRACHA87_D_FLAG))
@@ -910,7 +910,7 @@ bracha87Fig3Accept(
      */
     unsigned int r;
 
-    for (r = (unsigned int)k + 1; r < b->maxRounds; ++r) {
+    for (r = k + 1; r < b->maxRounds; ++r) {
       unsigned char csnd[256];
       unsigned char cval[256];
       unsigned int cj;
@@ -938,7 +938,7 @@ bracha87Fig3Accept(
       cj = 0;
       for (i = 0; i < B_N(b); ++i) {
         if (BIT_TST(pvbm, i)) {
-          csnd[cj] = (unsigned char)i;
+          csnd[cj] = i;
           cval[cj] = pvls[i];
           ++cj;
         }
@@ -961,7 +961,7 @@ bracha87Fig3Accept(
           if (crc < 0)
             valid = 0;
           else if (crc > 0) {
-            valid = ((rvl[i] & (unsigned char)~BRACHA87_D_FLAG) <= 1);
+            valid = ((rvl[i] & ~BRACHA87_D_FLAG) <= 1);
             if (valid && (rvl[i] & BRACHA87_D_FLAG)) {
               if (!(cres & BRACHA87_D_FLAG))
                 valid = 0;
@@ -1020,7 +1020,7 @@ bracha87Fig3GetValid(
   for (i = 0; i < B_N(b); ++i) {
     if (BIT_TST(vbm, i)) {
       if (senders)
-        senders[cnt] = (unsigned char)i;
+        senders[cnt] = i;
       if (values)
         values[cnt] = vls[i];
       ++cnt;
@@ -1080,7 +1080,7 @@ fig4Nfn(
  ,const unsigned char *values
  ,unsigned char *result
 ){
-  struct bracha87Fig4 *f4 = (struct bracha87Fig4 *)closure;
+  struct bracha87Fig4 *f4 = closure;
   unsigned int nt;
   unsigned int cnt[2];
   unsigned int dc[2];
@@ -1094,12 +1094,12 @@ fig4Nfn(
     return (-1);
 
   nt = B_N(f4) - f4->t;
-  sub = (unsigned int)(k % 3);
+  sub = (k % 3);
   cnt[0] = cnt[1] = 0;
   dc[0] = dc[1] = 0;
 
   for (i = 0; i < n_msgs; ++i) {
-    v = values[i] & (unsigned char)~BRACHA87_D_FLAG;
+    v = values[i] & ~BRACHA87_D_FLAG;
     if (v <= 1) {
       ++cnt[v];
       if (values[i] & BRACHA87_D_FLAG)
@@ -1240,7 +1240,7 @@ bracha87Fig4Init(
  ,bracha87CoinFn coin
  ,void *coinClosure
 ){
-  assert((unsigned int)n + 1 > 3u * (unsigned int)t);
+  assert((unsigned int)n + 1 > 3u * t);
   /* Clamp: maxPhases * 3 must fit in unsigned char round count. */
   if (maxPhases > BRACHA87_MAX_PHASES)
     maxPhases = BRACHA87_MAX_PHASES;
@@ -1257,7 +1257,7 @@ bracha87Fig4Init(
   b->coinClosure = coinClosure;
   bracha87Fig3Init(
     &b->fig3
-   ,n, t, (unsigned char)(maxPhases * 3), fig4Nfn, b);
+   ,n, t, (maxPhases * 3), fig4Nfn, b);
 }
 
 unsigned int
@@ -1292,14 +1292,14 @@ bracha87Fig4Round(
   if (b->flags & BRACHA87_F4_EXHAUSTED)
     return (0);
 
-  sub = (unsigned int)(k % 3);
-  ph = (unsigned int)(k / 3);
+  sub = (k % 3);
+  ph = (k / 3);
 
   /* Count base values (strip d flag) and d-flagged values separately */
   cnt[0] = cnt[1] = 0;
   dc[0] = dc[1] = 0;
   for (i = 0; i < n_msgs; ++i) {
-    v = values[i] & (unsigned char)~BRACHA87_D_FLAG;
+    v = values[i] & ~BRACHA87_D_FLAG;
     if (v <= 1) {
       ++cnt[v];
       if (values[i] & BRACHA87_D_FLAG)
@@ -1319,7 +1319,7 @@ bracha87Fig4Round(
    * those values are per-sender globally consistent (Fig 1 accept,
    * Lemma 2), and the two supporter camps are disjoint, so two >n/2
    * camps would need more than n senders. */
-  subRound    = (unsigned char)sub;
+  subRound    = sub;
   haveDecided = (b->flags & BRACHA87_F4_DECIDED) ? 1 : 0;
   n2Half      = (cnt[0] * 2 > B_N(b)) || (cnt[1] * 2 > B_N(b));
   gt2T        = dc[dmax] > 2u * b->t;
@@ -1337,7 +1337,7 @@ bracha87Fig4Round(
   if (setMajority)
     b->value = (cnt[1] > cnt[0]) ? 1 : 0;
   if (setDMajority)
-    b->value = (unsigned char)(((cnt[1] * 2 > B_N(b)) ? 1 : 0) | BRACHA87_D_FLAG);
+    b->value = (((cnt[1] * 2 > B_N(b)) ? 1 : 0) | BRACHA87_D_FLAG);
   if (decideV) {
     b->value = dmax;
     b->decision = dmax;
@@ -1346,14 +1346,14 @@ bracha87Fig4Round(
   if (adoptV)
     b->value = dmax;
   if (setCoin)
-    b->value = b->coin(b->coinClosure, (unsigned char)ph);
+    b->value = b->coin(b->coinClosure, ph);
 
   /* Procedural advance + return code.  Phase advance happens only at
    * end-of-phase (sub=2); the decide/exhausted/maxPhases return
    * codes can't be expressed declaratively so they stay in C. */
   switch (sub) {
   case 0:
-    b->phase = (unsigned char)ph;
+    b->phase = ph;
     b->subRound = 1;
     return (BRACHA87_BROADCAST);
   case 1:
@@ -1364,7 +1364,7 @@ bracha87Fig4Round(
     if (decideV) {
       if (ph + 1 >= b->maxPhases)
         return (BRACHA87_DECIDE);
-      b->phase = (unsigned char)(ph + 1);
+      b->phase = (ph + 1);
       b->subRound = 0;
       return (BRACHA87_DECIDE | BRACHA87_BROADCAST);
     }
@@ -1373,7 +1373,7 @@ bracha87Fig4Round(
       b->value = b->decision;
       if (ph + 1 >= b->maxPhases)
         return (0);
-      b->phase = (unsigned char)(ph + 1);
+      b->phase = (ph + 1);
       b->subRound = 0;
       return (BRACHA87_BROADCAST);
     }
@@ -1381,7 +1381,7 @@ bracha87Fig4Round(
       b->flags |= BRACHA87_F4_EXHAUSTED;
       return (BRACHA87_EXHAUSTED);
     }
-    b->phase = (unsigned char)(ph + 1);
+    b->phase = (ph + 1);
     b->subRound = 0;
     return (BRACHA87_BROADCAST);
   }
