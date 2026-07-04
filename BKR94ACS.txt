@@ -2,11 +2,13 @@ Ben-Or, Kelmer, Rabin 1994 "Asynchronous Secure Computations with
 Optimal Resilience (Extended Abstract)"
 PODC '94, pages 183-192
 
-Scope of this extract: Section 4 only ("Agreement on a Common Subset").
-The rest of the paper — USS (ultimate secret sharing), linear
-combination, multiplication, the Equality ZK Proof, the overall MPC
-construction — is unrelated to ACS as a standalone primitive and is
-deliberately not summarized here.
+Scope of this extract: Section 4 ("Agreement on a Common Subset"),
+plus the Section 2 facts (communication and adversary model) and the
+Section 5 usage facts that bear on ACS callers (folded in 2026-07-04
+from the full text). The rest of the paper — USS (ultimate secret
+sharing), linear combination, multiplication, the Equality ZK Proof,
+the overall MPC construction — is unrelated to ACS as a standalone
+primitive and is deliberately not summarized here.
 
 
 Model and tools
@@ -15,6 +17,28 @@ Model and tools
 n players (processors), fully connected asynchronous network, up to
 t Byzantine faults. The MPC construction targets optimal resilience
  t < n/3 (i.e. n >= 3t + 1).
+
+Channel and adversary model (paper Section 2): every two players are
+connected by a secure and reliable channel — a message on it cannot
+be heard by other players, is guaranteed to arrive, and may be
+delayed arbitrarily (finitely). There is NO broadcast primitive in
+the model; A-Cast is a simulation over the pairwise channels
+(Bracha 1984). The adversary is computationally unbounded and
+dynamic: it may corrupt up to t players adaptively at any time
+(taking their private data and their control), and it schedules the
+delay of every message, but it can neither read nor alter messages
+between honest players. A deployment therefore owes exactly two
+properties per PAIR — confidentiality ("secure") and eventual
+delivery ("reliable") — and owes no broadcast medium.
+
+Termination caveat, and where it does NOT attach: the paper notes its
+MPC (and the Canetti-Rabin 1993 AVSS/BA it builds on) carries an
+exponentially small but non-zero probability of not terminating, and
+proves (its Section 6) that this is unavoidable for AVSS when
+n <= 4t. That caveat attaches to the AVSS/CR93-BA side. The paper
+itself contrasts "the asynchronous Byzantine Agreement problem where
+the randomized protocol terminates with probability 1" — Bracha's,
+the BA this repo instantiates the slot with.
 
 ACS takes two subprotocols as inputs:
 
@@ -163,3 +187,40 @@ Remarks for implementers
   techniques of [BOEY91] are employed." That is an optimization for
   the MPC use case where many Agreement[Q] calls happen; it does not
   change Lemma 2.
+
+
+How the paper itself uses Agreement[Q]  (Section 5, folded from the
+full text)
+--------------------------------------------------------------------
+
+- Invoked repeatedly, each invocation independent. The MPC calls it
+  once at the input phase, once inside EVERY multiplication gate
+  (Figure 5 step 7), and once per random-polynomial generation
+  (Figure 8), each time with a fresh predicate Q. No state chains one
+  invocation to the next at the agreement layer: sequencing lives in
+  the arithmetic circuit, and cross-invocation state travels in the
+  shared secrets. Agreement[Q] is a subroutine, not a stream — the
+  paper defines no round sequence, no ordering between instances, and
+  no cross-instance membership semantics. An application that chains
+  instances into a sequenced stream is building its own layer, on its
+  own authority.
+
+- Exclusion is FINAL in the paper's usage. The function is evaluated
+  with every excluded input substituted by 0, and the ideal-model
+  definition even lets the ADVERSARY choose the subset (any CompSet
+  of size at least n - t). Nothing ever re-enters an excluded input
+  at a later invocation. An application that owes eventual delivery
+  of an excluded input must re-enter it itself at a later instance;
+  the paper offers no mechanism and imposes no constraint on the
+  shape of that re-entry.
+
+- Assumption 1 on Q ("every honest player eventually has Q = 1") is a
+  per-invocation obligation ON THE CALLER, and Lemma 2 Part A case
+  (ii) consumes it directly. An application in which an honest player
+  can stay silent for an invocation runs that instance outside the
+  lemma's premise, and silence spends fault budget: with t players
+  already silent-faulty, one MORE silent honest player leaves at most
+  n - t - 1 = 2t BAs that can decide 1 — below the step-2 threshold —
+  and the instance cannot complete. A caller composing many
+  invocations must ensure every honest player supplies Q(j) = 1
+  evidence for every invocation it is aware of.
