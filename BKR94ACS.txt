@@ -3,12 +3,13 @@ Optimal Resilience (Extended Abstract)"
 PODC '94, pages 183-192
 
 Scope of this extract: Section 4 ("Agreement on a Common Subset"),
-plus the Section 2 facts (communication and adversary model) and the
-Section 5 usage facts that bear on ACS callers (folded in 2026-07-04
-from the full text). The rest of the paper — USS (ultimate secret
-sharing), linear combination, multiplication, the Equality ZK Proof,
-the overall MPC construction — is unrelated to ACS as a standalone
-primitive and is deliberately not summarized here.
+plus the Section 2 facts (communication and adversary model), the
+Section 5 usage facts that bear on ACS callers, and the Section 1-3
+facts on the asynchronous model's reconstruction limits and the
+paper's own secret sharing. The linear combination, multiplication,
+and Equality ZK Proof machinery, and the overall MPC construction,
+remain unrelated to ACS as a standalone primitive and are
+deliberately not summarized here.
 
 
 Model and tools
@@ -32,10 +33,10 @@ properties per PAIR — confidentiality ("secure") and eventual
 delivery ("reliable") — and owes no broadcast medium.
 
 Termination caveat, and where it does NOT attach: the paper notes its
-MPC (and the Canetti-Rabin 1993 AVSS/BA it builds on) carries an
+MPC (and the Canetti-Rabin 1993 AVSS it builds on) carries an
 exponentially small but non-zero probability of not terminating, and
 proves (its Section 6) that this is unavoidable for AVSS when
-n <= 4t. That caveat attaches to the AVSS/CR93-BA side. The paper
+n <= 4t. That caveat attaches to the AVSS (secret-sharing) side. The paper
 itself contrasts "the asynchronous Byzantine Agreement problem where
 the randomized protocol terminates with probability 1" — Bracha's,
 the BA this repo instantiates the slot with.
@@ -101,8 +102,7 @@ evidence accumulates.
 The "2t+1" threshold in step 2 is n - t in the paper's regime
 (n = 3t+1). The paper cites [BOEY91] for a technique that runs the N
 BAs with an O(log n) factor saving over naive independent execution;
-that optimization is about shared coin / round reuse across the N
-instances and does not change the protocol's external behavior.
+it does not change the protocol's external behavior.
 
 
 Lemma 2 (paper's statement, paraphrased)
@@ -125,12 +125,12 @@ validity/termination) plus the two assumptions about Q.
     step 2. The precondition of step 2 is "2t+1 BAs have already
     terminated with output 1" — done.
 
-  Case (ii): No honest player ever entered 0. Then every honest
-    player's input to every BA is 1 (step 1, under assumption Q(h)=1
-    for every honest h eventually). By BA's validity property (if all
-    correct inputs are b, output is b), each such BA outputs 1. There
-    are at least n - t = 2t+1 honest players, so at least 2t+1 BAs
-    output 1.
+  Case (ii): No honest player ever entered 0. Then for each honest
+    player Ph (assumption Q(h)=1 eventually), every honest player's
+    input to BA_h is 1 (step 1). By BA's validity property (if all
+    correct inputs are b, output is b), each such BA_h outputs 1.
+    There are at least n - t = 2t+1 honest players, so at least 2t+1
+    BAs output 1.
 
 [Part B] All n BA instances terminate.
 
@@ -189,38 +189,69 @@ Remarks for implementers
   change Lemma 2.
 
 
-How the paper itself uses Agreement[Q]  (Section 5, folded from the
-full text)
+How the paper itself uses Agreement[Q]  (Section 5)
 --------------------------------------------------------------------
 
 - Invoked repeatedly, each invocation independent. The MPC calls it
   once at the input phase, once inside EVERY multiplication gate
   (Figure 5 step 7), and once per random-polynomial generation
   (Figure 8), each time with a fresh predicate Q. No state chains one
-  invocation to the next at the agreement layer: sequencing lives in
-  the arithmetic circuit, and cross-invocation state travels in the
-  shared secrets. Agreement[Q] is a subroutine, not a stream — the
-  paper defines no round sequence, no ordering between instances, and
-  no cross-instance membership semantics. An application that chains
-  instances into a sequenced stream is building its own layer, on its
-  own authority.
+  invocation to the next: sequencing lives in the arithmetic circuit,
+  and cross-invocation state travels in the shared secrets.
 
-- Exclusion is FINAL in the paper's usage. The function is evaluated
-  with every excluded input substituted by 0, and the ideal-model
-  definition even lets the ADVERSARY choose the subset (any CompSet
-  of size at least n - t). Nothing ever re-enters an excluded input
-  at a later invocation. An application that owes eventual delivery
-  of an excluded input must re-enter it itself at a later instance;
-  the paper offers no mechanism and imposes no constraint on the
-  shape of that re-entry.
+- Exclusion is by substitution. The function is evaluated with every
+  excluded input substituted by 0, and the ideal-model definition
+  (Section 2) even lets the ADVERSARY choose the subset — any CompSet
+  of size at least n - t. Nothing ever re-enters an excluded input at
+  a later invocation.
 
 - Assumption 1 on Q ("every honest player eventually has Q = 1") is a
-  per-invocation obligation ON THE CALLER, and Lemma 2 Part A case
-  (ii) consumes it directly. An application in which an honest player
-  can stay silent for an invocation runs that instance outside the
-  lemma's premise, and silence spends fault budget: with t players
-  already silent-faulty, one MORE silent honest player leaves at most
-  n - t - 1 = 2t BAs that can decide 1 — below the step-2 threshold —
-  and the instance cannot complete. A caller composing many
-  invocations must ensure every honest player supplies Q(j) = 1
-  evidence for every invocation it is aware of.
+  per-invocation premise, and Lemma 2 Part A case (ii) consumes it
+  directly: with every honest player's input to every BA equal to 1,
+  each such BA outputs 1, so at least n - t = 2t + 1 BAs output 1.
+
+
+The paper's answers to the async obstacle (Sections 1-3)
+--------------------------------------------------------------------
+
+Facts the paper states about its own construction in the t < n/3
+asynchronous model. The obstacle (Section 1, "Obstacles to overcome";
+Section 2): the adversary can delay honest players and force a
+protocol to end with only n - t = 2t + 1 participants, the missing
+ones not necessarily the faulty ones. Three answers the paper draws
+from it:
+
+- Late-player reconstruction (Sections 1, 3; Figure 2). The paper's
+  Ultimate Secret Sharing meets the obstacle head on. Section 1,
+  Overview: "there is nothing to prevent the adversary from delaying
+  [the] honest players, and forcing the system to end the secret
+  sharing protocol without their participation! We circumvent this by
+  requiring that each share be distributed among all players. Thus, a
+  late player can obtain his share by asking the system to reconstruct
+  it." Reconstruction is USS-Rec (Figure 2): run the reconstruction
+  for all shares, take any t + 1 values, interpolate. The USS
+  Termination property (Section 3, Definition 1) guarantees that if
+  one honest player has completed the sharing, every honest player
+  eventually completes it, so the value a delayed player needs stays
+  recoverable from the others.
+
+- The honest-overlap count is t + 1, not 2t + 1 (Section 1; Section 2
+  footnote). With n = 3t + 1, a value distributed to n - t players
+  has, of those, only "n - 2t = t + 1 [that] are guaranteed to be
+  honest, and that is exactly enough to enable the system to
+  reconstruct the secret at a later stage" (Section 1). The Section 2
+  footnote: "the asynchronous system must be able to compute when only
+  n - t = 2t + 1 players are participating ... here we must proceed
+  with only t + 1 honest players." A reconstruction threshold in this
+  model is t + 1, never the synchronous 2t + 1.
+
+- Detect, do not correct (Section 1). "As the models of both [BGW88,
+  BCG93] ensure the participation of at least 3t + 1 players, they are
+  able to use methods of error correcting codes to correct faulty
+  shares. In our model, due to the asynchronicity of the network and
+  the number t of faulty players, we can only count on the
+  participation of 2t + 1 players. Thus, we cannot employ the methods
+  of error correcting codes" (Section 1). The paper's secret sharing
+  instead detects a faulty share -- its built-in self-correcting
+  property (Section 3, Definition 1) -- and discards it, rather than
+  correcting it.
