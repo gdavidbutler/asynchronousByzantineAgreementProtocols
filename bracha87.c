@@ -325,7 +325,7 @@ bracha87Fig1Input(
   retryEcho  = 0;
   retryReady = 0;
 
-#include "bracha87Fig1.c"
+#include "bracha87Fig1Rules.c"
 
   /* Entry-point discriminator: BPR retry outputs are
    * exhaustiveness-only on the Input path and discarded. */
@@ -463,7 +463,7 @@ bracha87Fig1Bpr(
     retryEcho  = 0;
     retryReady = 0;
 
-#include "bracha87Fig1.c"
+#include "bracha87Fig1Rules.c"
 
     /* Bracha outputs are guaranteed 0 by the type/state passed;
      * Bpr applies BPR retry outputs only. */
@@ -882,7 +882,7 @@ bracha87Fig3Accept(
   doSignalComplete = 0;
   doCascade = 0;
 
-#include "bracha87Fig3.c"
+#include "bracha87Fig3Rules.c"
 
   /* Apply outputs in order: store, mark valid, signal complete, cascade. */
   if (doStore) {
@@ -1331,7 +1331,7 @@ bracha87Fig4Round(
   adoptV       = 0;
   setCoin      = 0;
 
-#include "bracha87Fig4.c"
+#include "bracha87Fig4Rules.c"
 
   /* Apply value updates from dispatch outputs.  At most one fires. */
   if (setMajority)
