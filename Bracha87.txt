@@ -3,7 +3,7 @@ Information and Computation 75, 130-143
 
 Four figures, three layers of abstraction.
 
-Figure 1 — The broadcast primitive. Pure mechanics.
+Figure 1 -- The broadcast primitive. Pure mechanics.
 
   in                        condition                                     out
   ---------------------------------------------------------------------------------
@@ -15,13 +15,13 @@ Figure 1 — The broadcast primitive. Pure mechanics.
   in(ready, v) from j       readySent && ready_count[v] >= 2t+1          out(accept, v)
 
 Three paths into echo (step 1), two paths into ready (step 2), one path
-to accept (step 3). No VALID — that is a separate abstraction.
+to accept (step 3). No VALID -- that is a separate abstraction.
 
 NOTE: The paper's figure says ">= (n+t)/2" but the Lemma 1 proof
 requires strict "> (n+t)/2" for the pigeonhole argument to work.
 The code follows the proof: threshold = (n+t)/2 + 1 in integer arithmetic.
 
-Figure 2 — Not a protocol. The abstract form of ANY asynchronous
+Figure 2 -- Not a protocol. The abstract form of ANY asynchronous
 protocol round:
 
   round(k) by process p
@@ -31,7 +31,7 @@ protocol round:
 
 This is what Bracha is abstracting OVER.
 
-Figure 3 — Correctness enforcement. Replaces Send/Receive with
+Figure 3 -- Correctness enforcement. Replaces Send/Receive with
 Broadcast/Validate. Defines VALID sets recursively:
 
   round(k) by process p
@@ -45,12 +45,12 @@ Broadcast/Validate. Defines VALID sets recursively:
   (q, k, v) in VALID^k_p if (q, k, v) is accepted, and there exist n - t
   messages m1 ... m_{n-t} in VALID^{k-1}_p such that v = N(k-1, {m1 ... m_{n-t}})
 
-Parameterized by N — the protocol function. The application supplies N.
+Parameterized by N -- the protocol function. The application supplies N.
 A message is validated only if it COULD have been sent by a correct
-process. This is a separate module from Figure 1 — it wraps Accept with
+process. This is a separate module from Figure 1 -- it wraps Accept with
 a recursive conformance check.
 
-Figure 4 — The consensus protocol. A specific instantiation of Figure 3's
+Figure 4 -- The consensus protocol. A specific instantiation of Figure 3's
 pattern. Three rounds per phase, with specific N functions:
 
   Phase(i) by process p:
@@ -74,7 +74,7 @@ pattern. Three rounds per phase, with specific N functions:
      (iii) Otherwise, value_p := coin-toss (0 or 1 with probability 1/2).
      Go to round 1 of phase i+1
 
-Parameterized by coin — the application supplies randomness.
+Parameterized by coin -- the application supplies randomness.
 
 Library decomposition follows the paper's structure:
 
@@ -90,7 +90,7 @@ specific use), coin (local random), and all the I/O wiring.
 
 Validate is its own abstraction. It is not "the application checks VALID
 before calling the library." It is a recursive structure that the library
-maintains across rounds — tracking what messages COULD have been
+maintains across rounds -- tracking what messages COULD have been
 legitimately produced. That is real protocol logic, not application logic.
 
 Key properties from the paper:

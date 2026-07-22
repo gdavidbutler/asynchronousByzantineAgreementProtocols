@@ -126,7 +126,7 @@ FIFO message delivery (p. 6):
   the lower-layer FIFO guarantee is incomplete for the use case
   that motivated requesting it.
 
-Transaction management — SWALLOW (p. 7):
+Transaction management -- SWALLOW (p. 7):
   An end-to-end-argument-built distributed data storage system.
   Underlying message comms does NOT suppress duplicates (object
   ID + version makes write dedup application-trivial; read
@@ -144,13 +144,13 @@ Identifying the ends (paper pp. 6-7)
 The argument depends on identifying WHICH endpoint is "the
 application." Two voice examples illustrate:
 
-  Real-time voice conversation — the endpoints are the two
+  Real-time voice conversation -- the endpoints are the two
   speakers; the application tolerates packet loss (silence,
   duplicate of previous, noise burst). Lower-layer retry
   introduces delay that's worse than the loss it prevents.
   Strong end-to-end argument: don't retry.
 
-  Voice mail — the endpoint is the storage system, not a live
+  Voice mail -- the endpoint is the storage system, not a live
   listener. Reliability matters because the recipient cannot ask
   for retransmission. Lower-layer retry is appropriate. Different
   endpoint, different argument.

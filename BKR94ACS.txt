@@ -20,7 +20,7 @@ t Byzantine faults. The MPC construction targets optimal resilience
  t < n/3 (i.e. n >= 3t + 1).
 
 Channel and adversary model (paper Section 2): every two players are
-connected by a secure and reliable channel — a message on it cannot
+connected by a secure and reliable channel -- a message on it cannot
 be heard by other players, is guaranteed to arrive, and may be
 delayed arbitrarily (finitely). There is NO broadcast primitive in
 the model; A-Cast is a simulation over the pairwise channels
@@ -29,8 +29,8 @@ dynamic: it may corrupt up to t players adaptively at any time
 (taking their private data and their control), and it schedules the
 delay of every message, but it can neither read nor alter messages
 between honest players. A deployment therefore owes exactly two
-properties per PAIR — confidentiality ("secure") and eventual
-delivery ("reliable") — and owes no broadcast medium.
+properties per PAIR -- confidentiality ("secure") and eventual
+delivery ("reliable") -- and owes no broadcast medium.
 
 Termination caveat, and where it does NOT attach: the paper notes its
 MPC (and the Canetti-Rabin 1993 AVSS it builds on) carries an
@@ -38,25 +38,25 @@ exponentially small but non-zero probability of not terminating, and
 proves (its Section 6) that this is unavoidable for AVSS when
 n <= 4t. That caveat attaches to the AVSS (secret-sharing) side. The paper
 itself contrasts "the asynchronous Byzantine Agreement problem where
-the randomized protocol terminates with probability 1" — Bracha's,
+the randomized protocol terminates with probability 1" -- Bracha's,
 the BA this repo instantiates the slot with.
 
 ACS takes two subprotocols as inputs:
 
-  A-Cast — asynchronous broadcast channel: reliable broadcast — if one
+  A-Cast -- asynchronous broadcast channel: reliable broadcast -- if one
     honest player delivers v, every honest player eventually delivers v;
     all honest players deliver the same v; if the sender is honest,
     every honest player delivers. ACS is generic in this subprotocol;
     this repo uses Bracha 1987 Figure 1. (The primitive is the classic
     Bracha broadcast, originally Bracha 1984.)
 
-  BA — binary asynchronous Byzantine Agreement: agreement, validity,
-    and probabilistic termination. ACS is generic in this subprotocol —
+  BA -- binary asynchronous Byzantine Agreement: agreement, validity,
+    and probabilistic termination. ACS is generic in this subprotocol --
     any binary BA with these properties works; the construction is not
     part of the ACS interface. This repo uses Bracha 1987 Figure 4
     (caller-supplied coin; probabilistic termination per Bracha
     Theorem 2/3, proof in Ben-Or 1983). BKR94's own MPC instantiated
-    this slot with Canetti-Rabin 1993 — a paper-internal choice, not
+    this slot with Canetti-Rabin 1993 -- a paper-internal choice, not
     used here.
 
 
@@ -76,7 +76,7 @@ Goal: the honest players agree on a subset of size at least n - t of
 players for whom Q = 1.
 
 The predicate Q is application-supplied. In BKR94's own MPC
-construction, Q is "player P_j has properly shared his input" — Q(j)
+construction, Q is "player P_j has properly shared his input" -- Q(j)
 becomes 1 for honest P_j after P_j's USS-Share completes, and honest
 players learn this by observing the shared state. ACS is generic in Q;
 any monotone "eventually-1-for-honest, eventually-known-to-all"
@@ -123,7 +123,7 @@ validity/termination) plus the two assumptions about Q.
 
   Case (i): Some honest player Pi entered a 0 value to some BA in
     step 2. The precondition of step 2 is "2t+1 BAs have already
-    terminated with output 1" — done.
+    terminated with output 1" -- done.
 
   Case (ii): No honest player ever entered 0. Then for each honest
     player Ph (assumption Q(h)=1 eventually), every honest player's
@@ -166,7 +166,7 @@ Remarks for implementers
 
 - Step 1 and step 2 can fire concurrently for different j values.
   Once a BA has received an input from Pi (1 from step 1 or 0 from
-  step 2), step 1 and step 2 stop touching it — BA semantics demand
+  step 2), step 1 and step 2 stop touching it -- BA semantics demand
   a single input per player.
 
 - The 2t+1 threshold in step 2 is the n-t honest-majority bound. It
@@ -201,7 +201,7 @@ How the paper itself uses Agreement[Q]  (Section 5)
 
 - Exclusion is by substitution. The function is evaluated with every
   excluded input substituted by 0, and the ideal-model definition
-  (Section 2) even lets the ADVERSARY choose the subset — any CompSet
+  (Section 2) even lets the ADVERSARY choose the subset -- any CompSet
   of size at least n - t. Nothing ever re-enters an excluded input at
   a later invocation.
 
