@@ -19,13 +19,13 @@
  */
 
 /*
- * BKR94 Asynchronous Common Subset — Protocol Agreement[Q].
+ * BKR94 Asynchronous Common Subset -- Protocol Agreement[Q].
  *
  * This file is BKR94 Section 4 Figure 3.  Direct line-by-line port
  * of Ben-Or/Kelmer/Rabin 1994; see BKR94ACS.txt for the paper
  * extract used as the spec.  Composes N Bracha87 Fig1 instances
  * (A-Cast reliable broadcast supplying Q) with N Bracha87 Fig4
- * instances (binary BA on inclusion — the BKR94 "BA"
+ * instances (binary BA on inclusion -- the BKR94 "BA"
  * subprotocol).
  *
  * Step 1 lives in bkr94acsAcastInput (enter 1 on Fig1 ACCEPT).
@@ -56,18 +56,18 @@
 #define BKR94ACS_ALIGN_UP(x)  (((unsigned long)(x) + BKR94ACS_ALIGN_P - 1) \
                                & ~(BKR94ACS_ALIGN_P - 1))
 
-/*------------------------------------------------------------------------*/
-/*  Internal layout helpers                                               */
-/*                                                                        */
-/*  data[] layout (N = n + 1, MR = maxPhases * 3, all sub-sizes rounded   */
-/*  up to pointer alignment):                                             */
-/*    entered[N]           per-process enter status                           */
-/*    baDecision[N]      per-process BA decision                           */
-/*    baNextRound[N]    per-process next BA round to check         */
-/*    (alignment pad to pointer alignment)                                */
-/*    acastFig1 area      N * acastF1Sz bytes                               */
-/*    baPipeline area   N * (MR * N * baF1Sz + conF4Sz) bytes            */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Internal layout helpers                                                 */
+/*                                                                          */
+/*  data[] layout (N = n + 1, MR = maxPhases * 3, all sub-sizes rounded     */
+/*  up to pointer alignment):                                               */
+/*    entered[N]       per-process enter status                             */
+/*    baDecision[N]    per-process BA decision                              */
+/*    baNextRound[N]   per-process next BA round to check                   */
+/*    (alignment pad to pointer alignment)                                  */
+/*    acastFig1 area   N * acastF1Sz bytes                                  */
+/*    baPipeline area  N * (MR * N * baF1Sz + baF4Sz) bytes                 */
+/*--------------------------------------------------------------------------*/
 
 /* Per-process enter status */
 #define BKR94ACS_ENTER_NONE 0
@@ -81,7 +81,7 @@
 #define BKR94ACS_ACS_EVENT_BA1 2
 
 /*
- * All layout helpers take const struct bkr94acs * — they only read
+ * All layout helpers take const struct bkr94acs * -- they only read
  * the header fields n/vLen/maxPhases to compute offsets.  Callers
  * that need to write through the returned pointer cast away const.
  * This lets the read-only query functions (bkr94acsSubset,
@@ -103,7 +103,7 @@ bkr94acsDecision(
 }
 
 static unsigned char *
-bkr94acsConNextRound(
+bkr94acsNextRound(
   const struct bkr94acs *a
 ){
   return ((unsigned char *)a->data + 2 * A_N(a));
@@ -135,7 +135,7 @@ baF1Sz(
 }
 
 static unsigned long
-conF4Sz(
+baF4Sz(
   const struct bkr94acs *a
 ){
   return (BKR94ACS_ALIGN_UP(bracha87Fig4Sz(a->n, a->maxPhases)));
@@ -178,7 +178,7 @@ static unsigned long
 baPipelineSz(
   const struct bkr94acs *a
 ){
-  return ((unsigned long)maxRounds(a) * A_N(a) * baF1Sz(a) + conF4Sz(a));
+  return ((unsigned long)maxRounds(a) * A_N(a) * baF1Sz(a) + baF4Sz(a));
 }
 
 /* BA Fig1 instance for process j, round r, initiator k */
@@ -198,7 +198,7 @@ baF1(
 
 /* BA Fig4 instance for process j */
 static struct bracha87Fig4 *
-conF4(
+baF4(
   const struct bkr94acs *a
  ,unsigned int j
 ){
@@ -210,9 +210,9 @@ conF4(
 }
 
 
-/*------------------------------------------------------------------------*/
-/*  Public API                                                            */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Public API                                                              */
+/*--------------------------------------------------------------------------*/
 
 unsigned long
 bkr94acsSz(
@@ -310,7 +310,7 @@ bkr94acsInit(
       for (r = 0; r < mr2; ++r)
         for (j = 0; j < N; ++j)
           bracha87Fig1Init(baF1(a, i, r, j), n, t, 0);
-      bracha87Fig4Init(conF4(a, i), n, t, maxPhases, 0,
+      bracha87Fig4Init(baF4(a, i), n, t, maxPhases, 0,
                        coin, coinClosure);
     }
   }
@@ -323,7 +323,7 @@ bkr94acsInit(
  * Step 2 (enter=0 when the n-t-BAs-output-1 threshold fires).  The
  * entered[] guard enforces the paper's single-input-per-BA rule:
  * "Once a BA has received an input from Pi (1 from step 1 or 0
- * from step 2), step 1 and step 2 stop touching it — BA semantics
+ * from step 2), step 1 and step 2 stop touching it -- BA semantics
  * demand a single input per player."  First caller wins.
  *
  * Returns number of BKR94ACS_ACT_BA_SEND actions added (0 if
@@ -352,7 +352,7 @@ bkr94acsEnter(
    * as long as F1_INITIATOR is set on that Fig1 (Implementation
    * Note 11); once F1_ECHOED is set, BA_SEND/ECHO joins the
    * stream alongside it, and once F1_RDSENT is set, BA_SEND/
-   * READY joins too — all three streams retry independently
+   * READY joins too -- all three streams retry independently
    * while their flags hold.  BA Fig1s are vLen=0 (binary
    * value), so we pass the raw enter byte (0 or 1), not the
    * BKR94ACS_ENTER_* encoding stored in entered[].
@@ -408,9 +408,9 @@ bkr94acsAcastInput(
    * some BAs and depend on THIS process's continued Fig1 echoes and
    * readys to reach their own n-t thresholds.  Bracha requires
    * post-decide continuation at the BA level (pitfall #1); the
-   * same obligation applies at the BKR94 ACS level — a
+   * same obligation applies at the BKR94 ACS level -- a
    * locally-complete process must keep participating until the
-   * application decides to exit (e.g. progress-silence threshold).
+   * application decides to exit (e.g. the barren-sweep gate).
    * A blanket complete-guard causes classic post-decide stalls
    * where the fastest process strands the slowest.  The per-action
    * output blocks below (BA_DECIDED on Fig4 DECIDE, COMPLETE on
@@ -505,7 +505,7 @@ bkr94acsBaInput(
  ,struct bkr94acsAct *out
 ){
   unsigned char *pipe;
-  unsigned long cf1sz;
+  unsigned long bf1sz;
   unsigned long f4off;
   unsigned int N;
   unsigned int mr;
@@ -542,7 +542,7 @@ bkr94acsBaInput(
     return (0);
 
   /*
-   * Two intentional non-short-circuits — both are Bracha post-decide
+   * Two intentional non-short-circuits -- both are Bracha post-decide
    * continuation (pitfall #1) applied at different layers.
    *
    * 1. We do NOT short-circuit on bkr94acsDecision[process] != 0xFF.
@@ -557,26 +557,26 @@ bkr94acsBaInput(
    *    working on some BAs.  Their Fig1 instances for (process_X,
    *    round_Y, initiator_THIS) wait on THIS process's continued
    *    echoes and readys to cross n-t thresholds.  Dropping inputs
-   *    after local complete strands lagging processes — a classic
+   *    after local complete strands lagging processes -- a classic
    *    post-decide stall.  BKR94ACS_ACT_COMPLETE output is gated
    *    by the decided count crossing N, which happens once;
    *    continuing past complete cannot output a second
    *    BKR94ACS_ACT_COMPLETE.
-   *    Application exit is a separate concern (see progress-silence
-   *    threshold).
+   *    Application exit is a separate concern (see the
+   *    barren-sweep gate).
    */
 
-  /* Compute pipeline base once — avoids redundant external calls */
+  /* Compute pipeline base once -- avoids redundant external calls */
   N = A_N(a);
   mr = maxRounds(a);
-  cf1sz = baF1Sz(a);
-  f4off = (unsigned long)mr * N * cf1sz;
+  bf1sz = baF1Sz(a);
+  f4off = (unsigned long)mr * N * bf1sz;
   pipe = baBase(a) + process * baPipelineSz(a);
   f1 = (struct bracha87Fig1 *)(pipe
-    + ((unsigned long)round * N + initiator) * cf1sz);
+    + ((unsigned long)round * N + initiator) * bf1sz);
   f4 = (struct bracha87Fig4 *)(pipe + f4off);
   f3 = &f4->fig3;
-  nextRound = &bkr94acsConNextRound(a)[process];
+  nextRound = &bkr94acsNextRound(a)[process];
   nact = 0;
 
   nf1 = bracha87Fig1Input(f1, type, from, &value, f1out);
@@ -644,7 +644,7 @@ bkr94acsBaInput(
            * not stored: a stored counter is a denormalization of
            * baDecision[], and as an unsigned char it wrapped on the
            * 256th decision, suppressing COMPLETE at 256 processes.  Only
-           * 0 and 1 match — the 0xFF (undecided) and 0xFE (exhausted)
+           * 0 and 1 match -- the 0xFF (undecided) and 0xFE (exhausted)
            * sentinels fall out of the scan with no separate rule.
            * One O(N) pass per BA decision, a rare event.
            */
@@ -859,7 +859,7 @@ bkr94acsAcastValue(
   f = acastF1(a, process);
   /* Header contract: returns non-null only when ACCEPTED, or for
    * self-process once INITIATOR is set (after A-Cast).  Pre-ACCEPT
-   * ECHOED values are intentionally hidden — under Byzantine
+   * ECHOED values are intentionally hidden -- under Byzantine
    * equivocation they can disagree across honest processes (Bracha 1987
    * Lemmas 1/2 only constrain READY/ACCEPT), so exposing them
    * would let callers act on values that aren't yet
@@ -891,7 +891,7 @@ bkr94acsAcast(
    * is set (Implementation Note 11); once F1_ECHOED is set
    * by loopback or process echoes, ACAST_SEND/ECHO outputs
    * alongside it, and once F1_RDSENT is set, ACAST_SEND/
-   * READY joins too — all three streams retry independently
+   * READY joins too -- all three streams retry independently
    * while their flags hold.
    */
   bracha87Fig1Initiator(acastF1(a, a->self), value);
@@ -918,9 +918,9 @@ bkr94acsAcast(
  * Cursor walks two phases:
  *   phase 0: A-Cast Fig1s, process 0..N-1
  *   phase 1: BA Fig1s, (process, round, initiator)
- *            in that order; round bounded by the per-process
- *            baNextRound (no sent state past the
- *            current Fig4 round).
+ *            in that order, over the full round space (the
+ *            sweep must reach ahead-round Fig1s that a faster
+ *            process's INITIAL already drove to ECHOED).
  *
  * Per-process retry-gate (see bkr94acs.dtc BPR section) trims
  * the A-Cast walk for BAs that have decided 0 (excluded
@@ -1107,16 +1107,16 @@ bkr94acsRetry(
   }
 }
 
-/*------------------------------------------------------------------------*/
-/*  ACCEPTED-annotation ingress (BPR per-process READY retire)               */
-/*                                                                        */
-/*  The transport decodes the BKR94ACS_ACCEPTED wire bit off a received   */
-/*  READY and routes it here: 'from' (the message sender) has accepted    */
-/*  the named Fig1 instance, so this process retires its per-process READY      */
-/*  retry to 'from' (bracha87Fig1Skip(READY) = acFrom).  Call AFTER the  */
-/*  matching bkr94acs*Input for the same READY (which records rdFrom);    */
-/*  acFrom is then a subset of rdFrom.  Out-of-range indices are ignored. */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  ACCEPTED-annotation ingress (BPR per-process READY retire)              */
+/*                                                                          */
+/*  The transport decodes the BKR94ACS_ACCEPTED wire bit off a received     */
+/*  READY and routes it here: 'from' (the message sender) has accepted      */
+/*  the named Fig1 instance, so this process retires its per-process READY  */
+/*  retry to 'from' (bracha87Fig1Skip(READY) = acFrom).  Call AFTER the     */
+/*  matching bkr94acs*Input for the same READY (which records rdFrom);      */
+/*  acFrom is then a subset of rdFrom.  Out-of-range indices are ignored.   */
+/*--------------------------------------------------------------------------*/
 
 void
 bkr94acsAcastAccepted(
@@ -1143,9 +1143,9 @@ bkr94acsBaAccepted(
   bracha87Fig1ProcessAccepted(baF1(a, process, round, initiator), from);
 }
 
-/*------------------------------------------------------------------------*/
-/*  Diagnostic accessors                                                  */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Diagnostic accessors                                                    */
+/*--------------------------------------------------------------------------*/
 
 unsigned char
 bkr94acsBaDecision(
@@ -1186,7 +1186,7 @@ bkr94acsSentFig1Count(
   unsigned int mr;
   unsigned int process;
   unsigned int round;
-  unsigned int bcast;
+  unsigned int initiator;
   unsigned int count;
   unsigned char sentMask;
   const struct bracha87Fig1 *f1;
@@ -1224,11 +1224,11 @@ bkr94acsSentFig1Count(
    */
   for (process = 0; process < N; ++process) {
     for (round = 0; round < mr; ++round) {
-      for (bcast = 0; bcast < N; ++bcast) {
+      for (initiator = 0; initiator < N; ++initiator) {
         f1 = baF1(a,
                    process,
                    round,
-                   bcast);
+                   initiator);
         if (f1->flags & sentMask)
           ++count;
       }

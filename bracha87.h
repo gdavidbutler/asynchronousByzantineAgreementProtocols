@@ -67,9 +67,9 @@
 
 /*************************************************************************/
 /*                                                                       */
-/*  Figure 1 — Reliable broadcast primitive                              */
+/*  Figure 1 -- Reliable broadcast primitive                             */
 /*                                                                       */
-/*  One instance per (sender, broadcast) pair.                           */
+/*  One instance per (initiator, round) pair.                            */
 /*  Caller maintains the set of instances.                               */
 /*  Pure state machine: (state, input) -> (state', actions).             */
 /*  n > 3t required.                                                     */
@@ -295,7 +295,7 @@ bracha87Fig1Value(
  *     once every process has accepted, i.e. consensus is already complete,
  *     and the un-quiesced process merely keeps retrying a READY no correct
  *     process consumes.  The application's abandonment policy is the real
- *     backstop; acFrom == n is an optimisation that collapses the tail
+ *     backstop; acFrom == n is an optimization that collapses the tail
  *     when the announcements arrive, not a liveness guarantee.
  *
  * Per-process suppression: every retry action carries a suppress mask
@@ -402,7 +402,7 @@ bracha87Fig1Skip(
 
 /*************************************************************************/
 /*                                                                       */
-/*  Figure 2 — Abstract protocol round                                   */
+/*  Figure 2 -- Abstract protocol round                                  */
 /*                                                                       */
 /*  The generic form of any asynchronous protocol round.                 */
 /*  Figure 3 refines this by replacing receive with validate.            */
@@ -493,7 +493,7 @@ bracha87Fig2GetReceived(
 
 /*************************************************************************/
 /*                                                                       */
-/*  Figure 3 — Correctness enforcement (VALID sets)                      */
+/*  Figure 3 -- Correctness enforcement (VALID sets)                     */
 /*                                                                       */
 /*  Refines Figure 2: replaces receive with validate (VALID sets).       */
 /*  Wraps Figure 1 Accept with a recursive conformance check.            */
@@ -637,7 +637,7 @@ bracha87Fig3RoundComplete(
 
 /*************************************************************************/
 /*                                                                       */
-/*  Figure 4 — Consensus protocol                                        */
+/*  Figure 4 -- Consensus protocol                                       */
 /*                                                                       */
 /*  Instantiates Figure 3 with three specific N functions.               */
 /*  Three rounds per phase. Parameterized by coin.                       */
@@ -693,7 +693,7 @@ typedef unsigned char (*bracha87CoinFn)(
  * bracha87Fig4Init.  Embeds a Fig3 instance as the trailing fig3
  * field; its variable tail extends past sizeof (struct bracha87Fig4)
  * into the bytes Sz() reserves for it.  Caller reads the embedded
- * Fig3 directly as &fig4->fig3 — no cast.
+ * Fig3 directly as &fig4->fig3 -- no cast.
  *
  * maxPhases must be >= 1 and <= BRACHA87_MAX_PHASES (85).
  * Fig 4 instantiates Fig 3 with maxRounds = maxPhases * 3.
@@ -757,7 +757,7 @@ bracha87Fig4Init(
  * DECIDE is a success signal, NOT a stop condition.  A decided
  * process keeps broadcasting (post-decide continuation, above), so
  * the caller must never treat DECIDE as "done, stop."  The same
- * holds for Fig 1's BRACHA87_ACCEPT — reliable broadcast has no stop
+ * holds for Fig 1's BRACHA87_ACCEPT -- reliable broadcast has no stop
  * condition at all (no EXHAUSTED, no phase ceiling).  Under unbounded
  * latency no process can know that stopping is safe, so when to stop
  * after a decision is an application policy, not a library event.
@@ -808,7 +808,7 @@ bracha87Fig4Round(
 /*  The cursor lives in caller storage; the library does not own it      */
 /*  (no library-internal cursor, no hidden mutation, parallel sweeps     */
 /*  over the same state are permitted).  Initialize with                 */
-/*  bracha87RetryInit before first use by any Retry consumer —             */
+/*  bracha87RetryInit before first use by any Retry consumer --            */
 /*  bracha87Fig1RetryStep below, or bkr94acsRetry (bkr94acs.h).            */
 /*                                                                       */
 /*  NETWORK FLOOD WARNING.  Every Retry consumer is one-call-per-tick.    */
@@ -824,11 +824,11 @@ bracha87Fig4Round(
 /*  The 0 return appears only when a full sweep across the whole cursor  */
 /*  space found no actions: either no sent instance exists yet      */
 /*  (pre-broadcast / fully-shutdown state) or every sent instance   */
-/*  has retired all its retries (quiescence — every process announced       */
+/*  has retired all its retries (quiescence -- every process announced      */
 /*  accepted).  Neither is a termination signal by itself.               */
 /*                                                                       */
 /*  Termination is the application's policy, not the library's,          */
-/*  which prescribes none — see README.md "Abandonment."  Count Retry     */
+/*  which prescribes none -- see README.md "Abandonment."  Count Retry    */
 /*  calls across ticks if a policy needs sweep coverage; one sweep        */
 /*  covers every currently-sent instance once.                            */
 /*                                                                       */
@@ -844,17 +844,17 @@ bracha87RetryInit(
   struct bracha87Retry *
 );
 
-/*-----------------------------------------------------------------------*/
-/*  Fig 1 array Retry — BPR sweep over a caller-owned Fig 1 array         */
-/*                                                                       */
-/*  Wraps the per-instance bracha87Fig1Bpr above with a cursor that      */
-/*  walks an application-owned array of Fig 1 instances.                 */
-/*                                                                       */
-/*  bracha87Fig1RetryStep's outCap parameter must be >= 3                 */
-/*  (BRACHA87_FIG1_RETRY_MAX_ACTS); the library does not range-check it,  */
-/*  and supplying a smaller value is undefined behavior (the library     */
-/*  may write past out[]).                                               */
-/*-----------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Fig 1 array Retry -- BPR sweep over a caller-owned Fig 1 array          */
+/*                                                                          */
+/*  Wraps the per-instance bracha87Fig1Bpr above with a cursor that         */
+/*  walks an application-owned array of Fig 1 instances.                    */
+/*                                                                          */
+/*  bracha87Fig1RetryStep's outCap parameter must be >= 3                   */
+/*  (BRACHA87_FIG1_RETRY_MAX_ACTS); the library does not range-check it,    */
+/*  and supplying a smaller value is undefined behavior (the library        */
+/*  may write past out[]).                                                  */
+/*--------------------------------------------------------------------------*/
 
 #define BRACHA87_FIG1_RETRY_MAX_ACTS 3
 
@@ -892,13 +892,13 @@ struct bracha87Fig1Act {
  * One Fig 1's retry actions per call.  Walks the cursor forward to
  * the next sent instance and returns its actions.
  *
- * Call ONCE per application tick.  Do NOT loop — see the network
+ * Call ONCE per application tick.  Do NOT loop -- see the network
  * flood warning above.  0 means a full sweep found no actions:
  * nothing sent yet, or every sent instance has quiesced
- * (all retries retired — see the warning block above).
+ * (all retries retired -- see the warning block above).
  *
  * Null entries in instances[] are skipped (useful when the
- * application's array is sparse — e.g. one slot per (initiator, round)
+ * application's array is sparse -- e.g. one slot per (initiator, round)
  * but only some pairs have been allocated).
  */
 unsigned int
@@ -912,7 +912,7 @@ bracha87Fig1RetryStep(
 
 /*
  * Count of instances with any sent flag (INITIATOR, ECHOED, or
- * RDSENT) — i.e., the number of instances the retry will visit per
+ * RDSENT) -- i.e., the number of instances the retry will visit per
  * sweep.  Useful for sweep-cadence calibration in the caller's
  * termination policy.
  */

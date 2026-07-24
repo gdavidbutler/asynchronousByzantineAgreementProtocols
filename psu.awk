@@ -1,12 +1,12 @@
 #!awk -f
 #
-# Local translator: emit a C fragment from a dtc .psu in which every test is
+# Local translator: output a C fragment from a dtc .psu in which every test is
 # on a '~'-prefixed boundary name.  The fragment is meant to be #include'd
 # inside an existing C function whose locals match the post-'~' identifiers.
 #
 # Each value (right-hand side) in the bridge is a literal C token (macro,
-# integer literal, etc.) and is emitted verbatim.  Unprefixed R lines are
-# domain intermediates from the optimizer's trace; they are emitted as
+# integer literal, etc.) and is output verbatim.  Unprefixed R lines are
+# domain intermediates from the optimizer's trace; they are output as
 # comments at the leaf where each fires, documenting the C in the .dtc's
 # vocabulary.  Unprefixed T lines are not expected in a clean bridge.
 #
@@ -100,7 +100,7 @@ END {
       if (substr(var, 1, 1) == "~") {
         print "  " substr(var, 2) " = " val ";"
       } else {
-        # Domain intermediate — preserve in the spec's vocabulary at this leaf.
+        # Domain intermediate -- preserve in the spec's vocabulary at this leaf.
         gsub(/\*\//, "* /", var); gsub(/\*\//, "* /", val)
         print "  /* \"" var "\" = " val " */"
       }

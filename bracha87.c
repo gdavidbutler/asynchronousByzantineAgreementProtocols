@@ -35,7 +35,7 @@
 #define BIT_SET(a, i) ((a)[(unsigned int)(i) >> 3] |= (unsigned char)(1 << ((unsigned int)(i) & 7)))
 
 /*************************************************************************/
-/*  Figure 1 — Reliable broadcast primitive                              */
+/*  Figure 1 -- Reliable broadcast primitive                             */
 /*************************************************************************/
 
 /*
@@ -388,8 +388,8 @@ bracha87Fig1Bpr(
 
   /*
    * INITIAL / ECHO are bootstrap-only.  Their sole purpose is to
-   * drive the system to the point where t+1 CORRECT processes have
-   * sent (ready, v); past that point Bracha's ready-amplification
+   * drive t+1 CORRECT processes to send (ready, v); past that
+   * point Bracha's ready-amplification
    * rule (rdCnt >= t+1 -> send ready, no echo threshold required)
    * is self-sustaining and needs no further initials or echoes.
    *
@@ -576,7 +576,7 @@ bracha87Fig1Skip(
 }
 
 /*************************************************************************/
-/*  Figure 2 — Abstract protocol round (0-based)                         */
+/*  Figure 2 -- Abstract protocol round (0-based)                        */
 /*************************************************************************/
 
 /*
@@ -696,7 +696,7 @@ bracha87Fig2GetReceived(
 }
 
 /*************************************************************************/
-/*  Figure 3 — Correctness enforcement (VALID sets, 0-based)             */
+/*  Figure 3 -- Correctness enforcement (VALID sets, 0-based)            */
 /*************************************************************************/
 
 /*
@@ -820,7 +820,7 @@ fig3IsValid(
        * D_FLAG-permission bit and (when D_FLAG is set) the legitimate
        * base value.  Reject incoming D_FLAG when N did not mark D_FLAG
        * as legitimate, and reject D_FLAG with a base that differs from
-       * *result's base — at most one of (0|D_FLAG) or (1|D_FLAG) can
+       * *result's base -- at most one of (0|D_FLAG) or (1|D_FLAG) can
        * be legitimate per evaluation (see fig4Nfn case 1).
        */
       if ((value & ~BRACHA87_D_FLAG) > 1)
@@ -862,7 +862,7 @@ bracha87Fig3Accept(
   if (!b || k >= b->maxRounds || sender > b->n)
     return (0);
 
-  /* Cache record pointers — avoids repeated F3_REC multiplication */
+  /* Cache record pointers -- avoids repeated F3_REC multiplication */
   bs = BIT_SZ(B_N(b));
   vcnt = &F3_VCNT(b, k);
   arvd = F3_REC(b, k);
@@ -953,7 +953,7 @@ bracha87Fig3Accept(
         if (BIT_TST(ra, i) && !BIT_TST(rv, i)) {
           int valid;
 
-          /* VALID^r: value = N(r-1, S) — same logic as fig3IsValid.
+          /* VALID^r: value = N(r-1, S) -- same logic as fig3IsValid.
            * Permissive *result encodes the D_FLAG permission and, when
            * set, the legitimate base.  D_FLAG with a mismatched base is
            * rejected (fig4Nfn case 1 produces at most one of 0|D_FLAG
@@ -980,7 +980,7 @@ bracha87Fig3Accept(
       if (F3_VCNT(b, r) >= B_N(b) - b->t && !BIT_TST(F3_CBMP(b), r))
         BIT_SET(F3_CBMP(b), r);
       if (!changed)
-        break; /* round r didn't grow — no downstream unlock possible */
+        break; /* round r didn't grow -- no downstream unlock possible */
     }
   }
 
@@ -1040,7 +1040,7 @@ bracha87Fig3RoundComplete(
 }
 
 /*************************************************************************/
-/*  Figure 4 — Consensus protocol (0-based)                              */
+/*  Figure 4 -- Consensus protocol (0-based)                             */
 /*************************************************************************/
 
 /*
@@ -1164,7 +1164,7 @@ fig4Nfn(
      * No strict majority in full set.  In Bracha's t < n/3 regime
      * nt > N/2, so max s[v] = min(cnt[v], nt).  Given cnt[v]*2 <= N
      * (and cnt[v] <= nt by n_msgs <= N), no subset has strict
-     * majority either — D_FLAG is not legitimate for any honest process.
+     * majority either -- D_FLAG is not legitimate for any honest process.
      * Value is the process's prior value (non-deterministic), so
      * permissive on the base value only.
      */
@@ -1175,7 +1175,7 @@ fig4Nfn(
     /*
      * Round 3(i+1) broadcast: step-3 output, which is always a plain
      * binary value (decided value from case (i), adopted value from
-     * case (ii), or coin from case (iii) — none carry D_FLAG).
+     * case (ii), or coin from case (iii) -- none carry D_FLAG).
      *
      * Input S is the round 3i+2 messages (step-2 outputs, which may
      * carry D_FLAG).  Exact result only when case (i) holds across
@@ -1407,7 +1407,7 @@ bracha87RetryInit(
 }
 
 /*************************************************************************/
-/*  Fig 1 array Retry — BPR sweep over a caller-owned Fig 1 array         */
+/*  Fig 1 array Retry -- BPR sweep over a caller-owned Fig 1 array        */
 /*************************************************************************/
 
 /*
@@ -1424,7 +1424,7 @@ bracha87RetryInit(
  *
  * Walks the cursor forward from p->pos to the next instance with
  * retry actions and returns them.  Returns 0 ONLY when a full
- * sweep across the entire array found no actions — either nothing
+ * sweep across the entire array found no actions -- either nothing
  * sent (no Fig 1 has INITIATOR / ECHOED / RDSENT; pre-broadcast /
  * fully-shutdown state) or every sent instance has quiesced
  * (all retries retired).  Neither is a per-tick termination signal
@@ -1432,8 +1432,8 @@ bracha87RetryInit(
  *
  * Termination is the application's responsibility: count RetryStep
  * calls across ticks; one sweep = (bracha87Fig1SentCount
- * return value) RetryStep calls; K sweeps + silence-threshold = exit.
- * See README.md "Termination policy."  Bounded: at most one wrap
+ * return value) RetryStep calls; S consecutive barren sweeps = exit.
+ * See README.md "Abandonment."  Bounded: at most one wrap
  * per call (one to drain a partial sweep with actions, one to
  * detect truly-idle).
  */

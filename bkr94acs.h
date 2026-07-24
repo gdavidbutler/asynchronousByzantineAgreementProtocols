@@ -30,12 +30,12 @@
  * Composes Bracha87 Figure 1 (reliable broadcast) with Bracha87
  * Figure 4 (binary BA) into multi-value agreement on a common
  * subset.  N reliable broadcasts distribute A-Casts; N binary
- * BAes decide inclusion.
+ * BAs decide inclusion.
  *
  * BKR94 parameterizes the protocol by a predicate Q(j).  Under the
- * two paper assumptions — (1) Q eventually equals 1 for every honest
+ * two paper assumptions -- (1) Q eventually equals 1 for every honest
  * process, (2) every honest process eventually learns Q(j) for every j
- * — Protocol Agreement[Q] produces a common subset of size >= n-t of
+ * -- Protocol Agreement[Q] produces a common subset of size >= n-t of
  * processes for whom Q(j) = 1.
  *
  *   This deployment: Q(j) = "Fig1 reliable broadcast for process j
@@ -58,8 +58,8 @@
  * Caller provides memory and delivers messages.
  *
  * Two message classes on the network:
- *   BKR94ACS_CLS_ACAST  — Fig1 messages carrying A-Cast values
- *   BKR94ACS_CLS_BA — Fig1 messages for per-process binary BA
+ *   BKR94ACS_CLS_ACAST  -- Fig1 messages carrying A-Cast values
+ *   BKR94ACS_CLS_BA -- Fig1 messages for per-process binary BA
  *
  * Operational limits:
  *   n:         unsigned char, encodes process count 1..256 (n + 1)
@@ -92,37 +92,37 @@
 /*  a format the library reads or writes.  The bundled example,           */
 /*  example/bkr94acs.c, frame to this layout; new framers should too.     */
 /*                                                                        */
-/*    bit:  7      | 6 5 | 4        | 3  | 2   | 1 0                       */
-/*          D_FLAG   (app)  ACCEPTED   cv   cls   type                    */
+/*    bit:  7      | 6 5   | 4        | 3  | 2   | 1 0                    */
+/*          D_FLAG   (app)   ACCEPTED   cv   cls   type                   */
 /*                                                                        */
 /*  Fixed by library constants:                                           */
-/*    type   bits 0-1  (BRACHA87_TYPE_MASK = 0x03): INITIAL/ECHO/READY.   */
-/*    cls    bit  2    (BKR94ACS_CLS_MASK  = 0x04): ACAST=0x00,        */
-/*                      BA=0x04.                                   */
-/*    D_FLAG bit  7    (BRACHA87_D_FLAG = 0x80): on a BA message,  */
-/*                      the Fig4 decision-candidate flag.                 */
-/*    ACCEPTED bit 4  (BKR94ACS_ACCEPTED = 0x10): on a READY message,    */
-/*                      the sender has accepted this Fig1 instance, so    */
-/*                      the receiver retires its per-process READY retry    */
-/*                      to the sender (BPR; struct bkr94acsAct.accepted   */
-/*                      on egress, bkr94acs*Accepted on ingress).  Unlike */
-/*                      D_FLAG it is class-independent -- valid on a       */
-/*                      ACAST or BA READY (every Fig1 accepts).  */
+/*    type     bits 0-1  (BRACHA87_TYPE_MASK = 0x03): INITIAL/ECHO/READY. */
+/*    cls      bit  2    (BKR94ACS_CLS_MASK  = 0x04): ACAST=0x00,         */
+/*                       BA=0x04.                                         */
+/*    D_FLAG   bit  7    (BRACHA87_D_FLAG = 0x80): on a BA message,       */
+/*                       the Fig4 decision-candidate flag.                */
+/*    ACCEPTED bit  4    (BKR94ACS_ACCEPTED = 0x10): on a READY message,  */
+/*                       the sender has accepted this Fig1 instance, so   */
+/*                       the receiver retires its per-process READY retry */
+/*                       to the sender (BPR; struct bkr94acsAct.accepted  */
+/*                       on egress, bkr94acs*Accepted on ingress).        */
+/*                       Unlike D_FLAG it is class-independent -- valid   */
+/*                       on an ACAST or BA READY (every Fig1 accepts).    */
 /*  Convention (not forced by a constant, but shared by all examples):    */
-/*    cv     bit  3:   a BA message's binary value.  Placed        */
-/*                      adjacent to cls.                                  */
-/*    bits 5-6:        free for application message classes.              */
+/*    cv       bit  3:   a BA message's binary value.  Placed             */
+/*                       adjacent to cls.                                 */
+/*    bits 5-6:          free for application message classes.            */
 /*                                                                        */
 /*  Compose / recover a library message:                                  */
 /*    byte = cls | type [ | (cv << 3) | (value & BRACHA87_D_FLAG) ]       */
 /*    type = byte & BRACHA87_TYPE_MASK                                    */
 /*    cls  = byte & BKR94ACS_CLS_MASK                                     */
-/*    BA value = ((byte >> 3) & 1) | (byte & BRACHA87_D_FLAG)      */
+/*    BA value = ((byte >> 3) & 1) | (byte & BRACHA87_D_FLAG)             */
 /*                                                                        */
-/*  A BA message's entire payload is just those two live bits      */
-/*  (value + D_FLAG), so folding them into this byte lets a BA     */
+/*  A BA message's entire payload is just those two live bits             */
+/*  (value + D_FLAG), so folding them into this byte lets a BA            */
 /*  message carry NO value bytes on the wire -- the dominant message      */
-/*  class in ACS, so the saving compounds.  A ACAST message carries    */
+/*  class in ACS, so the saving compounds.  An ACAST message carries      */
 /*  its vLen+1-byte value as the payload.                                 */
 /**************************************************************************/
 
@@ -149,8 +149,8 @@
 /*
  * struct bkr94acsAct
  *
- * BA_DECIDED and COMPLETE are success signals — a decision was
- * reached — and are NOT stop conditions: post-decide continuation
+ * BA_DECIDED and COMPLETE are success signals -- a decision was
+ * reached -- and are NOT stop conditions: post-decide continuation
  * requires the process to keep broadcasting past both.  BA_EXHAUSTED
  * reports that the BA can issue no new phase/round and so will never
  * decide -- COMPLETE is unreachable.  Stopping is unspecified by the
@@ -175,7 +175,7 @@
  *                 Output exactly once per BA per ACS instance.)
  *
  * .value is a borrowed pointer into library-owned storage (the
- * Fig1's echoed-value slot — populated as soon as INITIATOR, Rule
+ * Fig1's echoed-value slot -- populated as soon as INITIATOR, Rule
  * 1, 2, or 3 echoes a value, i.e. while ECHOED is set, before
  * ACCEPT).  Valid until the next call into the library on the
  * same struct bkr94acs that mutates state.  Caller must copy if
@@ -226,11 +226,11 @@ struct bkr94acs {
    * stored counter is a denormalization of baDecision[] (and, as the
    * unsigned char it once was, wrapped on the 256th decision so
    * BKR94ACS_ACT_COMPLETE could never fire at 256 processes).  They are
-   * derived by scanning baDecision[] at each BA decision — a rare
+   * derived by scanning baDecision[] at each BA decision -- a rare
    * event (see bkr94acsBaInput).
    *
-   * pad puts data[] at offset 8 — a multiple of sizeof (void *) on
-   * all common 32- and 64-bit ABIs — so data[] starts at the
+   * pad puts data[] at offset 8 -- a multiple of sizeof (void *) on
+   * all common 32- and 64-bit ABIs -- so data[] starts at the
    * alignment required by the function-pointer fields in the
    * Fig1/Fig4 instances carved out of it.
    */
@@ -304,17 +304,17 @@ bkr94acsInit(
 #define BKR94ACS_RETRY_MAX_ACTS  3
 
 /*
- * Process a A-Cast broadcast message (BKR94ACS_CLS_ACAST).
+ * Process an A-Cast broadcast message (BKR94ACS_CLS_ACAST).
  *
  * These are Fig1 messages carrying A-Cast values.
  * Returns number of actions written to out[].
  * Caller provides out[] with room for BKR94ACS_MAX_ACTS(n, maxPhases) entries.
  *
  * On BKR94ACS_ACT_ACAST_SEND:
- *   Caller broadcasts a A-Cast Fig1 message of .type
+ *   Caller broadcasts an A-Cast Fig1 message of .type
  *   (BRACHA87_INITIAL/ECHO/READY) for .process.  Bytes to send:
  *   .value (vLen+1 bytes, borrowed pointer into the library's
- *   echoed-value slot — see struct bkr94acsAct.value).
+ *   echoed-value slot -- see struct bkr94acsAct.value).
  *
  * On BKR94ACS_ACT_BA_SEND:
  *   Caller broadcasts a BA Fig1 message.
@@ -410,7 +410,7 @@ bkr94acsSubset(
 );
 
 /*
- * Query: get the accepted A-Cast value for an process.
+ * Query: get the accepted A-Cast value for a process.
  * Returns pointer to the vLen + 1 byte value, or 0 if not yet
  * accepted (or, for self-process, not yet A-Cast).
  *
@@ -439,7 +439,7 @@ bkr94acsAcastValue(
  * once the local loopback or process echoes set F1_ECHOED,
  * ACAST_SEND/ECHO is output alongside it; once F1_RDSENT is set,
  * ACAST_SEND/READY joins too.  All three streams retry
- * independently while their flags hold — BPR's purpose is to
+ * independently while their flags hold -- BPR's purpose is to
  * help OTHER processes progress, so stopping any of the streams at
  * local saturation strands them.
  *
@@ -464,22 +464,22 @@ bkr94acsAcast(
  * this layer's per-process BA-decided state, all of which live
  * at the BKR endpoint.
  *
- * Same one-call-per-tick semantic as bracha87Fig1RetryStep — see
+ * Same one-call-per-tick semantic as bracha87Fig1RetryStep -- see
  * the network flood warning in bracha87.h.  The cursor (struct
  * bracha87Retry) lives in caller storage, initialized with
  * bracha87RetryInit; it walks the (A-Cast, then BA by
- * process × round × initiator) Fig1 instance space, finds the
+ * process x round x initiator) Fig1 instance space, finds the
  * next sent instance, and outputs its actions as struct
  * bkr94acsAct entries.
  *
- * Returns 0 only when a full sweep finds no sent instance —
+ * Returns 0 only when a full sweep finds no sent instance --
  * pre-broadcast / shutdown state, not a per-tick termination
  * signal.  Termination is an application choice; the library
  * prescribes no policy (see README.md "Abandonment").
  *
- * Replaces the application-layer retry bookkeeping entirely.  Per-record
+ * Replaces the application-layer retry bookkeeping entirely.  Per-instance
  * destination masks, per-process evidence tracking, and retry
- * scheduling over an external record list are not needed; the
+ * scheduling over an external instance list are not needed; the
  * Fig1 sent-state flags plus the BA-decision gate (see
  * bkr94acs.dtc BPR section) are the entire retry state.
  *
@@ -529,7 +529,7 @@ bkr94acsBaDecision(
  * processes (distinct echo senders == n), else 0 (and 0 on null state or
  * out-of-range process).
  *
- * Application use: an process that pairs a side-channel payload (e.g. a
+ * Application use: a process that pairs a side-channel payload (e.g. a
  * PSK or a signature) with its own A-Cast, and whose receivers gate
  * their ECHO of that A-Cast on validating the payload, must keep
  * retrying the payload until this returns 1 for process == self.
@@ -572,7 +572,7 @@ bkr94acsAcastSkip(
 /*
  * Number of Fig1 instances currently sent (any of F1_INITIATOR,
  * F1_ECHOED, F1_RDSENT set).  Walks the N A-Cast Fig1s plus the
- * full BA Fig1 space — sent state is NOT bounded by
+ * full BA Fig1 space -- sent state is NOT bounded by
  * this process's own BA progress: a faster process's INITIAL for a round
  * this process's Fig4 has not yet entered fires Rule 1 here, leaving
  * that ahead-round Fig1 ECHOED (and retry-retried) while the local

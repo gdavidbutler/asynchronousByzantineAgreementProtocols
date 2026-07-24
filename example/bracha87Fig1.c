@@ -19,11 +19,12 @@
  */
 
 /*
- * bracha87Fig1.c — Standalone demonstration of Bracha 1987 Figure 1:
+ * bracha87Fig1.c -- Standalone demonstration of Bracha 1987 Figure 1:
  * Reliable Broadcast (Theorem 1).
  *
  * What Figure 1 brings to the table:
  *
+ *   Lemma 2: If two correct processes accept u and v, then u = v.
  *   Lemma 3: If a correct process accepts v, every correct process
  *            eventually accepts v.
  *   Lemma 4: If a correct process p broadcasts v, all correct
@@ -32,7 +33,7 @@
  * Together: a Byzantine initiator cannot show different values to
  * different correct processes and have any of them accept different
  * things.  Either all correct processes converge on one v, or none
- * accept anything.  This is the all-or-nothing property — what TCP
+ * accept anything.  This is the all-or-nothing property -- what TCP
  * and UDP cannot do, and what authenticated point-to-point alone
  * cannot do under a Byzantine sender.
  *
@@ -40,16 +41,16 @@
  * designated initiator.  The value carried is multi-byte (vLen+1 bytes,
  * supplied on the command line).
  *
- * Optional Byzantine initiator (`-b split`) — initiator sends the supplied
+ * Optional Byzantine initiator (`-b split`) -- initiator sends the supplied
  * value to processes [0..split-1] and that value with the first byte
- * inverted (XOR 0xFF) to processes [split..n-1].  Verifies Lemma 3:
+ * inverted (XOR 0xFF) to processes [split..n-1].  Verifies Lemma 2:
  * whichever value any correct process accepts (if any), every correct
  * process that accepts agrees with it.
  *
- * Scope: synchronous deterministic in-memory queue, every input
- * delivered, no loss.  Exercises only the Fig 1 state machine; does
- * NOT exercise BPR retry under loss.  See README.md for the full
- * deployment story.
+ * Scope: synchronous in-memory queue, every message delivered, no
+ * loss; delivery order is deterministic unless -s is given.
+ * Exercises only the Fig 1 state machine; does NOT exercise BPR
+ * retry under loss.  See README.md for the full deployment story.
  *
  * Usage:
  *   ./example_bracha87Fig1 [-v] [-s seed] [-o initiator] [-b split] n t value
@@ -60,16 +61,16 @@
 #include <string.h>
 #include "bracha87.h"
 
-/*------------------------------------------------------------------------*/
-/*  Constants                                                             */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Constants                                                               */
+/*--------------------------------------------------------------------------*/
 
 #define MAX_PROCESSES 16
 #define MAX_VLEN  64
 
-/*------------------------------------------------------------------------*/
-/*  Message queue                                                         */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Message queue                                                           */
+/*--------------------------------------------------------------------------*/
 
 struct msg {
   unsigned char type;     /* BRACHA87_INITIAL / ECHO / READY */
@@ -142,9 +143,9 @@ qShuffle(
   }
 }
 
-/*------------------------------------------------------------------------*/
-/*  Verbose helpers                                                       */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Verbose helpers                                                         */
+/*--------------------------------------------------------------------------*/
 
 static const char *
 typeName(
@@ -188,9 +189,9 @@ printValue(
   }
 }
 
-/*------------------------------------------------------------------------*/
-/*  Main                                                                  */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Main                                                                    */
+/*--------------------------------------------------------------------------*/
 
 int
 main(
@@ -219,7 +220,7 @@ main(
   int exitCode;
 
   unsigned int acceptCount;
-  int lemma3ok;
+  int lemma2ok;
   int lemma4ok;
   unsigned char firstAccVal[MAX_VLEN];
   int haveFirstAcc;
@@ -308,7 +309,7 @@ main(
   memset(acceptVal, 0, sizeof (acceptVal));
 
   for (i = 0; i < n; ++i) {
-    /* Byzantine initiator holds no Fig 1 state — it sends arbitrary
+    /* Byzantine initiator holds no Fig 1 state -- it sends arbitrary
      * messages and never runs the protocol. */
     if (byzSplit && i == initiator)
       continue;
@@ -324,7 +325,10 @@ main(
 
   /*----------------------------------------------------------------------*/
   /*  Allocate message queue                                              */
-  /*  Up to 3 * n^2 messages: INITIAL/ECHO/READY from n processes to n processes. */
+  /*                                                                      */
+  /*  One broadcast round is 3 * n^2 messages (INITIAL/ECHO/READY from    */
+  /*  n processes to n processes); the retry tick re-offers un-retired    */
+  /*  actions, so size the queue with headroom for those sweeps.          */
   /*----------------------------------------------------------------------*/
 
   if (qAlloc(16u * n * n)) {
@@ -381,7 +385,7 @@ main(
 
     m = &MsgQ[Qhead++];
 
-    /* Skip messages to the Byzantine initiator — it has no state. */
+    /* Skip messages to the Byzantine initiator -- it has no state. */
     if (byzSplit && m->to == initiator)
       continue;
     if (m->to >= n || m->from >= n)
@@ -391,7 +395,7 @@ main(
      * INITIAL sender obligation (bracha87Fig1Input header, pitfall
      * 17): the bare Fig 1 entry does not know its designated
      * initiator, so the CALLER must drop any INITIAL whose
-     * authenticated sender is not it — a forged non-initiator INITIAL
+     * authenticated sender is not it -- a forged non-initiator INITIAL
      * would ride the echo cascade to a false ACCEPT.  bkr94acs
      * enforces this inside its Input entries; a bare-layer caller
      * filters here.
@@ -458,7 +462,7 @@ main(
   /*                                                                  */
   /*  In a real deployment, the BPR retry is called once per tick,     */
   /*  paced by the application's sleep(tickMs).  Looping until idle   */
-  /*  would flood the network — Bracha BPR retries are persistent, so */
+  /*  would flood the network -- Bracha BPR retries persist, so       */
   /*  every sent Fig 1 always has actions; a tight loop empties  */
   /*  the cursor as fast as the CPU runs and overruns kernel buffers. */
   /*  The call is shown here as a representative single tick.         */
@@ -490,8 +494,8 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Drain the post-retry retry queue.  Receivers dedup at Fig1Input,    */
-  /*  so under perfect delivery these retries produce no new state — the  */
+  /*  Drain the post-retry queue.  Receivers dedup at Fig1Input,          */
+  /*  so under perfect delivery these retries produce no new state -- the */
   /*  drain mirrors what a deployment loop does on every tick.            */
   /*----------------------------------------------------------------------*/
 
@@ -518,20 +522,20 @@ main(
         continue;
       }
       /* ECHO_ALL / READY_ALL retries from this receiver do not propagate
-       * further in the demo — they are equivalent to the ones already in
-       * the system.  Under loss this is where new echoes/readys would
+       * further in the demo -- they are equivalent to the ones already in
+       * flight.  Under loss this is where new echoes/readys would
        * help processes below threshold. */
     }
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Verify Lemma 3 and Lemma 4                                          */
+  /*  Verify Lemma 2 and Lemma 4                                          */
   /*----------------------------------------------------------------------*/
 
-  /* Lemma 3: all correct processes that accept agree on the value. */
+  /* Lemma 2: all correct processes that accept agree on the value. */
   acceptCount = 0;
   haveFirstAcc = 0;
-  lemma3ok = 1;
+  lemma2ok = 1;
   memset(firstAccVal, 0, sizeof (firstAccVal));
   for (i = 0; i < n; ++i) {
     if (byzSplit && i == initiator)
@@ -542,13 +546,13 @@ main(
         memcpy(firstAccVal, acceptVal[i], Vlen);
         haveFirstAcc = 1;
       } else if (memcmp(firstAccVal, acceptVal[i], Vlen) != 0) {
-        lemma3ok = 0;
+        lemma2ok = 0;
       }
     }
   }
 
   /* Lemma 4: if initiator is correct, all correct processes accept (and the
-   * value they accept is honestVal — a stronger property than Lemma 4
+   * value they accept is honestVal -- a stronger property than Lemma 4
    * alone, which the demo verifies for completeness). */
   lemma4ok = 1;
   if (!byzSplit) {
@@ -577,14 +581,14 @@ main(
   }
   printf("Accept count: %u of %u correct processes\n",
          acceptCount, byzSplit ? (n - 1) : n);
-  printf("Lemma 3 (accepts agree): %s\n",
-         (acceptCount > 1) ? (lemma3ok ? "ok" : "FAIL")
+  printf("Lemma 2 (accepts agree): %s\n",
+         (acceptCount > 1) ? (lemma2ok ? "ok" : "FAIL")
                            : "n/a (fewer than 2 accepts)");
   if (!byzSplit)
     printf("Lemma 4 (correct initiator -> all accept): %s\n",
            lemma4ok ? "ok" : "FAIL");
 
-  if (!lemma3ok || !lemma4ok)
+  if (!lemma2ok || !lemma4ok)
     exitCode = 1;
 
   /*----------------------------------------------------------------------*/
@@ -602,14 +606,16 @@ usage:
   fprintf(stderr,
     "usage: example_bracha87Fig1 [-v] [-s seed] [-o initiator] [-b split]"
     " n t value\n"
-    "  n        total processes (1-%d)\n"
-    "  t        max Byzantine faults\n"
-    "  value    multi-byte payload to broadcast (1-%d bytes, string)\n"
-    "  -v       verbose: trace every message\n"
-    "  -s seed  shuffle seed (0 = ordered delivery)\n"
-    "  -o orig  designated initiator process (default 0)\n"
-    "  -b split initiator is Byzantine: sends value to processes [0..split-1],\n"
-    "           value with first byte XOR 0xFF to [split..n-1]\n",
+    "  n            total processes (1-%d)\n"
+    "  t            max Byzantine faults\n"
+    "  value        multi-byte payload to broadcast (1-%d bytes, string)\n",
     MAX_PROCESSES, MAX_VLEN);
+  fprintf(stderr,
+    "  -v           verbose: trace every message\n"
+    "  -s seed      shuffle seed (0 = ordered delivery)\n"
+    "  -o initiator designated initiator process (default 0)\n"
+    "  -b split     initiator is Byzantine: sends value to processes\n"
+    "               [0..split-1], value with first byte XOR 0xFF to\n"
+    "               [split..n-1]\n");
   return (1);
 }

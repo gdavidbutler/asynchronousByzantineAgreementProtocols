@@ -5,39 +5,46 @@
 # All five BFT inputs are bridged.  The five DTC outputs are boolean
 # locals that gate post-dispatch value-update side effects.  Two
 # implicit actions the paper notes -- broadcast and advance to the
-# next sub-round -- and the procedural decide/exhausted/maxPhases
+# next step -- and the procedural decide/exhausted/maxPhases
 # return-code machinery stay in C: their ordering and conditional
 # return values aren't expressible declaratively.
+#
+# This bridge also carries the round-numbering conversion.  The
+# paper (and bracha87Fig4.dtc) is 1-based: phase i owns rounds
+# 3i+1, 3i+2, 3i+3, named by their step 1, 2, 3.  The C is 0-based:
+# phase i owns rounds 3i, 3i+1, 3i+2, and bracha87Fig4Round derives
+# subRound = k % 3 from the completed round k.  Step s maps to
+# subRound s-1.
 
-@"sub-round",~subRound
-0,0
-1,1
-2,2
+@"step",~subRound
+1,0
+2,1
+3,2
 
 @"have decided",~haveDecided
 yes,1
 no,0
 
-@">n/2 round-(3i) messages have same value v",~n2Half
+@">n/2 round-(3i+2) messages have same value v",~n2Half
 yes,1
 no,0
 
-@">2t round-(3i+1) messages of form (d,v) agree on v",~gt2T
+@">2t round-(3i+3) messages of form (d,v) agree on v",~gt2T
 yes,1
 no,0
 
-@">t round-(3i+1) messages of form (d,v) agree on v",~gtT
+@">t round-(3i+3) messages of form (d,v) agree on v",~gtT
 yes,1
 no,0
 
 # Domain action -> boolean local that drives a value-update side
 # effect.  At most one of these fires per call.
 
-@~setMajority,"set value to majority of round (3i-1)"
+@~setMajority,"set value to majority of round (3i+1)"
 1,yes
 0,no
 
-@~setDMajority,"set value to (d, majority of round (3i))"
+@~setDMajority,"set value to (d, majority of round (3i+2))"
 1,yes
 0,no
 

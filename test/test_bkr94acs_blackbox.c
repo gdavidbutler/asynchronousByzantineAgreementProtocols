@@ -9,21 +9,21 @@
  * No part of this file inspects bkr94acs.c, peeks at private fields
  * via the data[] tail, or otherwise reaches past the public surface.
  *
- * Sections (see in-file "Section X — ..." markers in main() for
+ * Sections (see in-file "Section X -- ..." markers in main() for
  * the authoritative list):
  *
- *   A. API edges — Sz/Init, A-Cast round-trip, defensive nulls.
- *   B. Lemma 2 Parts A/B/C/D + paper-direct invariants — honest
+ *   A. API edges -- Sz/Init, A-Cast round-trip, defensive nulls.
+ *   B. Lemma 2 Parts A/B/C/D + paper-direct invariants -- honest
  *      convergence at n=4/n=7, identical acasts, multi-byte
  *      values, step-2 BA-decision trigger, single-input-per-BA,
  *      single COMPLETE / BA_DECIDED, honest-exclusion allowance.
- *   C. BPR / Retry — idle-on-fresh, post-A-Cast self-INITIAL,
- *      MAX_ACTS bound, SentFig1Count monotone, silence-threshold
+ *   C. BPR / Retry -- idle-on-fresh, post-A-Cast self-INITIAL,
+ *      MAX_ACTS bound, SentFig1Count monotone, barren-sweep
  *      signal, drop convergence, silent-Byzantine canary, Input
  *      dedup (retried wire returns 0 acts).
- *   D. EXHAUSTED — single output + 0xFE sentinel + permanent
+ *   D. EXHAUSTED -- single output + 0xFE sentinel + permanent
  *      !complete; Retry continues post-EXHAUSTED.
- *   E. Byzantine — equivocating A-Caster (Bracha Lemma 2 inheritance).
+ *   E. Byzantine -- equivocating A-Caster (Bracha Lemma 2 inheritance).
  *
  * Header encoding convention (CRITICAL):
  *   n parameter is encoded; actual process count = n + 1
@@ -62,8 +62,8 @@ static const char *CurTest = "<none>";
 #define QCAP       (1u << 18)
 
 /* ------------------------------------------------------------------ */
-/*  Coin — deterministic alternating. Adequate for tests; adversarial */
-/*  deployments should pass a local random source.                    */
+/*  Coin -- deterministic alternating.  Adequate for tests;           */
+/*  adversarial deployments should pass a local random source.        */
 /* ------------------------------------------------------------------ */
 
 static unsigned char
@@ -98,7 +98,7 @@ rngSeed(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Wire queue — carries both A-Cast-class and BA-class      */
+/*  Wire queue -- carries both A-Cast-class and BA-class     */
 /*  Fig1 messages between processes.  cls discriminates which API the     */
 /*  receiver dispatches to.                                           */
 /* ------------------------------------------------------------------ */
@@ -182,7 +182,7 @@ qPopRandom(
 /* ------------------------------------------------------------------ */
 /*  Per-process black-box observations.  Updated as acts are returned    */
 /*  from any API call.  Every assertion in section B reads from here  */
-/*  or from the public accessors — never from the bkr94acs struct's   */
+/*  or from the public accessors -- never from the bkr94acs struct's  */
 /*  data[] tail.                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -209,17 +209,17 @@ obsInit(
 
 /* Observe acts output BY process 'self' (regardless of which API
  * call produced them).  Updates obs counters; outputs wire messages
- * to all 'nAct' processes (including 'self' — loopback through queue
+ * to all 'nAct' processes (including 'self' -- loopback through queue
  * per the project's "feed self through the network" rule).
  *
- * dropPercent  0..99 — per-recipient probability the wire is dropped
+ * dropPercent  0..99 -- per-recipient probability the wire is dropped
  *                       at output rather than queued.  Models a
  *                       lossy network for BPR-retry convergence
  *                       tests.  0 = no drops.
  * silentProcess   -1 = none; otherwise wires destined to this process are
  *                       not queued (the silent process never receives,
  *                       its A-Cast/Retry are never called, so it
- *                       never outputs — modeling a Byzantine-silent
+ *                       never outputs -- modeling a Byzantine-silent
  *                       crash from the rest of the cluster's POV). */
 static void
 observeAndOutput(
@@ -266,7 +266,7 @@ observeAndOutput(
        * Surfaces as the round-0 BA_SEND with initiator == self &&
        * type == INITIAL.  Subsequent rounds also output BA_SEND with
        * initiator == self / type == INITIAL but those are Fig4
-       * round-r values, not BKR94-layer inputs — filter them out. */
+       * round-r values, not BKR94-layer inputs -- filter them out. */
       if (acts[i].initiator == self
        && acts[i].type == BRACHA87_INITIAL
        && acts[i].round == 0) {
@@ -340,7 +340,7 @@ deliverWire(
 /* ------------------------------------------------------------------ */
 /*  Honest-run simulator: every process acasts, all messages are       */
 /*  delivered (no drops), drive until the queue is empty.             */
-/*  Retry is not invoked — under no-loss the protocol converges        */
+/*  Retry is not invoked -- under no-loss the protocol converges       */
 /*  organically.  Section C drives Retry and fault injection; D adds   */
 /*  EXHAUSTED setup.                                                  */
 /* ------------------------------------------------------------------ */
@@ -453,12 +453,12 @@ assertLemma2(
   }
 
   /* Single input per BA per process (paper Implementer remark): every
-   * honest process enters exactly one VALUE into every BA — 1 from
+   * honest process enters exactly one VALUE into every BA -- 1 from
    * step 1 once Q(j)=1 is learned, or 0 from step 2's enter-0 fanout.
    * "Step 1 and step 2 stop touching it" once the input is entered.
    *
    * Under loss, BPR retries the round-0 INITIAL many times for
-   * delivery, but always with the same value — retries do not
+   * delivery, but always with the same value -- retries do not
    * constitute "entering" a new input.  Verify by witnessing that
    * the value stayed consistent across all observed self-INITIAL
    * round-0 outputs (no BKR94 step-1/step-2 disagreement), and
@@ -479,7 +479,7 @@ assertLemma2(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Allocate and initialise a process cluster of size nAct (encoded as   */
+/*  Allocate and initialize a process cluster of size nAct (encoded as   */
 /*  nEnc = nAct - 1) at given t / vLen / maxPhases.                   */
 /* ------------------------------------------------------------------ */
 
@@ -590,7 +590,7 @@ runWithRetry(
     /* Drain queue. */
     while (qSize() > 0) {
       qPopHead(&w);
-      /* Silent process never receives — defensive (output already
+      /* Silent process never receives -- defensive (output already
        * skipped them). */
       if (silentProcess >= 0 && (int)w.to == silentProcess)
         continue;
@@ -616,7 +616,7 @@ runWithRetry(
     /* Retry every non-silent process once.  Per .h:
      *   - returns at most BKR94ACS_RETRY_MAX_ACTS
      *   - returns 0 only when full sweep finds no sent instance
-     *     (pre-broadcast / shutdown — never expected mid-run after
+     *     (pre-broadcast / shutdown -- never expected mid-run after
      *     A-Cast has set INITIATOR). */
     for (i = 0; i < nAct; ++i) {
       if (silentProcess >= 0 && (int)i == silentProcess)
@@ -693,7 +693,7 @@ feedBAAccept(
   total += n;
 
   /* Three distinct READYs trip Rule 5 (rd>=t+1) then Rule 6 (rd>=2t+1)
-   * → ACCEPT.  Senders 1, 2, 3 (initiator's own READY isn't needed
+   * -> ACCEPT.  Senders 1, 2, 3 (initiator's own READY isn't needed
    * since echoed is set after INITIAL). */
   for (sender = 1; sender <= 3; ++sender) {
     n = bkr94acsBaInput(a, process, round, initiator,
@@ -726,7 +726,7 @@ main(
   rngSeed(0xC0FFEE);
 
   /* ---------------------------------------------------------------- */
-  /*  Section A — API edges                                           */
+  /*  Section A -- API edges                                          */
   /* ---------------------------------------------------------------- */
 
   /* ---------------------------------------------------------------- */
@@ -902,11 +902,11 @@ main(
   a5_done: ;
 
   /* ---------------------------------------------------------------- */
-  /*  Section B — Lemma 2 Parts A/B/C/D + paper-direct invariants     */
+  /*  Section B -- Lemma 2 Parts A/B/C/D + paper-direct invariants    */
   /* ---------------------------------------------------------------- */
 
   /* ---------------------------------------------------------------- */
-  BANNER("B1: Lemma 2 Parts A/B/C/D — n=4 t=1, ordered delivery");
+  BANNER("B1: Lemma 2 Parts A/B/C/D -- n=4 t=1, ordered delivery");
   /* ---------------------------------------------------------------- */
   {
     unsigned int n = 4, t = 1, vLen = 1, mp = 10;
@@ -920,7 +920,7 @@ main(
       runHonest(n, vLen, mp, acasts, 0 /*ordered*/, processes, obs);
       assertLemma2(processes, obs, n, t);
 
-      /* Lemma 2 Part D — explicit value-match check (the implementation
+      /* Lemma 2 Part D -- explicit value-match check (the implementation
        * of Q(j) = "Fig1 ACCEPTED" also implies the accepted bytes
        * equal what j A-Cast). */
       {
@@ -943,7 +943,7 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("B2: Lemma 2 — n=4 t=1, shuffled delivery");
+  BANNER("B2: Lemma 2 -- n=4 t=1, shuffled delivery");
   /* ---------------------------------------------------------------- */
   {
     unsigned int n = 4, t = 1, vLen = 1, mp = 10;
@@ -962,7 +962,7 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("B3: Lemma 2 — n=7 t=2, shuffled delivery");
+  BANNER("B3: Lemma 2 -- n=7 t=2, shuffled delivery");
   /* ---------------------------------------------------------------- */
   {
     unsigned int n = 7, t = 2, vLen = 1, mp = 10;
@@ -981,7 +981,7 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("B4: Lemma 2 — identical A-Casts (degenerate values)");
+  BANNER("B4: Lemma 2 -- identical A-Casts (degenerate values)");
   /* ---------------------------------------------------------------- */
   {
     unsigned int n = 4, t = 1, vLen = 1, mp = 10;
@@ -1000,7 +1000,7 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("B5: Lemma 2 — multi-byte values (vLen=8)");
+  BANNER("B5: Lemma 2 -- multi-byte values (vLen=8)");
   /* ---------------------------------------------------------------- */
   {
     unsigned int n = 4, t = 1, vLen = 8, mp = 10;
@@ -1088,10 +1088,10 @@ main(
     bkr94acsInit(p0, (unsigned char)(nAct - 1), 1, (unsigned char)(vLen - 1),
                  (unsigned char)mp, 0, testCoin, 0);
 
-    /* Process 0 — process 0 acasts, then synthesises the all-honest
+    /* Process 0 -- process 0 acasts, then synthesizes the all-honest
      * cascade locally (INITIAL from process 0; ECHO from 0/1/2/3;
      * READY from 0/1/2/3 once each process's threshold trips).  Since
-     * we're driving only P0, we synthesise these as direct
+     * we're driving only P0, we synthesize these as direct
      * AcastInput calls with the relevant 'from' field.  No wire
      * queue used in this banner. */
     val0 = 0x33;
@@ -1168,14 +1168,14 @@ main(
     CHECK(countProcess1 == 1, "B6: step-1 input for process 1 fired exactly once");
     CHECK(countProcess2 == 1, "B6: step-1 input for process 2 fired exactly once");
 
-    /* No BA has decided yet — no BA traffic delivered. */
+    /* No BA has decided yet -- no BA traffic delivered. */
     CHECK(bkr94acsBaDecision(p0, 0) == 0xFF,
           "B6: BA_0 still undecided (no BA delivered)");
     CHECK(bkr94acsBaDecision(p0, 1) == 0xFF, "B6: BA_1 undecided");
     CHECK(bkr94acsBaDecision(p0, 2) == 0xFF, "B6: BA_2 undecided");
     CHECK(bkr94acsBaDecision(p0, 3) == 0xFF, "B6: BA_3 undecided");
 
-    /* Step-2 trigger MUST NOT have fired — Fig1-ACCEPT count is now
+    /* Step-2 trigger MUST NOT have fired -- Fig1-ACCEPT count is now
      * 3 (= n-t) but BA-decision-with-output-1 count is 0. */
     CHECK(prematureFanout == 0,
           "B6: NO premature step-2 fanout on Fig1-ACCEPT count "
@@ -1254,14 +1254,14 @@ main(
       sz = bkr94acsSubset(processes[0], subset);
       CHECK(sz >= n - t, "B7: |SubSet| >= n-t (lower bound is contractual)");
       CHECK(sz <= n, "B7: |SubSet| <= n (upper bound is structural)");
-      /* No assertion that sz == n — that would over-specify. */
+      /* No assertion that sz == n -- that would over-specify. */
 
       freeCluster(processes, n);
     }
   }
 
   /* ---------------------------------------------------------------- */
-  /*  Section C — BPR / Retry                                          */
+  /*  Section C -- BPR / Retry                                          */
   /* ---------------------------------------------------------------- */
 
   /* ---------------------------------------------------------------- */
@@ -1269,8 +1269,8 @@ main(
   /* ---------------------------------------------------------------- */
   {
     /* Per .h: "Returns 0 only when a full sweep finds no sent
-     * instance — pre-broadcast / shutdown state".  A freshly-Init'd
-     * process that has not A-Castd and received no inputs has no
+     * instance -- pre-broadcast / shutdown state".  A freshly-Init'd
+     * process that has not A-Cast and received no inputs has no
      * sent Fig1 instances; every Retry call must return 0,
      * regardless of cursor position. */
     unsigned long sz;
@@ -1301,7 +1301,8 @@ main(
   /* ---------------------------------------------------------------- */
   {
     /* A-Cast sets the INITIATOR bit on self's A-Cast Fig1.  Per .h
-     * BPR rules: INITIATOR → output INITIAL_ALL on every Bpr call (forever).
+     * BPR rules: INITIATOR -> output INITIAL_ALL on every Bpr call
+     * until ACCEPTED or all-echoed (pitfall 11).
      * The cursor must visit self's A-Cast Fig1 in finite calls and
      * surface the retry. */
     unsigned long sz;
@@ -1380,13 +1381,13 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("C5: Retry full-sweep idle return = 0 (silence-threshold signal)");
+  BANNER("C5: Retry full-sweep idle return = 0 (barren-sweep signal)");
   /* ---------------------------------------------------------------- */
   {
-    /* The .h documents Retry returning 0 only on full-sweep idle —
+    /* The .h documents Retry returning 0 only on full-sweep idle --
      * the only contractual case is "pre-broadcast / shutdown".  This
-     * banner re-anchors that on a fresh process (same as C1, formalised
-     * as the silence-threshold-exit signal a deployment uses). */
+     * banner re-anchors that on a fresh process (same as C1, formalized
+     * as the barren-sweep exit signal a deployment uses). */
     unsigned long sz;
     struct bkr94acs *a;
     struct bracha87Retry cursor;
@@ -1405,7 +1406,7 @@ main(
       if (n == 0) ++zeros;
     }
     CHECK(zeros == 256,
-          "C5: pre-A-Cast Retry returns 0 every call (silence signal)");
+          "C5: pre-A-Cast Retry returns 0 every call (idle-sweep signal)");
 
     free(a);
   }
@@ -1418,8 +1419,9 @@ main(
     /* High-loss network: 50% of every output wire is dropped at
      * source.  The protocol's only mechanism for recovering is BPR
      * retry via Retry.  Convergence under loss exercises the retry
-     * rules (INITIATOR → INITIAL forever, ECHOED → ECHO forever,
-     * RDSENT → READY forever) end-to-end. */
+     * rules (INITIATOR -> INITIAL until ACCEPTED or all-echoed,
+     * ECHOED -> ECHO until ACCEPTED, RDSENT -> READY until every
+     * process has announced accept) end-to-end. */
     unsigned int n = 4, t = 1, vLen = 1, mp = 10;
     unsigned int maxRetryActs;
     unsigned int monotoneViolations;
@@ -1449,19 +1451,19 @@ main(
   BANNER("C7: Silent Byzantine process canary (pitfall 11 regression)");
   /* ---------------------------------------------------------------- */
   {
-    /* n=4 t=1, process 3 is Byzantine-silent: never acasts, never
-     * receives, never outputs.  Honest processes 0/1/2 must converge —
+    /* n=4 t=1, process 3 is Byzantine-silent: never A-Casts, never
+     * receives, never outputs.  Honest processes 0/1/2 must converge --
      * SubSet excludes process 3 via step-2 enter-0 fanout for process 3.
      *
      * This is the regression for pitfall 11: the initiator INITIAL
      * retry must NOT short-circuit on local ECHOED.  Each honest
-     * process is an initiator of its own A-Cast; their Retrys must
+     * process is an initiator of its own A-Cast; their Retry calls must
      * keep retrying INITIAL until that A-Cast is accepted (the
      * sound stop), NOT merely until they echoed locally.  At the
      * n=3t+1 boundary Bracha's echo threshold ((n+t)/2+1) equals the
      * honest count, so any process that missed the bootstrap depends on
      * the initiator's continued INITIAL retry to complete its echo
-     * count.  The original gap-4 design (`INITIATOR && !ECHOED → output`)
+     * count.  The original gap-4 design (`INITIATOR && !ECHOED -> output`)
      * stalled at |SubSet|=1 in this setup. */
     unsigned int n = 4, t = 1, vLen = 1, mp = 10;
     unsigned int maxRetryActs;
@@ -1482,7 +1484,7 @@ main(
       rc = runWithRetry(n, vLen, mp, acasts, 12, 3 /* silentProcess */,
                        5000, processes, obs,
                        &maxRetryActs, &monotoneViolations);
-      CHECK(rc == 0, "C7: silent Byzantine process — honest processes converge");
+      CHECK(rc == 0, "C7: silent Byzantine process -- honest processes converge");
       CHECK(monotoneViolations == 0,
             "C7: SentFig1Count monotone with silent process");
 
@@ -1507,16 +1509,16 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("C8: Input dedup — retried wire returns 0 acts (silence-threshold invariant)");
+  BANNER("C8: Input dedup -- retried wire returns 0 acts (barren-sweep invariant)");
   /* ---------------------------------------------------------------- */
   {
-    /* Load-bearing invariant for deployment-layer progress-silence threshold
-     * exit: the per-process progress clock advances only when AcastInput /
+    /* Load-bearing invariant for deployment-layer barren-sweep gate
+     * exit: the per-process progress count advances only when AcastInput /
      * BAInput returns nacts > 0.  BPR Retry keeps retrying
      * un-retired actions (READY forever; INITIAL/ECHO until accept)
      * onto already-delivered wires (pitfalls 10/11); if those
-     * re-deliveries returned acts > 0, the silence timer would never
-     * elapse and the exit could never form.
+     * re-deliveries returned acts > 0, the barren-sweep count would
+     * never reach S and the exit could never form.
      *
      * Drive a small honest cluster to convergence, capturing along
      * the way one ACAST and one BA wire whose FIRST
@@ -1529,9 +1531,9 @@ main(
     struct bkr94acsAct acastOut[1];
     struct bkr94acsAct retryOut[BKR94ACS_RETRY_MAX_ACTS];
     struct wire acastSample;
-    struct wire conSample;
-    int havePropSample;
-    int haveConSample;
+    struct wire baSample;
+    int haveAcastSample;
+    int haveBaSample;
     struct wire w;
     unsigned int iter;
     unsigned int nDeliv;
@@ -1550,8 +1552,8 @@ main(
         qReset();
         for (i = 0; i < n; ++i)
           bracha87RetryInit(&cursors[i]);
-        havePropSample = 0;
-        haveConSample = 0;
+        haveAcastSample = 0;
+        haveBaSample = 0;
 
         for (i = 0; i < n; ++i) {
           nDeliv = bkr94acsAcast(processes[i], acasts + i * vLen, acastOut);
@@ -1572,12 +1574,12 @@ main(
                                               w.type, w.from, w.baValue,
                                               out);
             if (nDeliv > 0) {
-              if (w.cls == BKR94ACS_CLS_ACAST && !havePropSample) {
+              if (w.cls == BKR94ACS_CLS_ACAST && !haveAcastSample) {
                 acastSample = w;
-                havePropSample = 1;
-              } else if (w.cls == BKR94ACS_CLS_BA && !haveConSample) {
-                conSample = w;
-                haveConSample = 1;
+                haveAcastSample = 1;
+              } else if (w.cls == BKR94ACS_CLS_BA && !haveBaSample) {
+                baSample = w;
+                haveBaSample = 1;
               }
             }
             observeAndOutput(&obs[w.to], w.to, n, out, nDeliv, vLen, 0, -1);
@@ -1595,16 +1597,16 @@ main(
             }
         }
         CHECK(allComplete, "C8: cluster converged");
-        CHECK(havePropSample,
-              "C8: captured a ACAST wire whose first delivery output acts");
-        CHECK(haveConSample,
+        CHECK(haveAcastSample,
+              "C8: captured an ACAST wire whose first delivery output acts");
+        CHECK(haveBaSample,
               "C8: captured a BA wire whose first delivery output acts");
 
         /* Retry: identical args, same target process.  The receiver's
          * Bracha state has already consumed this exact (process, type,
          * sender [+ round, initiator, baValue]) tuple; per Fig1
          * Rule 1/2/3 dedup the dispatch must produce zero acts. */
-        if (havePropSample) {
+        if (haveAcastSample) {
           nRetry = bkr94acsAcastInput(processes[acastSample.to],
                                           acastSample.process, acastSample.type,
                                           acastSample.from, acastSample.value,
@@ -1612,12 +1614,12 @@ main(
           CHECK(nRetry == 0,
                 "C8: re-delivered ACAST returns 0 acts (Input dedup)");
         }
-        if (haveConSample) {
-          nRetry = bkr94acsBaInput(processes[conSample.to],
-                                           conSample.process, conSample.round,
-                                           conSample.initiator,
-                                           conSample.type, conSample.from,
-                                           conSample.baValue, out);
+        if (haveBaSample) {
+          nRetry = bkr94acsBaInput(processes[baSample.to],
+                                           baSample.process, baSample.round,
+                                           baSample.initiator,
+                                           baSample.type, baSample.from,
+                                           baSample.baValue, out);
           CHECK(nRetry == 0,
                 "C8: re-delivered BA returns 0 acts (Input dedup)");
         }
@@ -1629,19 +1631,19 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
-  /*  Section D — EXHAUSTED                                           */
+  /*  Section D -- EXHAUSTED                                          */
   /* ---------------------------------------------------------------- */
 
   /* ---------------------------------------------------------------- */
   BANNER("D1: BA_EXHAUSTED single output, 0xFE sentinel, !complete");
   /* ---------------------------------------------------------------- */
   {
-    /* maxPhases=1 → BA has only 1 phase (3 sub-rounds) to terminate.
+    /* maxPhases=1 -> BA has only 1 phase (3 sub-rounds) to terminate.
      * Drive split values across all 3 sub-rounds at every initiator
      * so neither the >2t case (i) nor the >t case (ii) of Fig4
      * step 3 fires.  Fig4 returns BRACHA87_EXHAUSTED.  BKR94 surfaces
      * BKR94ACS_ACT_BA_EXHAUSTED exactly once, sets baDecision[0]=0xFE,
-     * and never sets BKR94ACS_F_COMPLETE (no unilateral substitute is safe —
+     * and never sets BKR94ACS_F_COMPLETE (no unilateral substitute is safe --
      * Part C of Lemma 2 agreement would break). */
     unsigned long sz;
     struct bkr94acs *a;
@@ -1729,7 +1731,7 @@ main(
   d2_done: ;
 
   /* ---------------------------------------------------------------- */
-  /*  Section E — Byzantine                                           */
+  /*  Section E -- Byzantine                                          */
   /* ---------------------------------------------------------------- */
 
   /* ---------------------------------------------------------------- */
@@ -1738,8 +1740,8 @@ main(
   {
     /*
      * n=4 t=1, process 0 is Byzantine and equivocates its own A-Cast:
-     *   INITIAL/v1 → processes 1, 2
-     *   INITIAL/v2 → process 3
+     *   INITIAL/v1 -> processes 1, 2
+     *   INITIAL/v2 -> process 3
      * Process 0 sends nothing else (no echoes, no readys, no BA).
      *
      * Bracha 1987 Lemma 2: "if two correct processes accept u and v,
@@ -1747,8 +1749,8 @@ main(
      * that ACCEPTs process 0's Fig1 must accept the same value as any
      * other honest process that ACCEPTs.  In this split it's likely
      * neither v1 nor v2 reaches the (n+t)/2+1=3 echo threshold at
-     * any honest process, so Fig1 initiator 0 never accepts → BA_0 decides
-     * 0 via step-2 fanout → SubSet excludes process 0.
+     * any honest process, so Fig1 initiator 0 never accepts -> BA_0 decides
+     * 0 via step-2 fanout -> SubSet excludes process 0.
      *
      * Black-box assertion: ACS still completes; honest processes agree
      * on SubSet; if any honest process's bkr94acsAcastValue(0) is
@@ -1782,7 +1784,7 @@ main(
         bracha87RetryInit(&cursors[i]);
 
       /* Process 0's Byzantine equivocation: split-INITIAL output only.
-       * No A-Cast, no Retry for process 0 — this attacker only sends
+       * No A-Cast, no Retry for process 0 -- this attacker only sends
        * the bootstrap INITIAL, then is silent. */
       memset(&w, 0, sizeof (w));
       w.cls = BKR94ACS_CLS_ACAST;
@@ -1861,8 +1863,8 @@ main(
        * process 0 must not produce a state where process A's
        * bkr94acsAcastValue(0) == v1 and process B's == v2.
        *
-       * (BA_0 deciding 0 across all processes — i.e. SubSet excludes
-       * process 0 — is the expected case here, since neither v1 nor v2
+       * (BA_0 deciding 0 across all processes -- i.e. SubSet excludes
+       * process 0 -- is the expected case here, since neither v1 nor v2
        * can reach the (n+t)/2+1 echo threshold under this split.) */
       {
         for (p = 1; p < n; ++p) {
@@ -1872,7 +1874,7 @@ main(
             const unsigned char *v_b = bkr94acsAcastValue(processes[q2], 0);
             if (v_a && v_b)
               CHECK(v_a[0] == v_b[0],
-                    "E1: Bracha Lemma 2 — accepted values agree across honest processes");
+                    "E1: Bracha Lemma 2 -- accepted values agree across honest processes");
           }
         }
         /* Honest processes' own A-Cast values must round-trip
@@ -1894,7 +1896,7 @@ main(
         unsigned char oj = subset[j];
         for (p = 1; p < n; ++p)
           CHECK(bkr94acsAcastValue(processes[p], oj) != 0,
-                "E1: Part D — SubSet members have accepted values");
+                "E1: Part D -- SubSet members have accepted values");
       }
 
       freeCluster(processes, n);

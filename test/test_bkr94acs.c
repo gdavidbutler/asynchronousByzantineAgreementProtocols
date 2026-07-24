@@ -1,16 +1,16 @@
 /*
- * Tests for bkr94acs.[hc] — BKR94 Asynchronous Common Subset.
+ * Tests for bkr94acs.[hc] -- BKR94 Asynchronous Common Subset.
  *
- * Simulates all-to-all message passing for BKR94 ACS:
+ * Simulates all-to-all delivery for BKR94 ACS:
  *   N A-Cast broadcasts (Bracha87 Fig1 with arbitrary values)
- *   N binary BAes (Bracha87 Fig4 per process)
+ *   N binary BAs (Bracha87 Fig4 per process)
  *
  * Verifies:
- *   Agreement  — all honest processes decide the same subset
- *   Validity   — subset contains at least n-t processes
- *   Totality   — all BAs decide (BKR94ACS_F_COMPLETE flag set)
- *   Values     — accepted A-Cast values match what was A-Cast
- *   Ordering   — deterministic sort produces identical order at each process
+ *   Agreement  -- all honest processes decide the same subset
+ *   Validity   -- subset contains at least n-t processes
+ *   Totality   -- all BAs decide (BKR94ACS_F_COMPLETE flag set)
+ *   Values     -- accepted A-Cast values match what was A-Cast
+ *   Ordering   -- deterministic sort produces identical order at each process
  */
 
 #include <stdio.h>
@@ -31,10 +31,10 @@ check(
   }
 }
 
-/*------------------------------------------------------------------------*/
-/*  Coin — deterministic alternating. Adequate for tests; adversarial     */
-/*  deployments should pass a local random source.                        */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Coin -- deterministic alternating. Adequate for tests; adversarial      */
+/*  deployments should pass a local random source.                          */
+/*--------------------------------------------------------------------------*/
 
 static unsigned char
 testCoin(
@@ -45,9 +45,9 @@ testCoin(
   return (phase % 2);
 }
 
-/*------------------------------------------------------------------------*/
-/*  Message queue — same pattern as example/bkr94acs.c                    */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Message queue -- same pattern as example/bkr94acs.c                     */
+/*--------------------------------------------------------------------------*/
 
 #define MAX_PROCESSES  16
 #define MAX_PHASES 10
@@ -123,9 +123,9 @@ qShuffle(
   }
 }
 
-/*------------------------------------------------------------------------*/
-/*  BKR94 ACS simulation engine                                           */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  BKR94 ACS simulation engine                                             */
+/*--------------------------------------------------------------------------*/
 
 struct acsResult {
   int complete;
@@ -251,9 +251,9 @@ runAcs(
   return (0);
 }
 
-/*------------------------------------------------------------------------*/
-/*  Verification helpers                                                  */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Verification helpers                                                    */
+/*--------------------------------------------------------------------------*/
 
 /* Check: all processes completed */
 static int
@@ -302,9 +302,9 @@ subsetValid(
   return (1);
 }
 
-/*------------------------------------------------------------------------*/
-/*  Test cases                                                            */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Test cases                                                              */
+/*--------------------------------------------------------------------------*/
 
 static void
 testBasic(
@@ -317,7 +317,7 @@ testBasic(
   unsigned int n;
   unsigned int t;
 
-  printf("BKR94 ACS — Basic honest tests\n");
+  printf("BKR94 ACS -- Basic honest tests\n");
 
   /* n=1, t=0 */
   memset(acasts, 0, sizeof (acasts));
@@ -400,7 +400,7 @@ testShuffled(
    * Here we verify the hard guarantees: totality and agreement.
    */
 
-  printf("\nBKR94 ACS — Shuffled delivery tests\n");
+  printf("\nBKR94 ACS -- Shuffled delivery tests\n");
 
   /* n=4, t=1 with 20 different seeds */
   n = 4;
@@ -489,7 +489,7 @@ testValues(
   unsigned int j;
   int valuesOk;
 
-  printf("\nBKR94 ACS — A-Cast value integrity tests\n");
+  printf("\nBKR94 ACS -- A-Cast value integrity tests\n");
 
   /*
    * Verify that accepted A-Cast values match what was A-Cast.
@@ -600,7 +600,7 @@ testMultiByteValues(
   unsigned int vLen;
   unsigned int i;
 
-  printf("\nBKR94 ACS — Multi-byte value tests\n");
+  printf("\nBKR94 ACS -- Multi-byte value tests\n");
 
   /* Long strings: test vLen > 1 */
   n = 4;
@@ -644,7 +644,7 @@ testIdenticalAcasts(
   char acasts[MAX_PROCESSES][MAX_VLEN];
   struct acsResult results[MAX_PROCESSES];
 
-  printf("\nBKR94 ACS — Identical A-Cast tests\n");
+  printf("\nBKR94 ACS -- Identical A-Cast tests\n");
 
   /* All processes A-Cast the same value */
   memset(acasts, 0, sizeof (acasts));
@@ -673,7 +673,7 @@ testLargerN(
   unsigned int seed;
   char label[128];
 
-  printf("\nBKR94 ACS — Larger N tests\n");
+  printf("\nBKR94 ACS -- Larger N tests\n");
 
   /* n=13, t=4 */
   n = 13;
@@ -727,19 +727,19 @@ testLargerN(
   printf("all agreed\n");
 }
 
-/*------------------------------------------------------------------------*/
-/*  Post-decide continuation regression test                              */
-/*                                                                        */
-/*  Bracha Fig4 requires a decided process to keep broadcasting so other  */
-/*  processes can decide.  An earlier version of bkr94acs.c short-circuited   */
-/*  bkr94acsBaInput when bkr94acsDecision[process] != 0xFF,         */
-/*  silently dropping all post-decide messages.  This test pokes the BA   */
-/*  decision marker directly, then verifies that a fresh BA        */
-/*  INITIAL for that process still drives Fig1 (ECHO output) rather than */
-/*  returning zero.                                                       */
-/*  With the bug:  nacts == 0.                                            */
-/*  With the fix:  nacts >= 1 and includes a BA_SEND ECHO.               */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Post-decide continuation regression test                                */
+/*                                                                          */
+/*  Bracha Fig4 requires a decided process to keep broadcasting so other    */
+/*  processes can decide.  An earlier version of bkr94acs.c short-circuited */
+/*  bkr94acsBaInput when baDecision[process] != 0xFF,                       */
+/*  silently dropping all post-decide messages.  This test pokes the BA     */
+/*  decision marker directly, then verifies that a fresh BA                 */
+/*  INITIAL for that process still drives Fig1 (ECHO output) rather than    */
+/*  returning zero.                                                         */
+/*  With the bug:  nacts == 0.                                              */
+/*  With the fix:  nacts >= 1 and includes a BA_SEND ECHO.                  */
+/*--------------------------------------------------------------------------*/
 
 static void
 testPostDecideContinuation(
@@ -756,7 +756,7 @@ testPostDecideContinuation(
   unsigned char encN;
   unsigned char t;
 
-  printf("\nBKR94 ACS — Post-decide continuation regression\n");
+  printf("\nBKR94 ACS -- Post-decide continuation regression\n");
 
   encN = 3;  /* actual N = 4 */
   t = 1;
@@ -803,7 +803,7 @@ testPostDecideContinuation(
    * outputs a BROADCAST action for round 1 without DECIDE.  Deliver
    * INITIALs for enough initiators for Fig1 to accept via echoes
    * between them.  Easiest: INITIAL from every process for every
-   * initiator — the simple all-to-all simulation pattern.
+   * initiator -- the simple all-to-all simulation pattern.
    */
   {
     unsigned char initiator;
@@ -844,28 +844,28 @@ testPostDecideContinuation(
   printf("  n=4 t=1 BA_0 pre-decided: continuation ok\n");
 }
 
-/*------------------------------------------------------------------------*/
-/*  BKR94 Step 2 trigger regression test                                  */
-/*                                                                        */
-/*  Pre-fix, bkr94acsAcastInput counted Fig1 ACCEPTs and fired the     */
-/*  enter-0 fanout when nAccepted reached n-t.  BKR94 Lemma 2 Part A       */
-/*  case (i) requires the step-2 trigger to be "2t+1 BAs terminated with  */
-/*  output 1", not "2t+1 Fig1 ACCEPTs" — these coincide only in benign    */
-/*  runs and diverge under asynchrony or Byzantine scheduling.            */
-/*                                                                        */
-/*  This test pins the corrected semantics by driving all N Fig1          */
-/*  instances to ACCEPT on a single process via bkr94acsAcastInput and    */
-/*  asserting:                                                            */
-/*    - BKR94ACS_F_THRESHOLD stays clear after each accept (step 2 not    */
-/*      fired),                                                           */
-/*    - no BKR94ACS_ACT_BA_SEND with baValue=0 comes out of the         */
-/*      A-Cast path (no enter-0 fanout),                                 */
-/*    - entered[j] == BKR94ACS_ENTER_ONE for every j (step 1 fired per       */
-/*      accept).                                                          */
-/*                                                                        */
-/*  With the pre-fix code the (n-t)th accept would flip threshold to 1    */
+/*--------------------------------------------------------------------------*/
+/*  BKR94 Step 2 trigger regression test                                    */
+/*                                                                          */
+/*  Pre-fix, bkr94acsAcastInput counted Fig1 ACCEPTs and fired the          */
+/*  enter-0 fanout when nAccepted reached n-t.  BKR94 Lemma 2 Part A        */
+/*  case (i) requires the step-2 trigger to be "2t+1 BAs terminated with    */
+/*  output 1", not "2t+1 Fig1 ACCEPTs" -- these coincide only in benign     */
+/*  runs and diverge under asynchrony or Byzantine scheduling.              */
+/*                                                                          */
+/*  This test pins the corrected semantics by driving all N Fig1            */
+/*  instances to ACCEPT on a single process via bkr94acsAcastInput and      */
+/*  asserting:                                                              */
+/*    - BKR94ACS_F_THRESHOLD stays clear after each accept (step 2 not      */
+/*      fired),                                                             */
+/*    - no BKR94ACS_ACT_BA_SEND with baValue=0 comes out of the             */
+/*      A-Cast path (no enter-0 fanout),                                    */
+/*    - entered[j] == BKR94ACS_ENTER_ONE for every j (step 1 fired per      */
+/*      accept).                                                            */
+/*                                                                          */
+/*  With the pre-fix code the (n-t)th accept would flip threshold to 1      */
 /*  and output a burst of enter-0 BA_SEND actions.                          */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
 
 static void
 testStepTwoTrigger(
@@ -886,7 +886,7 @@ testStepTwoTrigger(
   unsigned char from;
   const unsigned char *entered;
 
-  printf("\nBKR94 ACS — Step 2 trigger regression\n");
+  printf("\nBKR94 ACS -- Step 2 trigger regression\n");
 
   encN = 3;  /* actual N = 4, n-t threshold = 3 */
   t = 1;
@@ -964,27 +964,27 @@ testStepTwoTrigger(
   printf("  n=4 t=1: step 2 stays in BA path, step 1 fires per accept\n");
 }
 
-/*------------------------------------------------------------------------*/
-/*  Main                                                                  */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Main                                                                    */
+/*--------------------------------------------------------------------------*/
 
-/*------------------------------------------------------------------------*/
-/*  BPR retry tests                                                        */
-/*                                                                        */
-/*  White-box tests of bkr94acsAcast and bkr94acsRetry:                  */
-/*    - A-Cast marks the local A-Cast Fig1 as process and outputs         */
-/*      ACAST_SEND/INITIAL.                                                */
-/*    - Retry keeps outputting ACAST_SEND/INITIAL on every sweep while        */
-/*      F1_INITIATOR is set (Implementation Note 11); ACAST_SEND/ECHO and    */
-/*      ACAST_SEND/READY join independently once F1_ECHOED / F1_RDSENT    */
-/*      get set.                                                          */
-/*    - Retry returns 0 on idle (no sent state anywhere).             */
-/*    - Retry's per-process gate skips A-Cast Fig1s for BAs decided 0     */
-/*      (post-Step 2 fanout, j excluded from SubSet).                     */
-/*    - End-to-end: ACS converges under retry-only drive (no application   */
-/*      bookkeeping, no per-record destination tracking) given fair-loss       */
-/*      message delivery.                                                 */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  BPR retry tests                                                         */
+/*                                                                          */
+/*  White-box tests of bkr94acsAcast and bkr94acsRetry:                     */
+/*    - A-Cast marks the local A-Cast Fig1 as initiator and outputs         */
+/*      ACAST_SEND/INITIAL.                                                 */
+/*    - Retry keeps outputting ACAST_SEND/INITIAL on every sweep while      */
+/*      F1_INITIATOR is set (Implementation Note 11); ACAST_SEND/ECHO and   */
+/*      ACAST_SEND/READY join independently once F1_ECHOED / F1_RDSENT      */
+/*      get set.                                                            */
+/*    - Retry returns 0 on idle (no sent state anywhere).                   */
+/*    - Retry's per-process gate skips A-Cast Fig1s for BAs decided 0       */
+/*      (post-Step 2 fanout, j excluded from SubSet).                       */
+/*    - End-to-end: ACS converges under retry-only drive (no application    */
+/*      bookkeeping, no per-instance destination tracking) given fair-loss  */
+/*      message delivery.                                                   */
+/*--------------------------------------------------------------------------*/
 
 static void
 testBpr(
@@ -1011,7 +1011,7 @@ testBpr(
   n = bkr94acsRetry(a, &retry, out);
   check("BPR retry virgin: 0 actions", n == 0);
 
-  /* A-Cast: marks process, outputs ACAST_SEND/INITIAL once */
+  /* A-Cast: marks initiator, outputs ACAST_SEND/INITIAL once */
   val[0] = 1;
   n = bkr94acsAcast(a, val, out);
   check("BPR A-Cast: 1 action", n == 1);
@@ -1090,13 +1090,13 @@ testBpr(
 
   /*
    * Per-process retry gate: BA decided 0 -> skip A-Cast retry.
-   * Synthesise the state by setting bkr94acsDecision[1] = 0
+   * Synthesize the state by setting baDecision[1] = 0
    * directly via the public-ish header layout.  We can't reach
    * the helper from outside; use a small driven path: drive ACS
    * forward to where BA_1 decides 0, then verify retry never
-   * returns a PROP_* action for process 1.
+   * returns an ACAST_SEND action for process 1.
    *
-   * Cheaper synthetic: forge bkr94acsDecision[1] via observation
+   * Cheaper synthetic: forge baDecision[1] via observation
    * after a real run of testBasic-like setup with 3 processes
    * A-Casting and one not.  The detailed synthesis is deferred to
    * the end-to-end test below.
@@ -1136,7 +1136,7 @@ testBpr(
     qInit();
     dropSeed = 0xDEADBEEFu;
 
-    /* Bootstrap: each process A-Casts their value (binary 0 or 1
+    /* Bootstrap: each process A-Casts its value (binary 0 or 1
      * for this test; acasts[] strings reduce to first byte). */
     for (p = 0; p < 4; ++p) {
       struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4, MAX_PHASES)];
@@ -1251,7 +1251,7 @@ testBpr(
         check("BPR e2e: converged within budget", 0);
         break;
       }
-      /* If queue is empty AND no process retryed, we're idle: terminate. */
+      /* If queue is empty AND no process retried, we're idle: terminate. */
       if (!progress && Qhead == Qtail)
         break;
     }
@@ -1272,15 +1272,15 @@ testBpr(
   }
 }
 
-/*------------------------------------------------------------------------*/
-/*  Retry cursor coverage white-box                                        */
-/*                                                                        */
-/*  Verifies the cursor visits every owned Fig1 instance with retry      */
-/*  potential within a bounded number of calls.  Force several A-Cast   */
-/*  Fig1s into INITIATOR+!ECHOED state via A-Cast-from-other-processes          */
+/*--------------------------------------------------------------------------*/
+/*  Retry cursor coverage white-box                                         */
+/*                                                                          */
+/*  Verifies the cursor visits every owned Fig1 instance with retry         */
+/*  potential within a bounded number of calls.  Force several A-Cast       */
+/*  Fig1s into INITIATOR+!ECHOED state via A-Cast-from-other-processes      */
 /*  (pretend each process is the initiator); call Retry until either we've  */
-/*  seen all expected processes or hit a generous budget.                  */
-/*------------------------------------------------------------------------*/
+/*  seen all expected processes or hit a generous budget.                   */
+/*--------------------------------------------------------------------------*/
 
 static void
 testBprCursorCoverage(
@@ -1309,9 +1309,9 @@ testBprCursorCoverage(
 
   /* Each process A-Casts; their A-Cast Fig1 (process = self) becomes
    * INITIATOR+!ECHOED.  We sweep process 0's retry and verify it eventually
-   * surfaces ACAST_SEND/INITIAL for process 0's own process.  Then we feed
+   * surfaces ACAST_SEND/INITIAL for process 0's own A-Cast.  Then we feed
    * process 0 INITIALs from processes 1, 2, 3 (driving Rule 1 on their
-   * A-Cast Fig1s on process 0's instance), so process 0's view of those
+   * A-Cast Fig1s on process 0's instance), so process 0's copy of those
    * A-Cast Fig1s becomes ECHOED (sent to ECHO retry).
    * After that, process 0's retry should cycle through all 4 processes'
    * A-Cast Fig1s on subsequent calls. */
@@ -1333,7 +1333,7 @@ testBprCursorCoverage(
   /* Now process 0 has 4 A-Cast Fig1s with retry potential:
    *   acastF1(0): INITIATOR+!ECHOED -> INITIAL_ALL retry
    *   acastF1(1..3): ECHOED -> ECHO_ALL retry
-   * Sweep retry and assert all 4 processes surface in PROP_*. */
+   * Sweep retry and assert all 4 processes surface in ACAST_SEND. */
   memset(seen, 0, sizeof (seen));
   budget = 4 + 4 * 12 * 4 + 100;  /* one full cursor cycle + slack */
   for (call = 0; call < budget; ++call) {
@@ -1363,17 +1363,17 @@ testBprCursorCoverage(
     free(processes[p]);
 }
 
-/*------------------------------------------------------------------------*/
-/*  bkr94acsAcastAllEchoed white-box                                   */
-/*                                                                        */
-/*  Drives one process's view of process 0's A-Cast Fig1 with ECHO from     */
-/*  every process BEFORE any READY, so the echo bitmap reaches n before any  */
-/*  ACCEPT could freeze it.  The accessor must read 0 until the n-th      */
-/*  distinct echo sender, 1 thereafter, and survive the post-accept       */
-/*  freeze (it latched at n).  This is the application's retirement gate   */
-/*  for an INITIAL-paired side channel (PSK / signature) -- it must NOT    */
-/*  retire at the A-Cast's ACCEPTED.                                     */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  bkr94acsAcastAllEchoed white-box                                        */
+/*                                                                          */
+/*  Drives one process's instance of process 0's A-Cast Fig1 with ECHO from */
+/*  every process BEFORE any READY, so the echo bitmap reaches n before any */
+/*  ACCEPT could freeze it.  The accessor must read 0 until the n-th        */
+/*  distinct echo sender, 1 thereafter, and survive the post-accept         */
+/*  freeze (it latched at n).  This is the application's retirement gate    */
+/*  for an INITIAL-paired side channel (PSK / signature) -- it must NOT     */
+/*  retire at the A-Cast's ACCEPTED.                                        */
+/*--------------------------------------------------------------------------*/
 
 static void
 testAcastAllEchoed(
@@ -1420,15 +1420,15 @@ testAcastAllEchoed(
   free(a);
 }
 
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
 /*  Retry-process gate white-box                                            */
-/*                                                                        */
-/*  The 3-rule decision in bkr94acs.dtc's BPR section: BA decided 0       */
-/*  -> skip A-Cast Fig1 retry; BA undecided / decided 1 -> retry.       */
-/*  Force decision[1] = 0 directly and verify Retry never returns          */
-/*  PROP_* for process 1 across a full cursor sweep, while still           */
-/*  surfacing retries for process 0 (undecided).                           */
-/*------------------------------------------------------------------------*/
+/*                                                                          */
+/*  The 3-rule decision in bkr94acs.dtc's BPR section: BA decided 0         */
+/*  -> skip A-Cast Fig1 retry; BA undecided / decided 1 -> retry.           */
+/*  Force decision[1] = 0 directly and verify Retry never returns           */
+/*  ACAST_SEND for process 1 across a full cursor sweep, while still        */
+/*  surfacing retries for process 0 (undecided).                            */
+/*--------------------------------------------------------------------------*/
 
 /* Internal layout helpers from bkr94acs.c needed for the white-box poke.
  * Walking past the data[] header to reach the per-process decision
@@ -1506,8 +1506,8 @@ testBprProcessGate(
     if (process0Seen >= 3)
       break;
   }
-  check("BPR gate: process 0 (undecided) IS retryed", process0Seen >= 1);
-  check("BPR gate: process 1 (decided 0) NOT retryed", process1Seen == 0);
+  check("BPR gate: process 0 (undecided) IS retried", process0Seen >= 1);
+  check("BPR gate: process 1 (decided 0) NOT retried", process1Seen == 0);
   printf("    decided 0 process skipped (process0=%u, process1=%u over %u calls)\n",
          process0Seen, process1Seen, call + 1);
 
@@ -1530,22 +1530,22 @@ testBprProcessGate(
     if (process1Seen >= 1)
       break;
   }
-  check("BPR gate: process 1 (decided 1) IS retryed (post-decide)",
+  check("BPR gate: process 1 (decided 1) IS retried (post-decide)",
         process1Seen >= 1);
-  printf("    decided 1 process retryed (post-decide continuation, pitfall #1)\n");
+  printf("    decided 1 process retried (post-decide continuation, pitfall #1)\n");
 
   free(a);
 }
 
-/*------------------------------------------------------------------------*/
-/*  Byzantine retry test                                                   */
-/*                                                                        */
-/*  n=4 t=1.  Process 3 is byzantine: never sends its own messages           */
-/*  (silent withhold).  The 3 honest processes (0, 1, 2) bootstrap with       */
-/*  A-Cast and rely on each other's BPR + a small amount of input        */
-/*  message processing to converge.  Drop rate moderate (25%).            */
-/*  Verifies BPR retry + post-Step-2-fanout under t-byzantine.           */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Byzantine retry test                                                    */
+/*                                                                          */
+/*  n=4 t=1.  Process 3 is Byzantine: never sends its own messages          */
+/*  (silent withhold).  The 3 honest processes (0, 1, 2) bootstrap with     */
+/*  A-Cast and rely on each other's BPR + a small amount of input           */
+/*  message processing to converge.  Drop rate moderate (25%).              */
+/*  Verifies BPR retry + post-Step-2-fanout under t-Byzantine.              */
+/*--------------------------------------------------------------------------*/
 
 static void
 testBprByzantineSilent(
@@ -1562,10 +1562,10 @@ testBprByzantineSilent(
   unsigned int p;
   unsigned int q;
 
-  printf("\n  BPR byzantine silent process:\n");
+  printf("\n  BPR Byzantine silent process:\n");
 
   sz = bkr94acsSz(3, 0, MAX_PHASES);
-  /* Allocate honest processes + a byzantine slot for index symmetry */
+  /* Allocate honest processes + a Byzantine slot for index symmetry */
   for (p = 0; p < 4; ++p) {
     processes[p] = (struct bkr94acs *)calloc(1, sz);
     bkr94acsInit(processes[p], 3, 1, 0, MAX_PHASES, (unsigned char)p,
@@ -1576,7 +1576,7 @@ testBprByzantineSilent(
   qInit();
   dropSeed = 0xCAFEBABEu;
 
-  /* Honest processes 0, 1, 2 A-Cast; process 3 (byzantine) never A-Casts
+  /* Honest processes 0, 1, 2 A-Cast; process 3 (Byzantine) never A-Casts
    * and never sends anything. */
   val = 1;
   for (p = 0; p < 3; ++p) {
@@ -1584,13 +1584,13 @@ testBprByzantineSilent(
     bkr94acsAcast(processes[p], &val, iact);
     for (q = 0; q < 4; ++q) {
       dropSeed = dropSeed * 1103515245u + 12345u;
-      /* 12.5% drop (1/8): models lossy network on top of byzantine
+      /* 12.5% drop (1/8): models lossy network on top of Byzantine
        * silence.  At higher drop rates the simulator's bounded
        * MAX_MSGS queue fills with BPR retries faster than
        * actions are consumed, causing silent enqueue drops that
        * mask convergence -- a property of this test harness, not
        * BPR.  testBprHighDrop drives convergence under heavier
-       * loss with no byzantine process so the volume stays bounded. */
+       * loss with no Byzantine process so the volume stays bounded. */
       if (((dropSeed >> 16) & 7) == 0)
         continue;
       qPush(BKR94ACS_CLS_ACAST, (unsigned char)p, 0, 0,
@@ -1600,7 +1600,7 @@ testBprByzantineSilent(
   }
 
   /* Drive: drain queue (skipping any messages addressed to process 3
-   * to model the byzantine process ignoring inputs), then retry
+   * to model the Byzantine process ignoring inputs), then retry
    * honest processes, repeat. */
   totalSwept = 0;
   for (;;) {
@@ -1692,7 +1692,7 @@ testBprByzantineSilent(
 
     ++totalSwept;
     if (totalSwept > 500000) {
-      check("BPR byzantine: converged within budget", 0);
+      check("BPR Byzantine: converged within budget", 0);
       break;
     }
     if (!progress && Qhead == Qtail)
@@ -1704,9 +1704,9 @@ testBprByzantineSilent(
     results[p].subsetCnt = bkr94acsSubset(processes[p], results[p].subset);
   }
 
-  check("BPR byzantine: 3 honest processes complete",
+  check("BPR Byzantine: 3 honest processes complete",
         results[0].complete && results[1].complete && results[2].complete);
-  check("BPR byzantine: honest processes agree on subset",
+  check("BPR Byzantine: honest processes agree on subset",
         results[0].subsetCnt == results[1].subsetCnt
         && results[1].subsetCnt == results[2].subsetCnt
         && memcmp(results[0].subset, results[1].subset,
@@ -1716,23 +1716,23 @@ testBprByzantineSilent(
   /* Subset must contain all 3 honest processes (they all A-Cast
    * and reached Fig1 ACCEPT among the honest 3 -- 3 = n-t = 3
    * which satisfies BKR94 Lemma 2 Part A). */
-  check("BPR byzantine: |subset| >= n-t = 3",
+  check("BPR Byzantine: |subset| >= n-t = 3",
         results[0].subsetCnt >= 3);
-  printf("    n=4 t=1 silent byzantine: 3 honest converged, |SubSet|=%u in %u sweeps\n",
+  printf("    n=4 t=1 silent Byzantine: 3 honest converged, |SubSet|=%u in %u sweeps\n",
          results[0].subsetCnt, totalSwept);
 
   for (p = 0; p < 4; ++p)
     free(processes[p]);
 }
 
-/*------------------------------------------------------------------------*/
-/*  High-drop e2e                                                         */
-/*                                                                        */
-/*  Same harness as testBpr's e2e, drop rate parameterised.  At 90%       */
-/*  drop the bootstrap broadcast nearly always loses; convergence         */
-/*  must come from BPR retries.  Confirms BPR is sufficient under         */
-/*  pathological loss.                                                    */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  High-drop e2e                                                           */
+/*                                                                          */
+/*  Same harness as testBpr's e2e, drop rate parameterized.  At 90%         */
+/*  drop the bootstrap broadcast nearly always loses; convergence           */
+/*  must come from BPR retries.  Confirms BPR is sufficient under           */
+/*  pathological loss.                                                      */
+/*--------------------------------------------------------------------------*/
 
 static int
 runRetryOnlyE2e(
@@ -1902,38 +1902,38 @@ testBprHighDrop(
          rc == 0 ? "converged" : "FAILED", sweeps);
 }
 
-/*------------------------------------------------------------------------*/
-/*  EXHAUSTED handling: drive one BA's Fig4 to BRACHA87_EXHAUSTED and     */
-/*  verify the BKR94 layer surfaces it correctly.                         */
-/*                                                                        */
-/*  Setup: n=4, t=1, maxPhases=1, vLen=0, self=0.  We drive only one BA  */
-/*  (process=0) directly via bkr94acsBaInput, bypassing the        */
-/*  A-Cast layer.                                                       */
-/*                                                                        */
-/*  Per round, each of the 4 initiators' Fig1 is driven to ACCEPT at   */
+/*--------------------------------------------------------------------------*/
+/*  EXHAUSTED handling: drive one BA's Fig4 to BRACHA87_EXHAUSTED and       */
+/*  verify the BKR94 layer surfaces it correctly.                           */
+/*                                                                          */
+/*  Setup: n=4, t=1, maxPhases=1, vLen=0, self=0.  We drive only one BA     */
+/*  (process=0) directly via bkr94acsBaInput, bypassing the                 */
+/*  A-Cast layer.                                                           */
+/*                                                                          */
+/*  Per round, each of the 4 initiators' Fig1 is driven to ACCEPT at        */
 /*  process 0 by feeding INITIAL + 3 distinct READYs (>= 2t+1=3 readys =>   */
-/*  Bracha Rule 6 fires).  After the 3rd Fig1 ACCEPTs in a round,        */
-/*  Fig3RoundComplete fires and Fig4Round runs.  The 4th ACCEPT adds a   */
-/*  4th validation so that the next round's fig3IsValid call sees N(k-1) */
-/*  permissive (cnt[0]=cnt[1]=2 in a 4-element set, both reachable in    */
-/*  some n-t=3 subset), letting the next round's split values validate.  */
-/*                                                                        */
-/*  Values per round: (0, 0, 1, 1) across initiators (0,1,2,3).         */
-/*    sub=0 (k=0): N case 0 with n_msgs=3 (cnt 0,0,1) => exact 0.        */
-/*                 b->value := majority = 0.                             */
-/*    sub=1 (k=1): N case 1 with n_msgs=3 (cnt 0,0,1) => no strict       */
-/*                 majority => no D_FLAG, *result=0 permissive.          */
-/*                 b->value unchanged (still 0).                         */
-/*    sub=2 (k=2): n_msgs=3, dc[0]=dc[1]=0 (no D_FLAG flagged messages   */
+/*  Bracha Rule 6 fires).  After the 3rd Fig1 ACCEPTs in a round,           */
+/*  Fig3RoundComplete fires and Fig4Round runs.  The 4th ACCEPT adds a      */
+/*  4th validation so that the next round's fig3IsValid call sees N(k-1)    */
+/*  permissive (cnt[0]=cnt[1]=2 in a 4-element set, both reachable in       */
+/*  some n-t=3 subset), letting the next round's split values validate.     */
+/*                                                                          */
+/*  Values per round: (0, 0, 1, 1) across initiators (0,1,2,3).             */
+/*    sub=0 (k=0): N case 0 with n_msgs=3 (cnt 0,0,1) => exact 0.           */
+/*                 b->value := majority = 0.                                */
+/*    sub=1 (k=1): N case 1 with n_msgs=3 (cnt 0,0,1) => no strict          */
+/*                 majority => no D_FLAG, *result=0 permissive.             */
+/*                 b->value unchanged (still 0).                            */
+/*    sub=2 (k=2): n_msgs=3, dc[0]=dc[1]=0 (no D_FLAG flagged messages      */
 /*                 because no process set d in sub=1) => gt2T=gtT=0,        */
-/*                 n2Half=0 => coin path.  b->value := coin(0).          */
-/*                 !decideV && !haveDecided && ph+1=1 >= maxPhases=1     */
-/*                 => return BRACHA87_EXHAUSTED.                         */
-/*                                                                        */
-/*  Expectation: BKR94ACS_ACT_BA_EXHAUSTED for process=0 fires exactly    */
-/*  once; baDecision[0] becomes 0xFE; complete stays 0; subsequent       */
-/*  inputs do not retry EXHAUSTED.                                     */
-/*------------------------------------------------------------------------*/
+/*                 n2Half=0 => coin path.  b->value := coin(0).             */
+/*                 !decideV && !haveDecided && ph+1=1 >= maxPhases=1        */
+/*                 => return BRACHA87_EXHAUSTED.                            */
+/*                                                                          */
+/*  Expectation: BKR94ACS_ACT_BA_EXHAUSTED for process=0 fires exactly      */
+/*  once; baDecision[0] becomes 0xFE; complete stays 0; subsequent          */
+/*  inputs do not retry EXHAUSTED.                                          */
+/*--------------------------------------------------------------------------*/
 
 static unsigned int
 feedFig1Accept(
@@ -2039,7 +2039,7 @@ testExhausted(
  *
  * Pre-Rule-1: returns NULL (no flags set).
  * Post-Rule-1 (ECHOED only, no ACCEPT yet): returns NULL.  This is
- *   the regression for the recent .c tightening — pre-change the
+ *   the regression for the recent .c tightening -- pre-change the
  *   function returned the ECHOED-stored value, exposing potentially
  *   Byzantine-equivocated bytes that Bracha Lemma 2 doesn't protect.
  * Post-Rule-6 (ACCEPT): returns the accepted value.
@@ -2069,7 +2069,7 @@ testAcastValueGate(
   }
   bkr94acsInit(a, 3, 1, 0, MAX_PHASES, 0, testCoin, 0);
 
-  /* Pre-input: no flags set on any Fig1 → AcastValue returns NULL
+  /* Pre-input: no flags set on any Fig1 -> AcastValue returns NULL
    * for both self and non-self processes. */
   check("AcastValueGate: pre-input non-self returns NULL",
         bkr94acsAcastValue(a, 1) == 0);
@@ -2125,7 +2125,7 @@ testAcastValueGate(
  * READY for 'process' (its skip mask + accepted flag).  Returns 1 if seen.
  */
 static int
-findPropReady(
+findAcastReady(
   struct bkr94acs *a
  ,struct bracha87Retry *retry
  ,unsigned char process
@@ -2188,17 +2188,17 @@ testBprSkipAccept(
 
   /* Egress before accept: READY carries a non-null skip mask, accepted=0. */
   skip = 0; accepted = -1;
-  seen = findPropReady(a, &retry, 2, &skip, &accepted);
+  seen = findAcastReady(a, &retry, 2, &skip, &accepted);
   check("Egress: process-2 A-Cast READY surfaced", seen);
   check("Egress: READY carries non-null skip mask", skip != 0);
   check("Egress: READY accepted=0 before accept", accepted == 0);
 
   /* Ingress: process 1 announces accept of process-2 A-Cast; process 3 does
    * not.  The next READY skip marks 1 only -- a single process's accept
-   * touches only its own bit (byzantine-false-accept is thus contained). */
+   * touches only its own bit (Byzantine-false-accept is thus contained). */
   bkr94acsAcastAccepted(a, 2, 1);
   skip = 0; accepted = -1;
-  seen = findPropReady(a, &retry, 2, &skip, &accepted);
+  seen = findAcastReady(a, &retry, 2, &skip, &accepted);
   check("Ingress: READY still output (not all accepted)", seen);
   check("Ingress: skip marks process 1 (announced accept)",
         skip && BRACHA87_SKIP_TST(skip, 1));
@@ -2209,7 +2209,7 @@ testBprSkipAccept(
    * recorded, so egress .accepted flips to 1 and self's skip bit sets. */
   bkr94acsAcastInput(a, 2, BRACHA87_READY, 0, val, iact);
   skip = 0; accepted = -1;
-  seen = findPropReady(a, &retry, 2, &skip, &accepted);
+  seen = findAcastReady(a, &retry, 2, &skip, &accepted);
   check("Egress: process-2 READY still surfaced post-accept", seen);
   check("Egress: READY accepted=1 after self-accept", accepted == 1);
   check("Egress: skip marks self (index 0) after self-accept",
@@ -2220,7 +2220,7 @@ testBprSkipAccept(
   bkr94acsAcastAccepted(a, 2, 2);
   bkr94acsAcastAccepted(a, 2, 3);
   skip = 0; accepted = -1;
-  seen = findPropReady(a, &retry, 2, &skip, &accepted);
+  seen = findAcastReady(a, &retry, 2, &skip, &accepted);
   check("Quiescence: process-2 A-Cast READY retired at all-accepted",
         !seen);
   printf("    egress skip/accepted, ingress setters, all-accepted quiescence\n");
@@ -2232,7 +2232,7 @@ testBprSkipAccept(
  * Implementation Pitfall 17 (Note 14): an INITIAL must come from the
  * instance's designated initiator (process for acasts, initiator
  * for BA).  A non-initiator INITIAL is a forged broadcast and
- * must be dropped — otherwise Rule 1 echoes it and the (n+t)/2+1 echo
+ * must be dropped -- otherwise Rule 1 echoes it and the (n+t)/2+1 echo
  * cascade carries a value the correct process never sent to a false
  * ACCEPT.  Honest generators never produce this (from == process even
  * for an equivocating process), so it needs an explicit injection.

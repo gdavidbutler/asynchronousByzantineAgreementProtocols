@@ -3,7 +3,7 @@
 #
 # Figure 3 - Correctness Enforcement (VALID sets)
 #
-# Figure 3 specialises Figure 2 with the VALID^k correctness
+# Figure 3 specializes Figure 2 with the VALID^k correctness
 # predicate.  Where Figure 2 counts arrivals, Figure 3 counts
 # arrivals satisfying VALID^k; round k is complete when the
 # validated count reaches n-t.

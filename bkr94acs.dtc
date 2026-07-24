@@ -14,23 +14,25 @@
 # include that process's A-Cast in the agreed subset).  The
 # rules below describe what the ACS layer does in response to
 # the events those underlying primitives surface; the primitives
-# themselves are specified in bracha87.dtc.
+# themselves are specified in bracha87Fig1.dtc (A-Cast) and
+# bracha87Fig3.dtc / bracha87Fig4.dtc (BA).
 #
-# In this deployment Q(j) = 1 - the BKR94 predicate "P_j has
-# broadcast a value" - is realised by Bracha87's Figure 1
-# accepting the reliable broadcast of P_j's A-Cast.  Bracha's
-# Lemma 4 makes this realisation satisfy BKR94's assumption (2)
-# on Q (if any honest accepts, every honest eventually accepts).
-# The realisation choice is recorded in bkr94acsToC.dtc and is
-# not a paper concern.
+# In this deployment Q(j) = 1 means P_j has broadcast a value,
+# realized by Bracha87's Figure 1 accepting the reliable
+# broadcast of P_j's A-Cast.  Bracha's Lemma 4 makes this
+# realization satisfy BKR94's assumption (2) on Q (if any honest
+# accepts, every honest eventually accepts).  Q is application-
+# supplied and BKR94's own MPC construction instantiated it
+# differently, so this choice is recorded in bkr94acsToC.dtc and
+# is not a paper concern.
 #
 # The Step 2 trigger is "n-t BA outputs of 1," not "n-t Q(j) = 1
 # events".  These coincide in benign runs but diverge under
 # asynchrony or Byzantine scheduling; only the BA-output-1
 # trigger satisfies Part A case (i) of the BKR94 Lemma 2 proof.
-# An optimisation seen in derived presentations fires Step 2 on the
-# count of Q(j) = 1 events would be the wrong reading of the
-# paper.
+# An optimization seen in derived presentations, which fires Step 2
+# on the count of Q(j) = 1 events, would be the wrong reading of
+# the paper.
 #
 # Inputs (the situation when an ACS-layer event is processed;
 # j is the process to which the event refers):
@@ -144,7 +146,7 @@ no,"Q(j) = 1",
 #
 # Three-rule single-input single-output guard with no
 # interaction with the Rules 1-3 dispatch and no test ordering
-# to optimise; captured in C as a switch over the BA decision
+# to optimize; captured in C as a switch over the BA decision
 # byte rather than a sub-table (same call as the Fig1 initiator
 # INITIAL retry gate -- see bracha87Fig1.dtc BPR section).
 # The pitfall #1 (post-decide continuation) reasoning lives in

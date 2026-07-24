@@ -7,11 +7,14 @@
  * and the Bracha 1987 paper notes (Bracha87.txt).  No part of this
  * file inspects bracha87.c or any other implementation source.
  *
- * Properties exercised:
- *   - Validity      (all honest A-Cast v -> all honest decide v)
- *   - Agreement     (no two honest decide differently for same broadcast)
- *   - Totality      (one honest accepts/decides -> all honest do, modulo
- *                    delivery -- driven by completing message exchange)
+ * Properties exercised (Bracha87.txt lemma statements):
+ *   - Validity      Lemma 4 -- if a correct process p broadcasts v, all
+ *                   correct processes accept v
+ *   - Agreement     Lemma 2 -- if two correct processes accept u and v,
+ *                   then u = v
+ *   - Totality      Lemma 3 -- if a correct process accepts v, every
+ *                   correct process eventually accepts v (modulo delivery
+ *                   -- driven here by completing the message exchange)
  *   - API edges     (Sz/Init contracts, Initiator idempotency, dedup,
  *                    BPR retry invariants documented in the header)
  *   - Byzantine     (t < n/3 faulty injecting equivocations / arbitrary
@@ -610,7 +613,7 @@ main(int argc, char **argv)
   /* ---------------------------------------------------------------- */
   /* Header: bracha87Fig1Skip returns the suppress bitmap (process p       */
   /* skipped iff bit p set) -- INITIAL_ALL=echoed, ECHO_ALL=readied,    */
-  /* READY_ALL=accepted, 0 for null/non-retry.  bracha87Fig1ProcessAccept */
+  /* READY_ALL=accepted, 0 for null/non-retry.  bracha87Fig1ProcessAccepted */
   /* sets the accepted bit; all-n-accepted retires READY retry.        */
   {
     struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
@@ -841,7 +844,7 @@ main(int argc, char **argv)
   /* Strategy: run 3 rounds (0, 1, 2) with split values that produce  */
   /* no >2t (d,v) and no >t (d,v) majority -- specifically, give each */
   /* round n-t messages with values lacking any D_FLAG, so the         */
-  /* decideV / setVMajority paths cannot fire and the coin path runs. */
+  /* decideV / setDMajority paths cannot fire and the coin path runs. */
   /* At sub=2 of phase 0 (the only phase with maxPhases=1), no        */
   /* decision means EXHAUSTED.                                        */
   {

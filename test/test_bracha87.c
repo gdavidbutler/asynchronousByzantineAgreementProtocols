@@ -1,7 +1,7 @@
 /*
- * Tests for bracha87.[hc] — Bracha 1987 Figures 1, 3, 4.
+ * Tests for bracha87.[hc] -- Bracha 1987 Figures 1, 3, 4.
  *
- * Simulates all-to-all message passing for Figure 1 (reliable broadcast)
+ * Simulates all-to-all delivery for Figure 1 (reliable broadcast)
  * and round-by-round processing for Figure 4 (consensus).
  * Labeled output, sequential simulation.
  */
@@ -430,7 +430,7 @@ simFig4(
 }
 
 /*************************************************************************/
-/*  Figure 1 — unit-level rule tests                                     */
+/*  Figure 1 -- unit-level rule tests                                    */
 /*************************************************************************/
 
 /*
@@ -969,7 +969,7 @@ testFig1AsymEquivoc(
 
 /*
  * Test that shuffled message delivery doesn't break Fig1.
- * The protocol is asynchronous — message order must not matter.
+ * The protocol is asynchronous -- message order must not matter.
  */
 static void
 testFig1Shuffled(
@@ -1022,7 +1022,7 @@ testFig1Shuffled(
 }
 
 /*************************************************************************/
-/*  Figure 3 — multi-round tests                                         */
+/*  Figure 3 -- multi-round tests                                        */
 /*************************************************************************/
 
 /*
@@ -1054,7 +1054,7 @@ testNfn(
 }
 
 /*************************************************************************/
-/*  Figure 2 — round accumulation tests                                  */
+/*  Figure 2 -- round accumulation tests                                 */
 /*************************************************************************/
 
 static void
@@ -1068,7 +1068,7 @@ testFig2(
   unsigned char values[4];
   unsigned int cnt;
 
-  printf("\nFigure 2 — Abstract protocol round\n");
+  printf("\nFigure 2 -- Abstract protocol round\n");
 
   /* n=4, t=1, n-t=3, maxRounds=3 */
   sz = bracha87Fig2Sz(3, 3);
@@ -1128,7 +1128,7 @@ testFig2(
 }
 
 /*************************************************************************/
-/*  Figure 3 — VALID set tests                                           */
+/*  Figure 3 -- VALID set tests                                          */
 /*************************************************************************/
 
 static void
@@ -1143,7 +1143,7 @@ testFig3(
   unsigned char values[4];
   unsigned int cnt;
 
-  printf("\nFigure 3 — VALID sets\n");
+  printf("\nFigure 3 -- VALID sets\n");
 
   /*
    * Basic VALID^0 tests
@@ -1457,7 +1457,7 @@ testFig3Reeval(
 
   /*
    * Arrived dedup blocks re-submission.
-   * Sender 0 broadcasts value=1 for round 1 (wrong — N=0).
+   * Sender 0 broadcasts value=1 for round 1 (wrong -- N=0).
    * After re-evaluation it stays invalid.
    * Re-submitting sender 0 with the correct value must be blocked
    * (paper: each process broadcasts once per round).
@@ -1514,7 +1514,7 @@ testFig3Reeval(
  * Test re-cascade when VALID^{k-1} grows past n-t.
  *
  * Round k-1 first reaches n-t with one composition (giving N result A).
- * A round-k message arrives carrying value B != A — stored, rejected.
+ * A round-k message arrives carrying value B != A -- stored, rejected.
  * More round-(k-1) messages arrive after first crossing; the new
  * full-set composition gives N result B.  The stored round-k B
  * message must be re-evaluated and validated.
@@ -1632,7 +1632,7 @@ testFig3RecascadeOnGrowth(
 }
 
 /*************************************************************************/
-/*  Figure 4 — step-by-step tests                                        */
+/*  Figure 4 -- step-by-step tests                                       */
 /*************************************************************************/
 
 /*
@@ -1953,7 +1953,7 @@ testFig4PostDecide(
  * Test Fig4 post-decide value preservation under adversarial inputs.
  *
  * Bracha post-decide-continuation (pitfall #1) requires a decided
- * process to keep broadcasting its decision value — not whatever
+ * process to keep broadcasting its decision value -- not whatever
  * majority/(d, majority) the next phase's validated set would suggest.
  * The .dtc-faithful Fig4 dispatch zeroes setMajority and setDMajority
  * when have_decided=yes; this test exercises that explicitly by
@@ -2088,7 +2088,7 @@ testFig4EdgeCases(
  * Under N's tie-break-to-0 (matching Fig4Round case 0 state
  * transition), an even-nt subset that ties produces 0.  VALID^k
  * is existential over n-t subsets of VALID^{k-1}, so value 0 is
- * legitimate whenever some subset ties — i.e. cnt[0] >= (nt+1)/2
+ * legitimate whenever some subset ties -- i.e. cnt[0] >= (nt+1)/2
  * (uniform formula; equals nt/2 for even nt, nt/2+1 for odd).
  * Value 1 is legitimate iff cnt[1] >= nt/2+1 (strict majority).
  * Both reachable => permissive; only one => exact.
@@ -2107,9 +2107,9 @@ testFig4SubsetMajority(
 
   /*
    * n=5, t=1, n-t=4 (even), cnt[0]=2, cnt[1]=3, n_msgs=5.
-   *   Result 0 reachable: cnt[0]=2 >= (nt+1)/2 = 2.  Yes — subset
+   *   Result 0 reachable: cnt[0]=2 >= (nt+1)/2 = 2.  Yes -- subset
    *     {0,0,1,1} ties, tie-break to 0.
-   *   Result 1 reachable: cnt[1]=3 >= nt/2+1 = 3.  Yes — subset
+   *   Result 1 reachable: cnt[1]=3 >= nt/2+1 = 3.  Yes -- subset
    *     {0,1,1,1} has strict majority 1.
    *   Both reachable => permissive; both 0 and 1 accepted.
    */
@@ -2142,7 +2142,7 @@ testFig4SubsetMajority(
 
   /*
    * n=4, t=1, n-t=3 (odd). Regression baseline.
-   * Round 1: 4 messages — sender 0 sends 0; senders 1,2,3 send 1.
+   * Round 1: 4 messages -- sender 0 sends 0; senders 1,2,3 send 1.
    * Majority is 1. Value 0 rejected, value 1 accepted.
    */
   sz = bracha87Fig4Sz(3, 10);
@@ -2169,7 +2169,7 @@ testFig4SubsetMajority(
 
   /*
    * n=8, t=2, n-t=6 (even), cnt[0]=3, cnt[1]=5, n_msgs=8.
-   *   Result 0 reachable: cnt[0]=3 >= (nt+1)/2 = 3.  Yes — subset
+   *   Result 0 reachable: cnt[0]=3 >= (nt+1)/2 = 3.  Yes -- subset
    *     {0,0,0,1,1,1} ties, tie-break to 0.
    *   Result 1 reachable: cnt[1]=5 >= nt/2+1 = 4.  Yes.
    *   Both reachable => permissive; both 0 and 1 accepted.
@@ -2330,7 +2330,7 @@ testFig4SubsetMajorityBoundary(
  * Test that D_FLAG injection is rejected when fig4Nfn denies it.
  *
  * Round 3i+1 broadcasts (validated via fig4Nfn case 0) carry the
- * step-1 majority — never D_FLAG.  An attacker injecting (q, 1,
+ * step-1 majority -- never D_FLAG.  An attacker injecting (q, 1,
  * v|D_FLAG) must be rejected.  Same for case 1 fall-through (no
  * majority anywhere) and case 2 permissive (round 3(i+1) outputs
  * are always plain binary).
@@ -2387,7 +2387,7 @@ testFig4DflagInjection(
   free(b);
 
   /*
-   * Case 1 PERMISSIVE — first branch (cnt[v]*2 > N, D_FLAG legitimate).
+   * Case 1 PERMISSIVE -- first branch (cnt[v]*2 > N, D_FLAG legitimate).
    * To exercise this we need round 1 (= step-1 broadcasts) to validate
    * with a strict majority of one value, and then submit round 2
    * messages.  fig4Nfn case 1 should return permissive with
@@ -2445,7 +2445,7 @@ testFig4DflagInjection(
   bracha87Fig3Accept(f3, 0, 4, 0, &vc);
   /* Round 1: only validate 0s (Ns of round 1 says "round 1 must = 0"
    * because round 0 is all-0; so round 1 v=1 messages are rejected).
-   * To get cnt[0]=cnt[1] in VALID^1 we'd need to swap N — but for
+   * To get cnt[0]=cnt[1] in VALID^1 we'd need to swap N -- but for
    * testing the rejection we just need the case 1 fall-through path
    * to fire.  Construct it differently: use round 0 mixed so that
    * round 1 N is permissive (case 0), accepting both 0 and 1. */
@@ -3012,9 +3012,9 @@ simComposed(
 
   /* Lemma 1: all honest readys agree per (initiator, round) */
   for (r = 0; r < maxRounds; ++r) {
-    unsigned int orig;
+    unsigned int initiator;
 
-    for (orig = 0; orig < n; ++orig) {
+    for (initiator = 0; initiator < n; ++initiator) {
       unsigned char rdVal;
       int rdSeen;
       const unsigned char *rv;
@@ -3026,7 +3026,7 @@ simComposed(
 
         if (byzantineMask & (1u << i))
           continue;
-        fi = states[i].fig1[r * n + orig];
+        fi = states[i].fig1[r * n + initiator];
         if ((fi->flags & BRACHA87_F1_RDSENT)) {
           rv = bracha87Fig1Value(fi);
           if (rv) {
@@ -3045,9 +3045,9 @@ simComposed(
 
   /* Lemma 2: all honest accepts agree per (initiator, round) */
   for (r = 0; r < maxRounds; ++r) {
-    unsigned int orig;
+    unsigned int initiator;
 
-    for (orig = 0; orig < n; ++orig) {
+    for (initiator = 0; initiator < n; ++initiator) {
       unsigned char acVal;
       int acSeen;
       const unsigned char *av;
@@ -3059,7 +3059,7 @@ simComposed(
 
         if (byzantineMask & (1u << i))
           continue;
-        fi = states[i].fig1[r * n + orig];
+        fi = states[i].fig1[r * n + initiator];
         if ((fi->flags & BRACHA87_F1_ACCEPTED)) {
           av = bracha87Fig1Value(fi);
           if (av) {
@@ -3720,9 +3720,9 @@ testFig1Bpr(
    * progress through every sent-state combination (echoed
    * via Rule 1, rdSent via Rule 4 / 5, accepted via Rule 6) just
    * like a non-initiator Fig1.  Verify Bpr retry outputs at each
-   * combination match the non-initiator retry rules: once ECHOED,
-   * INITIAL retry stops; ECHO retry takes over; RDSENT adds
-   * READY retry; ACCEPTED keeps both (gap 3).
+   * combination match the minimal-retry rules: ECHOED does NOT
+   * retire INITIAL (pitfall 11); RDSENT adds READY retry; ACCEPTED
+   * retires INITIAL and ECHO, leaving READY only (pitfall 10).
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
@@ -3995,7 +3995,7 @@ testFig1SkipAccept(
  * threshold intersection contains at least one correct process (Lemma 1).
  * In integer arithmetic: threshold = (n+t)/2 + 1.
  *
- * For n=3t+1 (n+t odd), ceil((n+t)/2) == (n+t)/2+1 — no difference.
+ * For n=3t+1 (n+t odd), ceil((n+t)/2) == (n+t)/2+1 -- no difference.
  * For n=3t+2 (n+t even), ceil((n+t)/2) == (n+t)/2, which is too low.
  *
  * n=5, t=1: n+t=6. Correct threshold = 6/2+1 = 4 (not ceil(6/2)=3).
@@ -4312,7 +4312,7 @@ testFig1ArrayRetry(
 
   /*
    * Allocate 5 fresh instances; nothing sent.  Full sweep outputs
-   * 0 — pre-broadcast / fully-shutdown signal, NOT a per-tick exit
+   * 0 -- pre-broadcast / fully-shutdown signal, NOT a per-tick exit
    * marker.
    */
   for (i = 0; i < 5; ++i) {
@@ -4428,7 +4428,7 @@ testFig1ArrayRetry(
 
 
 /*************************************************************************/
-/*  Main — sequential test cases                                         */
+/*  Main -- sequential test cases                                        */
 /*************************************************************************/
 
 int
@@ -4445,13 +4445,13 @@ main(
   printf("===================\n\n");
 
   /*
-   * Figure 1 — Reliable Broadcast
+   * Figure 1 -- Reliable Broadcast
    *
    * All-honest tests: every process should accept.
    */
   memcpy(val, "TEST", VLEN);
 
-  printf("Figure 1 — Reliable Broadcast\n");
+  printf("Figure 1 -- Reliable Broadcast\n");
 
   /* n=1 t=0 */
   a = simFig1(1, 0, 0, val, 0);
@@ -4566,11 +4566,11 @@ main(
   testFig1EvenNplusT();
 
   /*
-   * Figure 4 — Consensus
+   * Figure 4 -- Consensus
    *
    * All-honest, all processes see all n messages per round.
    */
-  printf("\nFigure 4 — Consensus\n");
+  printf("\nFigure 4 -- Consensus\n");
 
   {
     unsigned char inits[MAX_N];
@@ -4676,12 +4676,12 @@ main(
   }
 
   /*
-   * Figure 2 — Abstract protocol round
+   * Figure 2 -- Abstract protocol round
    */
   testFig2();
 
   /*
-   * Figure 3 — VALID sets
+   * Figure 3 -- VALID sets
    */
   testFig3();
   testFig3Deep();
@@ -4689,7 +4689,7 @@ main(
   testFig3RecascadeOnGrowth();
 
   /*
-   * Figure 4 — step-by-step, post-decide, edge cases, multi-phase
+   * Figure 4 -- step-by-step, post-decide, edge cases, multi-phase
    */
   testFig4Steps();
   testFig4Step3Boundary();
@@ -4704,7 +4704,7 @@ main(
   testFig4Byzantine();
 
   /*
-   * Composed simulation — full Fig1+Fig3+Fig4 pipeline
+   * Composed simulation -- full Fig1+Fig3+Fig4 pipeline
    */
   testComposed();
   testComposedShuffled();

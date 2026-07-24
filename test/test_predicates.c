@@ -40,8 +40,9 @@ check(const char *what, int cond) {
 /* ----------------------------------------------------------------
  * Paper-direct fig4N reference, by explicit n-t subset enumeration.
  *
- * Per the Bracha 1987 paper, sub-round s of round k = 3i + s applies
- * one of three rules to its n-t input messages:
+ * Sub-round s of round k = 3i + s (0-based here; the paper's step
+ * s+1 at its 1-based round 3i+s+1) applies one of three rules to
+ * its n-t input messages:
  *
  *   s=0: result := majority of the n-t base values (tie -> 0).
  *   s=1: result := v|D_FLAG iff strictly more than half of n

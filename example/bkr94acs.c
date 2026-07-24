@@ -19,25 +19,25 @@
  */
 
 /*
- * bkr94acs.c — Standalone demonstration of the BKR94 Asynchronous
+ * bkr94acs.c -- Standalone demonstration of the BKR94 Asynchronous
  * Common Subset protocol (Ben-Or/Kelmer/Rabin 1994 Section 4
  * Figure 3, composing Bracha87 Figures 1 and 4).
  *
  * Each of N processes A-Casts a string value. The BKR94 ACS protocol
  * ensures all honest processes agree on the same common subset of
  * A-Casts (at least n-t). The subset is then sorted
- * deterministically so every process outputs the same ordering — the
- * core of atomic broadcast.
+ * deterministically so every process outputs the same ordering -- the
+ * deterministic ordering the caller chooses over SubSet.
  *
  * Scope: this demo runs in a single process with a synchronous
- * deterministic in-memory queue — every input is delivered, no
- * loss, no reordering, no asynchrony. It exercises the protocol
- * state machines and the BPR retry but does NOT exercise the
- * deployment-time termination policies (silence-threshold + K-sweep
- * gate, abandonment) needed under real asynchronous transport;
- * those are inherently coupled to message loss, partial ordering,
+ * in-memory queue -- every message is delivered, no loss, no
+ * asynchrony; delivery order is deterministic unless -s is given.
+ * It exercises the protocol state machines and the BPR retry but
+ * does NOT exercise the deployment-time abandonment policy (the
+ * barren-sweep gate) needed under real asynchronous transport;
+ * that is inherently coupled to message loss, partial ordering,
  * and the failure modes those introduce. See README.md
- * "Termination policy" for the design.
+ * "Abandonment" for the design.
  *
  * Build:
  *   (from project root) make example_bkr94acs
@@ -54,31 +54,30 @@
 #include <string.h>
 #include "bkr94acs.h"
 
-/*------------------------------------------------------------------------*/
-/*  Constants                                                             */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Constants                                                               */
+/*--------------------------------------------------------------------------*/
 
 #define MAX_PROCESSES  16
 #define MAX_PHASES 10
 #define MAX_VLEN   256  /* max A-Cast bytes (including \0); bracha87 vLen encoding 255 */
 
-/*------------------------------------------------------------------------*/
-/*  Message queue — simulated network                                     */
-/*                                                                        */
-/*  Two message classes share one queue:                                   */
-/*    BKR94ACS_CLS_ACAST  — Fig1 messages carrying A-Cast values      */
-/*    BKR94ACS_CLS_BA — Fig1 messages for per-process binary        */
-/*                             BA                                  */
-/*                                                                        */
-/*  Class + Bracha87 type (and, for BA, the binary value + D_FLAG) */
-/*  ride in ONE clsType byte per the canonical packed-byte layout in      */
-/*  bkr94acs.h.  qPush composes it; the process loop recovers it.  A      */
-/*  ACAST carries its value in value[]; BA folds its payload     */
-/*  into clsType and leaves value[] unused.  A READY also carries the     */
-/*  BKR94ACS_ACCEPTED bit (bit 4, class-independent): egress sets it from */
-/*  the act's .accepted flag, ingress routes it to bkr94acs*Accepted --   */
-/*  the BPR per-process READY retire and the all-n quiescence gate.          */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Message queue -- simulated network                                      */
+/*                                                                          */
+/*  Two message classes share one queue:                                    */
+/*    BKR94ACS_CLS_ACAST -- Fig1 messages carrying A-Cast values            */
+/*    BKR94ACS_CLS_BA    -- Fig1 messages for per-process binary BA         */
+/*                                                                          */
+/*  Class + Bracha87 type (and, for BA, the binary value + D_FLAG)          */
+/*  ride in ONE clsType byte per the canonical packed-byte layout in        */
+/*  bkr94acs.h.  qPush composes it; the process loop recovers it.  An       */
+/*  ACAST carries its value in value[]; BA folds its payload into           */
+/*  clsType and leaves value[] unused.  A READY also carries the            */
+/*  BKR94ACS_ACCEPTED bit (bit 4, class-independent): egress sets it from   */
+/*  the act's .accepted flag, ingress routes it to bkr94acs*Accepted --     */
+/*  the BPR per-process READY retire and the all-n quiescence gate.         */
+/*--------------------------------------------------------------------------*/
 
 struct msg {
   unsigned char clsType;     /* class|type; +ACCEPTED on a READY;
@@ -183,9 +182,9 @@ qShuffle(
   }
 }
 
-/*------------------------------------------------------------------------*/
-/*  Coin — deterministic alternating, adequate for demonstration only.    */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Coin -- deterministic alternating, adequate for demonstration only.     */
+/*--------------------------------------------------------------------------*/
 
 static unsigned char
 demoCoin(
@@ -196,9 +195,9 @@ demoCoin(
   return (phase % 2);
 }
 
-/*------------------------------------------------------------------------*/
-/*  Verbose helpers                                                       */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Verbose helpers                                                         */
+/*--------------------------------------------------------------------------*/
 
 static const char *
 typeName(
@@ -212,9 +211,9 @@ typeName(
   }
 }
 
-/*------------------------------------------------------------------------*/
-/*  String comparison for qsort                                           */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  String comparison for qsort                                             */
+/*--------------------------------------------------------------------------*/
 
 static int
 strPtrCmp(
@@ -224,9 +223,9 @@ strPtrCmp(
   return (strcmp(*(const char *const *)a, *(const char *const *)b));
 }
 
-/*------------------------------------------------------------------------*/
-/*  Main simulation                                                       */
-/*------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/*  Main simulation                                                         */
+/*--------------------------------------------------------------------------*/
 
 int
 main(
@@ -347,7 +346,7 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Bootstrap: each process A-Casts their value                           */
+  /*  Bootstrap: each process A-Casts its value                           */
   /*                                                                      */
   /*  bkr94acsAcast marks the local A-Cast Fig1 as the broadcast      */
   /*  initiator and outputs one BKR94ACS_ACT_ACAST_SEND action (.type =     */
@@ -358,12 +357,12 @@ main(
 
   for (i = 0; i < n; ++i) {
     struct bkr94acsAct acastAct;
-    unsigned int nProp;
+    unsigned int nActs;
 
-    nProp = bkr94acsAcast(processes[i],
+    nActs = bkr94acsAcast(processes[i],
                             (const unsigned char *)acasts[i],
                             &acastAct);
-    if (nProp != 1)
+    if (nActs != 1)
       continue;
     for (j = 0; j < n; ++j)
       qPush(BKR94ACS_CLS_ACAST, acastAct.process, 0, 0,
@@ -420,7 +419,7 @@ main(
      */
     if (cls == BKR94ACS_CLS_ACAST) {
       if (verbose)
-        printf("process %u: recv PROP %s(process=%u) from %u\n",
+        printf("process %u: recv ACAST %s(process=%u) from %u\n",
                (unsigned)m->to, typeName(type),
                (unsigned)m->process, (unsigned)m->from);
 
@@ -439,7 +438,7 @@ main(
       baValue = (unsigned char)
         (((m->clsType >> 3) & 1) | (m->clsType & BRACHA87_D_FLAG));
       if (verbose)
-        printf("process %u: recv CON %s(process=%u, round=%u, val=%u) from %u\n",
+        printf("process %u: recv BA %s(process=%u, round=%u, val=%u) from %u\n",
                (unsigned)m->to, typeName(type),
                (unsigned)m->process, (unsigned)m->round,
                (unsigned)baValue, (unsigned)m->from);
@@ -463,7 +462,7 @@ main(
         if (!acts[k].value)
           break;
         if (verbose)
-          printf("process %u: -> PROP %s(process=%u)\n",
+          printf("process %u: -> ACAST %s(process=%u)\n",
                  (unsigned)m->to, typeName(acts[k].type),
                  (unsigned)acts[k].process);
         for (p = 0; p < n; ++p) {
@@ -485,7 +484,7 @@ main(
 
       case BKR94ACS_ACT_BA_SEND:
         if (verbose)
-          printf("process %u: -> CON %s(process=%u, round=%u, bcaster=%u, val=%u)\n",
+          printf("process %u: -> BA %s(process=%u, round=%u, initiator=%u, val=%u)\n",
                  (unsigned)m->to, typeName(acts[k].type),
                  (unsigned)acts[k].process, (unsigned)acts[k].round,
                  (unsigned)acts[k].initiator,
@@ -536,7 +535,7 @@ main(
   /*  Retry tick                                                           */
   /*                                                                      */
   /*  In a real deployment, the BPR retry is called once per tick.         */
-  /*  Looping until idle would flood the network — see bracha87.h's       */
+  /*  Looping until idle would flood the network -- see bracha87.h's       */
   /*  flood warning.  The call is shown here as a representative tick.    */
   /*----------------------------------------------------------------------*/
 
@@ -581,7 +580,7 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
-  /*  Drain the post-retry retry queue.  Receivers dedup at Fig1Input,    */
+  /*  Drain the post-retry queue.  Receivers dedup at Fig1Input,          */
   /*  so under perfect delivery these retries produce no new state.       */
   /*----------------------------------------------------------------------*/
 
@@ -664,7 +663,7 @@ main(
       }
 
       cnt = bkr94acsSubset(processes[i], subset);
-      printf("Process %u: common subset (%u/%u acasts):\n", i, cnt, n);
+      printf("Process %u: common subset (%u/%u A-Casts):\n", i, cnt, n);
 
       /* Collect A-Cast strings for sorted output */
       for (j = 0; j < cnt; ++j) {
@@ -674,7 +673,7 @@ main(
         sorted[j] = pv ? (const char *)pv : "(null)";
       }
 
-      /* Sort lexicographically — deterministic ordering */
+      /* Sort lexicographically -- deterministic ordering */
       qsort(sorted, cnt, sizeof (sorted[0]), strPtrCmp);
 
       for (j = 0; j < cnt; ++j)
@@ -719,7 +718,7 @@ usage:
     "usage: example_bkr94acs [-v] [-s seed] n t acast0 acast1 ...\n"
     "  n            total processes (1-%d)\n"
     "  t            max Byzantine faults\n"
-    "  A-Cast*    per-process A-Cast strings\n"
+    "  acast*      per-process A-Cast strings\n"
     "  -v           verbose: trace every message\n"
     "  -s seed      shuffle seed (0 = ordered delivery)\n",
     MAX_PROCESSES);
