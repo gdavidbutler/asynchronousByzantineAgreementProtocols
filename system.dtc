@@ -1,0 +1,294 @@
+# System - the obligation layer above ACS
+#
+# Companion decision tables to system.md, which is the governing
+# specification for this layer.  There is no governing paper: the
+# layers below are governed by Bracha87.txt and BKR94ACS.txt, the
+# reliability discipline by SRC84.txt; this layer's rules are derived
+# in system.md and captured here in dtc form so they are
+# mutually exclusive and exhaustive by construction -- the property
+# BKR94's arithmetic circuit had and an unbounded application stream
+# lacks.
+#
+# Every rule here is DERIVED -- forced by the requirements (R1-R4;
+# R4 = participant tolerance) and implementer obligations (O1-O5)
+# recorded in system.md, which cites the derivation at each rule.  The R4 advance rule is
+# ENCODED below: the join, maintain, and admit tables all gate on
+# "possession of the prior round" and "tolerance elapsed".  The O2
+# two-grain artifact rides the SERVE act (.want and .have); the O5
+# maintenance birth and precedence are the maintain table; the O3
+# adopt rule is documented in the witness-event section at the end
+# and lives as a C guard in systemWitness -- an independent rule
+# set deliberately kept out of this dispatch.  Deliberately
+# CALLER-SIDE (system.md "Mechanization status"): the serve walk's
+# concurrency cap and rotation, the cross-kind byte budget,
+# PRESENT's byte staging and subset-witness retirement, and the
+# R2b resume constraint.  Identifier and predicate translation,
+# and the entry-point/discriminator decisions, live in
+# systemToC.dtc; the implementation is system.[hc].
+#
+# Events and discriminator.  Four events drive this layer -- the
+# first three through the merged dispatch, the witness event
+# through its C guard; each event's wrapper applies only its own
+# outputs and discards the rest, exactly as bracha87Fig1Input
+# applies paper outputs and bracha87Fig1Bpr applies retry outputs
+# from one merged dispatch:
+#
+#   act received      - an act for round R, verified within chain
+#                       reach (O1), arrives.  Traffic beyond chain
+#                       reach is not evidence: its sender still
+#                       owes it, so it re-arrives on that sender's
+#                       own retry cadence once reach extends.  A
+#                       caller MAY hold it as a latency
+#                       optimization; nothing in the calculus
+#                       requires the hold, and an unbounded hold
+#                       of ahead traffic would be the remote
+#                       inflation lever the Byzantine notes'
+#                       retention-budget claim excludes.  (The
+#                       FRONTIER round's possession indications
+#                       are the opposite case and MUST be held --
+#                       their carrier retires at quiescence; see
+#                       systemReceived's C11 obligation.)  Applies:
+#                       "deliver the act to the live instance",
+#                       "record serve owed to the sender for R",
+#                       "record participation owed for R".
+#   launch opportunity - the process is free to start an instance;
+#                       paced by the tick (a wire rate limit, never
+#                       a correctness clock).  Applies:
+#                       "join the oldest owed round",
+#                       "maintain the next round",
+#                       "admit the next round".
+#   retention event   - a possession record changed for retained
+#                       round R, or the retention budget is pressed.
+#                       Applies: "release R".
+#   witness event     - a served assertion for the frontier round,
+#                       validated by the caller against its
+#                       candidate composition (O3).  Applies the
+#                       adopt rule (C guard; see the witness-event
+#                       section at the end of this file).
+#
+# A possession indication riding an inbound act is recorded as an
+# ingress side effect before the dispatch (reads following writes);
+# the tables see the post-record state.  Serving, once owed, is
+# walked and paced C-side; its per-process retirement is the
+# possession record consulted below, its per-round retirement is
+# release.
+#
+# Inputs (all are authenticated local facts; Byzantine analysis of
+# each is in system.md):
+#   "round R relative to self"    { R COMPLETE and retained,
+#                                   R COMPLETE and released,
+#                                   R is the live instance,
+#                                   R not yet reached }
+#                                 - with one instance at a time and
+#                                   rounds taken in order, every R
+#                                   is exactly one of these.
+#                                   Traffic strictly ahead of the
+#                                   frontier is refused BEFORE the
+#                                   dispatch (beyond chain reach --
+#                                   Model), so "R not yet reached"
+#                                   is entered only by the frontier
+#                                   round awaiting its join
+#   "sender has evidenced possession of R"     { yes, no }
+#   "own instance live"                        { yes, no }
+#   "participation owed to any round"          { yes, no }
+#   "application value pending"                { yes, no }
+#   "own backlog drained"                      { yes, no }
+#   "possession of the prior round"  { short of n-t,
+#                                      at n-t, short of all n,
+#                                      at all n, or not retained }
+#                                 - composition possession of the
+#                                   round below the frontier (the R4
+#                                   advance signal); a round no
+#                                   longer retained reads as met --
+#                                   duty is bounded by retention
+#   "tolerance elapsed"                        { yes, no }
+#                                 - T_p sweeps of this process's own
+#                                   re-offers since the n-t signal
+#                                   (caller-counted, like the barren
+#                                   sweeps that drive abandon)
+#   "identity maintenance due"                 { yes, no }
+#                                 - O5: authorship budget exhaustion
+#                                   forces an identity-maintenance
+#                                   round (caller fact, self-local)
+#   "all n processes have evidenced possession of R"   { yes, no }
+#   "retention budget exceeded"                { yes, no }
+#   "R is the oldest retained round"           { yes, no }
+#
+# Outputs:
+#   "deliver the act to the live instance"     { yes, no }
+#   "record serve owed to the sender for R"    { yes, no }
+#   "record participation owed for R"          { yes, no }
+#   "join the oldest owed round"               { yes, no }
+#   "maintain the next round"                  { yes, no }
+#   "admit the next round"                     { yes, no }
+#   "release R"                                { yes, no }
+#
+# (The O3 "adopt the frontier round" rule is documented in the
+# witness-event section below and lives as a C guard -- an
+# independent rule set kept out of this dispatch.)
+
+# ================================================================
+# Act received for round R
+# ================================================================
+
+# Delivery.  An act for the live instance's round feeds that
+# instance; every other class of round has no live consumer.
+@"deliver the act to the live instance","round R relative to self"
+yes,"R is the live instance"
+no,"R COMPLETE and retained"
+no,"R COMPLETE and released"
+no,"R not yet reached"
+
+# SERVE birth (DERIVED -- system.md SERVE, two grains per O2: the
+# act carries .want -- who is owed -- and .have -- which members'
+# content this process can serve; composition serves always, held
+# members beside it, and a member held nowhere reachable is a
+# per-member out-of-band hole, never the round's failure).
+# Want is observed, never inferred from
+# self-need: an act of R from a process not recorded as possessing
+# R is that process wanting R, and a completer that retains R owes
+# it a serve.  A released round is out-of-band territory; a
+# not-yet-reached round is not ours to serve.  The record is per
+# (round, sender); re-arrivals while a serve is owed change
+# nothing (the record is already made -- same shape as the sent
+# flags one level down).
+@"record serve owed to the sender for R","round R relative to self","sender has evidenced possession of R"
+yes,"R COMPLETE and retained",no
+no,"R COMPLETE and retained",yes
+no,"R is the live instance",
+no,"R COMPLETE and released",
+no,"R not yet reached",
+
+# PARTICIPATE birth (DERIVED -- system.md R2a: the papers' own
+# participation premise makes this conformance, not policy).  Verified
+# existence of a round this process has not reached obliges this
+# process to take part: a round, once observed, is every correct
+# process's obligation, whether or not this process has anything
+# of its own to send.  Without this rule a drained process stops
+# taking part and the tail of a sequence stalls below the n-t
+# threshold.  The act itself is also held for delivery when the
+# round is joined (C-side mechanics).
+@"record participation owed for R","round R relative to self"
+yes,"R not yet reached"
+no,"R is the live instance"
+no,"R COMPLETE and retained"
+no,"R COMPLETE and released"
+
+# ================================================================
+# Launch opportunity
+# ================================================================
+
+# Owed work before chosen work (DERIVED).  Discharging an existing
+# obligation outranks assuming a new one, and joining a round also
+# enters this process's own pending value -- participation is
+# contribution, so no value waits longer by joining than by
+# admitting.  The oldest owed round is joined first (rounds are
+# taken in order); selecting it is C-side enumeration driven by
+# this go-signal.  The join is NOT gated on the backlog:
+# capacity may defer only chosen work (M2); owed work is paced by
+# the tick alone (M1 -- local state never defers discharge).  The
+# join IS gated on the R4 advance rule -- tolerance governs joins
+# exactly as admissions, else a process that launches the next
+# round immediately voids every honest hold; bounded deferral
+# preserves R2a's eventual participation.
+@"join the oldest owed round","own instance live","participation owed to any round","possession of the prior round","tolerance elapsed"
+no,yes,,,
+yes,no,yes,"at all n, or not retained",
+yes,no,yes,"at n-t, short of all n",yes
+no,no,yes,"at n-t, short of all n",no
+no,no,yes,"short of n-t",
+no,no,no,,
+
+# MAINTAIN (DERIVED -- system.md O5, ADMIT birth (b)).  Identity
+# maintenance outranks the pending value and must not consume it:
+# a maintenance round's win is not the value's win, so the
+# contribution is the deployment's maintenance form, never the
+# staged application value.  Chosen work, so it sits under the
+# same self-capacity and R4 advance gates as ADMIT; owed work
+# still outranks it.
+@"maintain the next round","own instance live","participation owed to any round","identity maintenance due","own backlog drained","possession of the prior round","tolerance elapsed"
+no,yes,,,,,
+no,no,yes,,,,
+no,no,no,no,,,
+no,no,no,yes,no,,
+yes,no,no,yes,yes,"at all n, or not retained",
+yes,no,no,yes,yes,"at n-t, short of all n",yes
+no,no,no,yes,yes,"at n-t, short of all n",no
+no,no,no,yes,yes,"short of n-t",
+
+# ADMIT (DERIVED -- system.md M2 + the R4 advance rule; O5
+# precedence: maintenance outranks the value).  A
+# process takes on the next round of its own volition only when
+# nothing is owed, no maintenance is due, a value is pending, its
+# own backlog has drained -- every result its prior advances
+# accepted has reached its decision stream, the one capacity fact
+# a blind transmitter can know: emission is a put on a carrier
+# contracted to eventually drain (A4) and attests nothing beyond
+# the attempt -- AND the
+# prior round's duty is discharged: all n possess it (or it left
+# retention), or n-t possess it and T_p sweeps of tolerance have
+# funded the tail's catch-up.  Admitting while prior results sit
+# undelivered, or while the tail's funded window still runs,
+# is the defect class this gate exists to prevent: intake
+# outrunning discharge until an honest process sheds from the
+# sequence and the fault budget is spent on load.
+@"admit the next round","own instance live","participation owed to any round","identity maintenance due","application value pending","own backlog drained","possession of the prior round","tolerance elapsed"
+no,yes,,,,,,
+no,no,yes,,,,,
+no,no,no,yes,,,,
+no,no,no,no,no,,,
+no,no,no,no,yes,no,,
+yes,no,no,no,yes,yes,"at all n, or not retained",
+yes,no,no,no,yes,yes,"at n-t, short of all n",yes
+no,no,no,no,yes,yes,"at n-t, short of all n",no
+no,no,no,no,yes,yes,"short of n-t",
+
+# ================================================================
+# Witness event for the frontier round -- not in this dispatch
+# ================================================================
+#
+# ADOPT (DERIVED -- system.md O3, the wanting side).  A served
+# assertion the caller validated against its candidate composition
+# accumulates one distinct-server witness (the record marks only
+# its sender; self is not a server of its own adoption).  At t+1
+# distinct servers at least one is honest, so the composition is
+# acceptable: signal adoption exactly once:
+#
+#   adopt the frontier round  iff  post-record distinct witnesses
+#   reach t+1 AND adoption is not already signaled.
+#
+# The caller then closes through the ONE consume region --
+# systemComplete -- which a racing own COMPLETE enters first at
+# most, superseding the book (the supersession is structural:
+# complete clears the book either way).  Below threshold nothing
+# is acted on: accumulating evidence is M1-protected state, not a
+# fact.
+#
+# Kept OUT of the merged dispatch on the bkr94acs BPR-gate
+# precedent: its two inputs appear in no other rule, so it is an
+# INDEPENDENT rule set -- merging it would duplicate its DAG at
+# every leaf of the launch/received rules for zero ordering
+# insight (the decisionTableCompiler discipline: independent
+# problems get separate dispatches; threshold-and-latch guards
+# with no test-ordering question stay in C).  Implemented as the
+# C early-output in systemWitness.
+
+# ================================================================
+# Retention event for round R
+# ================================================================
+
+# RELEASE (DERIVED -- system.md RETAIN/O4: release advances the
+# derivation floor and the retention floor together).  A retained round releases when provably no
+# correct process can still need it -- all n have evidenced
+# possession (with at most t forgeries, reaching n requires every
+# correct process's true indication; no count-threshold shortcut)
+# -- or when the retention budget forces eviction, oldest retained
+# round first.  Eviction under budget is the one place bounded
+# memory overrides M1; the evicted round becomes out-of-band
+# territory, which is the accept-loss boundary, not a protocol
+# stop.
+@"release R","all n processes have evidenced possession of R","retention budget exceeded","R is the oldest retained round"
+yes,yes,,
+yes,no,yes,yes
+no,no,yes,no
+no,no,no,

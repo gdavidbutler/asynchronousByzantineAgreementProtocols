@@ -1,0 +1,163 @@
+  if (fanoutTriggered == 1)
+    goto L2;
+  /* "input-0 fanout already triggered" = no */
+  if (postCountAllN == 0)
+    goto L5;
+  /* "post-output BA-output count == n" = yes */
+  if (postCountOneAtNT == 0)
+    goto L8;
+  /* "post-output BA-output-1 count >= n-t" = yes */
+  if (acsEvent == BKR94ACS_ACS_EVENT_BA0)
+    goto L11;
+  if (acsEvent == BKR94ACS_ACS_EVENT_BA1)
+    goto L14;
+  /* "input 0 to all unentered BAs" = no */
+  /* "kind of ACS event" = Q(j) = 1 */
+  /* "output SubSet" = no */
+  doInput0Fanout = 0;
+  doOutputSubset = 0;
+L16:;
+  if (inputToBAj == BKR94ACS_ENTER_NONE)
+    goto L17;
+  /* "input 1 to BA_j" = no */
+  doInput1 = 0;
+L19:;
+  if (inputToBAj == BKR94ACS_ENTER_ONE)
+    goto L20;
+  /* "input to BA_j" = 0 */
+  goto Ldone;
+L20:;
+  /* "input to BA_j" = 1 */
+  goto Ldone;
+L17:;
+  /* "input 1 to BA_j" = yes */
+  /* "input to BA_j" = none */
+  doInput1 = 1;
+  goto Ldone;
+L14:;
+  /* "input 0 to all unentered BAs" = yes */
+  /* "input 1 to BA_j" = no */
+  /* "kind of ACS event" = BA_j outputs 1 */
+  /* "output SubSet" = yes */
+  doInput0Fanout = 1;
+  doInput1 = 0;
+  doOutputSubset = 1;
+L22:;
+  if (inputToBAj == BKR94ACS_ENTER_NONE)
+    goto L23;
+  goto L19;
+L23:;
+  /* "input to BA_j" = none */
+  goto Ldone;
+L11:;
+  /* "input 0 to all unentered BAs" = no */
+  /* "input 1 to BA_j" = no */
+  /* "kind of ACS event" = BA_j outputs 0 */
+  /* "output SubSet" = yes */
+  doInput0Fanout = 0;
+  doInput1 = 0;
+  doOutputSubset = 1;
+  goto L22;
+L8:;
+  /* "input 0 to all unentered BAs" = no */
+  /* "post-output BA-output-1 count >= n-t" = no */
+  doInput0Fanout = 0;
+L25:;
+  if (acsEvent == BKR94ACS_ACS_EVENT_BA0)
+    goto L26;
+  if (acsEvent == BKR94ACS_ACS_EVENT_BA1)
+    goto L29;
+  /* "kind of ACS event" = Q(j) = 1 */
+  /* "output SubSet" = no */
+  doOutputSubset = 0;
+  goto L16;
+L29:;
+  /* "input 1 to BA_j" = no */
+  /* "kind of ACS event" = BA_j outputs 1 */
+  /* "output SubSet" = yes */
+  doInput1 = 0;
+  doOutputSubset = 1;
+  goto L22;
+L26:;
+  /* "input 1 to BA_j" = no */
+  /* "kind of ACS event" = BA_j outputs 0 */
+  /* "output SubSet" = yes */
+  doInput1 = 0;
+  doOutputSubset = 1;
+  goto L22;
+L5:;
+  /* "output SubSet" = no */
+  /* "post-output BA-output count == n" = no */
+  doOutputSubset = 0;
+  if (postCountOneAtNT == 0)
+    goto L32;
+  /* "post-output BA-output-1 count >= n-t" = yes */
+  if (acsEvent == BKR94ACS_ACS_EVENT_BA0)
+    goto L35;
+  if (acsEvent == BKR94ACS_ACS_EVENT_BA1)
+    goto L38;
+  /* "input 0 to all unentered BAs" = no */
+  /* "kind of ACS event" = Q(j) = 1 */
+  doInput0Fanout = 0;
+  goto L16;
+L38:;
+  /* "input 0 to all unentered BAs" = yes */
+  /* "input 1 to BA_j" = no */
+  /* "kind of ACS event" = BA_j outputs 1 */
+  doInput0Fanout = 1;
+  doInput1 = 0;
+  goto L22;
+L35:;
+  /* "input 0 to all unentered BAs" = no */
+  /* "input 1 to BA_j" = no */
+  /* "kind of ACS event" = BA_j outputs 0 */
+  doInput0Fanout = 0;
+  doInput1 = 0;
+  goto L22;
+L32:;
+  /* "input 0 to all unentered BAs" = no */
+  /* "post-output BA-output-1 count >= n-t" = no */
+  doInput0Fanout = 0;
+L40:;
+  if (acsEvent == BKR94ACS_ACS_EVENT_BA0)
+    goto L41;
+  if (acsEvent == BKR94ACS_ACS_EVENT_BA1)
+    goto L44;
+  /* "kind of ACS event" = Q(j) = 1 */
+  goto L16;
+L44:;
+  /* "input 1 to BA_j" = no */
+  /* "kind of ACS event" = BA_j outputs 1 */
+  doInput1 = 0;
+  goto L22;
+L41:;
+  /* "input 1 to BA_j" = no */
+  /* "kind of ACS event" = BA_j outputs 0 */
+  doInput1 = 0;
+  goto L22;
+L2:;
+  /* "input 0 to all unentered BAs" = no */
+  /* "input-0 fanout already triggered" = yes */
+  doInput0Fanout = 0;
+  if (postCountAllN == 0)
+    goto L47;
+  /* "post-output BA-output count == n" = yes */
+  if (postCountOneAtNT == 0)
+    goto L50;
+  /* "post-output BA-output-1 count >= n-t" = yes */
+  goto L25;
+L50:;
+  /* "post-output BA-output-1 count >= n-t" = no */
+  goto L25;
+L47:;
+  /* "output SubSet" = no */
+  /* "post-output BA-output count == n" = no */
+  doOutputSubset = 0;
+  if (postCountOneAtNT == 0)
+    goto L53;
+  /* "post-output BA-output-1 count >= n-t" = yes */
+  goto L40;
+L53:;
+  /* "post-output BA-output-1 count >= n-t" = no */
+  goto L40;
+Ldone:;

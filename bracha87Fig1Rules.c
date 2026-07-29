@@ -1,0 +1,440 @@
+  if (ecGtHalfNT == 0)
+    goto L2;
+  /* "echo-count(v) > (n+t)/2" = yes */
+  if (haveEchoed == 0)
+    goto L5;
+  /* "have echoed" = yes */
+  /* "retry (echo, v)" = yes */
+  /* "send (echo, v)" = no */
+  retryEcho = 1;
+  sendEcho = 0;
+  if (haveSentReady == 0)
+    goto L8;
+L9:;
+  /* "have sent ready" = yes */
+  /* "retry (ready, v)" = yes */
+  /* "send (ready, v)" = no */
+  retryReady = 1;
+  sendReady = 0;
+  if (rdGe2TPlus1 == 0)
+    goto L11;
+  /* "ready-count(v) >= 2t+1" = yes */
+  if (rdGeTPlus1 == 0)
+    goto L14;
+  /* "ready-count(v) >= t+1" = yes */
+L16:;
+  if (type == BRACHA87_ECHO)
+    goto L17;
+L19:;
+  if (type == BRACHA87_INITIAL)
+    goto L20;
+  /* "accept(v)" = yes */
+  /* "kind of message" = (ready, v) */
+  acceptV = 1;
+  goto Ldone;
+L20:;
+  /* "accept(v)" = no */
+  /* "kind of message" = (initial, v) */
+  acceptV = 0;
+  goto Ldone;
+L17:;
+  /* "accept(v)" = no */
+  /* "kind of message" = (echo, v) */
+  acceptV = 0;
+  goto Ldone;
+L14:;
+  /* "ready-count(v) >= t+1" = no */
+  goto L16;
+L11:;
+  /* "accept(v)" = no */
+  /* "ready-count(v) >= 2t+1" = no */
+  acceptV = 0;
+  if (rdGeTPlus1 == 0)
+    goto L23;
+  /* "ready-count(v) >= t+1" = yes */
+L25:;
+  if (type == BRACHA87_ECHO)
+    goto L26;
+L28:;
+  if (type == BRACHA87_INITIAL)
+    goto L29;
+  /* "kind of message" = (ready, v) */
+  goto Ldone;
+L29:;
+  /* "kind of message" = (initial, v) */
+  goto Ldone;
+L26:;
+  /* "kind of message" = (echo, v) */
+  goto Ldone;
+L23:;
+  /* "ready-count(v) >= t+1" = no */
+  goto L25;
+L8:;
+  /* "have sent ready" = no */
+  /* "retry (ready, v)" = no */
+  retryReady = 0;
+  if (rdGe2TPlus1 == 0)
+    goto L32;
+  /* "ready-count(v) >= 2t+1" = yes */
+  if (rdGeTPlus1 == 0)
+    goto L35;
+  /* "ready-count(v) >= t+1" = yes */
+  if (type == BRACHA87_ECHO)
+    goto L38;
+L39:;
+  if (type == BRACHA87_INITIAL)
+    goto L41;
+L42:;
+  /* "accept(v)" = yes */
+  /* "kind of message" = (ready, v) */
+  /* "send (ready, v)" = yes */
+  acceptV = 1;
+  sendReady = 1;
+  goto Ldone;
+L41:;
+  /* "accept(v)" = no */
+  /* "kind of message" = (initial, v) */
+  /* "send (ready, v)" = no */
+  acceptV = 0;
+  sendReady = 0;
+  goto Ldone;
+L38:;
+  /* "accept(v)" = no */
+  /* "kind of message" = (echo, v) */
+  /* "send (ready, v)" = yes */
+  acceptV = 0;
+  sendReady = 1;
+  goto Ldone;
+L35:;
+  /* "ready-count(v) >= t+1" = no */
+  if (type == BRACHA87_ECHO)
+    goto L38;
+  /* "send (ready, v)" = no */
+  sendReady = 0;
+  goto L19;
+L32:;
+  /* "accept(v)" = no */
+  /* "ready-count(v) >= 2t+1" = no */
+  acceptV = 0;
+  if (rdGeTPlus1 == 0)
+    goto L46;
+  /* "ready-count(v) >= t+1" = yes */
+  if (type == BRACHA87_ECHO)
+    goto L49;
+L50:;
+  if (type == BRACHA87_INITIAL)
+    goto L52;
+L53:;
+  /* "kind of message" = (ready, v) */
+  /* "send (ready, v)" = yes */
+  sendReady = 1;
+  goto Ldone;
+L52:;
+  /* "kind of message" = (initial, v) */
+  /* "send (ready, v)" = no */
+  sendReady = 0;
+  goto Ldone;
+L49:;
+  /* "kind of message" = (echo, v) */
+  /* "send (ready, v)" = yes */
+  sendReady = 1;
+  goto Ldone;
+L46:;
+  /* "ready-count(v) >= t+1" = no */
+  if (type == BRACHA87_ECHO)
+    goto L49;
+  /* "send (ready, v)" = no */
+  sendReady = 0;
+  goto L28;
+L5:;
+  /* "have echoed" = no */
+  /* "retry (echo, v)" = no */
+  retryEcho = 0;
+  if (haveSentReady == 0)
+    goto L57;
+  /* "have sent ready" = yes */
+  /* "retry (ready, v)" = yes */
+  /* "send (ready, v)" = no */
+  retryReady = 1;
+  sendReady = 0;
+  if (rdGe2TPlus1 == 0)
+    goto L60;
+  /* "ready-count(v) >= 2t+1" = yes */
+  if (rdGeTPlus1 == 0)
+    goto L63;
+  /* "ready-count(v) >= t+1" = yes */
+  /* "send (echo, v)" = yes */
+  sendEcho = 1;
+  goto L16;
+L63:;
+  /* "ready-count(v) >= t+1" = no */
+L65:;
+  if (type == BRACHA87_ECHO)
+    goto L66;
+L67:;
+  if (type == BRACHA87_INITIAL)
+    goto L69;
+  /* "accept(v)" = yes */
+  /* "kind of message" = (ready, v) */
+  /* "send (echo, v)" = no */
+  acceptV = 1;
+  sendEcho = 0;
+  goto Ldone;
+L69:;
+  /* "accept(v)" = no */
+  /* "kind of message" = (initial, v) */
+  /* "send (echo, v)" = yes */
+  acceptV = 0;
+  sendEcho = 1;
+  goto Ldone;
+L66:;
+  /* "accept(v)" = no */
+  /* "kind of message" = (echo, v) */
+  /* "send (echo, v)" = yes */
+  acceptV = 0;
+  sendEcho = 1;
+  goto Ldone;
+L60:;
+  /* "accept(v)" = no */
+  /* "ready-count(v) >= 2t+1" = no */
+  acceptV = 0;
+  if (rdGeTPlus1 == 0)
+    goto L72;
+  /* "ready-count(v) >= t+1" = yes */
+  /* "send (echo, v)" = yes */
+  sendEcho = 1;
+  goto L25;
+L72:;
+  /* "ready-count(v) >= t+1" = no */
+L74:;
+  if (type == BRACHA87_ECHO)
+    goto L75;
+L76:;
+  if (type == BRACHA87_INITIAL)
+    goto L78;
+  /* "kind of message" = (ready, v) */
+  /* "send (echo, v)" = no */
+  sendEcho = 0;
+  goto Ldone;
+L78:;
+  /* "kind of message" = (initial, v) */
+  /* "send (echo, v)" = yes */
+  sendEcho = 1;
+  goto Ldone;
+L75:;
+  /* "kind of message" = (echo, v) */
+  /* "send (echo, v)" = yes */
+  sendEcho = 1;
+  goto Ldone;
+L57:;
+  /* "have sent ready" = no */
+  /* "retry (ready, v)" = no */
+  retryReady = 0;
+  if (rdGe2TPlus1 == 0)
+    goto L81;
+  /* "ready-count(v) >= 2t+1" = yes */
+  if (rdGeTPlus1 == 0)
+    goto L84;
+  /* "ready-count(v) >= t+1" = yes */
+  /* "send (echo, v)" = yes */
+  sendEcho = 1;
+  if (type == BRACHA87_ECHO)
+    goto L87;
+L89:;
+  if (type == BRACHA87_INITIAL)
+    goto L41;
+  goto L42;
+L87:;
+  /* "accept(v)" = no */
+  /* "kind of message" = (echo, v) */
+  /* "send (ready, v)" = no */
+  acceptV = 0;
+  sendReady = 0;
+  goto Ldone;
+L84:;
+  /* "ready-count(v) >= t+1" = no */
+  /* "send (ready, v)" = no */
+  sendReady = 0;
+  goto L65;
+L81:;
+  /* "accept(v)" = no */
+  /* "ready-count(v) >= 2t+1" = no */
+  acceptV = 0;
+  if (rdGeTPlus1 == 0)
+    goto L91;
+  /* "ready-count(v) >= t+1" = yes */
+  /* "send (echo, v)" = yes */
+  sendEcho = 1;
+  if (type == BRACHA87_ECHO)
+    goto L94;
+L96:;
+  if (type == BRACHA87_INITIAL)
+    goto L52;
+  goto L53;
+L94:;
+  /* "kind of message" = (echo, v) */
+  /* "send (ready, v)" = no */
+  sendReady = 0;
+  goto Ldone;
+L91:;
+  /* "ready-count(v) >= t+1" = no */
+  /* "send (ready, v)" = no */
+  sendReady = 0;
+  goto L74;
+L2:;
+  /* "echo-count(v) > (n+t)/2" = no */
+  if (haveEchoed == 0)
+    goto L98;
+  /* "have echoed" = yes */
+  /* "retry (echo, v)" = yes */
+  /* "send (echo, v)" = no */
+  retryEcho = 1;
+  sendEcho = 0;
+  if (haveSentReady == 0)
+    goto L101;
+  goto L9;
+L101:;
+  /* "have sent ready" = no */
+  /* "retry (ready, v)" = no */
+  retryReady = 0;
+  if (rdGe2TPlus1 == 0)
+    goto L103;
+  /* "ready-count(v) >= 2t+1" = yes */
+  if (rdGeTPlus1 == 0)
+    goto L106;
+  /* "ready-count(v) >= t+1" = yes */
+  if (type == BRACHA87_ECHO)
+    goto L87;
+  goto L39;
+L106:;
+  /* "ready-count(v) >= t+1" = no */
+  /* "send (ready, v)" = no */
+  sendReady = 0;
+  goto L16;
+L103:;
+  /* "accept(v)" = no */
+  /* "ready-count(v) >= 2t+1" = no */
+  acceptV = 0;
+  if (rdGeTPlus1 == 0)
+    goto L110;
+  /* "ready-count(v) >= t+1" = yes */
+  if (type == BRACHA87_ECHO)
+    goto L94;
+  goto L50;
+L110:;
+  /* "ready-count(v) >= t+1" = no */
+  /* "send (ready, v)" = no */
+  sendReady = 0;
+  goto L25;
+L98:;
+  /* "have echoed" = no */
+  /* "retry (echo, v)" = no */
+  retryEcho = 0;
+  if (haveSentReady == 0)
+    goto L114;
+  /* "have sent ready" = yes */
+  /* "retry (ready, v)" = yes */
+  /* "send (ready, v)" = no */
+  retryReady = 1;
+  sendReady = 0;
+  if (rdGe2TPlus1 == 0)
+    goto L117;
+  /* "ready-count(v) >= 2t+1" = yes */
+  if (rdGeTPlus1 == 0)
+    goto L120;
+  /* "ready-count(v) >= t+1" = yes */
+  if (type == BRACHA87_ECHO)
+    goto L123;
+  /* "send (echo, v)" = yes */
+  sendEcho = 1;
+  goto L19;
+L123:;
+  /* "accept(v)" = no */
+  /* "kind of message" = (echo, v) */
+  /* "send (echo, v)" = no */
+  acceptV = 0;
+  sendEcho = 0;
+  goto Ldone;
+L120:;
+  /* "ready-count(v) >= t+1" = no */
+L125:;
+  if (type == BRACHA87_ECHO)
+    goto L123;
+  goto L67;
+L117:;
+  /* "accept(v)" = no */
+  /* "ready-count(v) >= 2t+1" = no */
+  acceptV = 0;
+  if (rdGeTPlus1 == 0)
+    goto L127;
+  /* "ready-count(v) >= t+1" = yes */
+  if (type == BRACHA87_ECHO)
+    goto L130;
+  /* "send (echo, v)" = yes */
+  sendEcho = 1;
+  goto L28;
+L130:;
+  /* "kind of message" = (echo, v) */
+  /* "send (echo, v)" = no */
+  sendEcho = 0;
+  goto Ldone;
+L127:;
+  /* "ready-count(v) >= t+1" = no */
+L132:;
+  if (type == BRACHA87_ECHO)
+    goto L130;
+  goto L76;
+L114:;
+  /* "have sent ready" = no */
+  /* "retry (ready, v)" = no */
+  retryReady = 0;
+  if (rdGe2TPlus1 == 0)
+    goto L134;
+  /* "ready-count(v) >= 2t+1" = yes */
+  if (rdGeTPlus1 == 0)
+    goto L137;
+  /* "ready-count(v) >= t+1" = yes */
+  if (type == BRACHA87_ECHO)
+    goto L140;
+  /* "send (echo, v)" = yes */
+  sendEcho = 1;
+  goto L89;
+L140:;
+  /* "accept(v)" = no */
+  /* "kind of message" = (echo, v) */
+  /* "send (echo, v)" = no */
+  /* "send (ready, v)" = no */
+  acceptV = 0;
+  sendEcho = 0;
+  sendReady = 0;
+  goto Ldone;
+L137:;
+  /* "ready-count(v) >= t+1" = no */
+  /* "send (ready, v)" = no */
+  sendReady = 0;
+  goto L125;
+L134:;
+  /* "accept(v)" = no */
+  /* "ready-count(v) >= 2t+1" = no */
+  acceptV = 0;
+  if (rdGeTPlus1 == 0)
+    goto L143;
+  /* "ready-count(v) >= t+1" = yes */
+  if (type == BRACHA87_ECHO)
+    goto L146;
+  /* "send (echo, v)" = yes */
+  sendEcho = 1;
+  goto L96;
+L146:;
+  /* "kind of message" = (echo, v) */
+  /* "send (echo, v)" = no */
+  /* "send (ready, v)" = no */
+  sendEcho = 0;
+  sendReady = 0;
+  goto Ldone;
+L143:;
+  /* "ready-count(v) >= t+1" = no */
+  /* "send (ready, v)" = no */
+  sendReady = 0;
+  goto L132;
+Ldone:;
