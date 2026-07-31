@@ -428,19 +428,19 @@ Notes.
   run, adoption at 9 of 16 seeds).  LAGGARD is OUT OF MODEL there,
   verified rather than assumed (seam 680-698).
 
-## 10. Caller obligations C1-C11
+## 10. Caller obligations C1-C12
 
 C1-C6 are the Mechanization-status caller list in the order it states
-them (md 1484-1541); the composed seam cites C1 and C6 by those
+them (md 1507-1541); the composed seam cites C1 and C6 by those
 numbers.  C7-C11 were caller halves the spec consumed but did not
 enumerate; on 2026-07-25 the architect landed C7 (I10's caller half,
-md 1520-1528) and C11 (the possession-evidence return leg plus the
-O1-inference translation, md 1529-1541) in that list, appended after
+md 1543-1551) and C11 (the possession-evidence return leg plus the
+O1-inference translation, md 1552-1564) in that list, appended after
 C6 so the cited order of C1-C6 is unmoved.  C8-C10 remain reference
 labels for obligations stated elsewhere in the spec (A9's second
 clause, A6's honest gates, the sequential-entry premise).  The same
 landing added a COMPLETION analog to C6's void clause (md
-1506-1513): a close consuming the round voids any unconsumed ADOPT
+1529-1536): a close consuming the round voids any unconsumed ADOPT
 for it.  Its matched red landed the same day (architect-ordered):
 W_L2_NOCLOSEVOID, 53 failures at 16 seeds with 32 unvoided debts
 counted -- and 9 of its 25 E firings occur at PLAIN/LAGGARD with
@@ -450,6 +450,18 @@ the WRONG round, so an honest schedule reaches the red.  Its
 mute-liar face also wedges the correct cohort outright (the
 BYZ-SILENT block), so the clause is load-bearing for liveness
 beside L6.
+
+C12 was landed 2026-07-30 by the same pattern and for the same
+reason -- a half the proofs consume and the spec had not enumerated
+as an obligation: evidence is presented for the round its IDENTITY
+proves, never for the round its byte names (md 1565-1586).  It was
+found by the layer's first caller, whose ingress table banked
+possession indications on the byte; the Model already states the
+fact (an act is OF a round by its identity) and A9 already pinned
+the SENDER coordinate of a recorded bit, but no caller half bound
+the ingress round argument.  system.h carries it at both ingress
+entries; system.dtc's act-received preamble speaks it beside C11's
+hold (comment-only -- no dispatch input changed).
 
 | obligation | arm | status | evidence | repro |
 | --- | --- | --- | --- | --- |
@@ -470,6 +482,7 @@ beside L6.
 | C9 A6 honest gates | W_A6_PIN0 / PIN1 | GREEN | 12643, 16095 | prem |
 | C10 sequential entry | none | UNCOVERED | out of model | -- |
 | C11 hold, re-present | M_SEAM_NOPEND | RED | 11, seam 301 | glue |
+| C12 round argument | none | UNCOVERED | needs distance >= 256 | -- |
 
 Notes.
 
@@ -490,6 +503,18 @@ Notes.
   contract section I, which pins that the record a held-then-
   re-presented indication reaches is byte-identical to the record a
   timely one reaches, with a non-vacuity arm (ctr 52-55, seam 301-311).
+- C12 is UNCOVERED for the same structural reason as the I1 lookahead
+  below, and by the same arithmetic: the falsifying arrival must come
+  from a sender 256 or more positions behind, while the seam runs 12
+  rounds and the falsifier's horizon bounds an entry to HORIZON-1.  It
+  is also uncoverable IN PRINCIPLE from this side of the API -- the
+  machine never sees an identity (I10, BOUNDED BY THE API), so no
+  machine-side oracle can tell a byte-keyed translation from a correct
+  one.  Its matched red belongs to a caller: an ingress arm that feeds
+  a colliding byte with an indication set and asserts no bank, with
+  reversion to byte-keyed banking as the mutant.  Until a caller
+  enforces the obligation there is nothing to falsify, which is why
+  this row reads UNCOVERED rather than HAND.
 
 ## Permanently uncoverable
 

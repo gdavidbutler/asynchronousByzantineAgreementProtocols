@@ -1540,7 +1540,7 @@ the adopter's chain reach -- O1, A10 -- closes on one assertion, no
 book consulted), both grounds closing through the one consume
 region a live COMPLETE enters, which speaks its round.
 
-Two more caller halves complete this list, stated here because
+Three more caller halves complete this list, stated here because
 lemma proofs consume them.  The retained entry's CONTENT (I10's
 caller half): the machine binds the round BYTE -- the entry born
 at completion is exactly the pre-advance frontier -- and "the
@@ -1562,6 +1562,28 @@ is presented as possession evidence for R (Model, possession
 sources).  L1's return leg and L5's all-n record consume that
 the evidence LANDS: a caller that discards either carrier
 starves the heal and strands the possession record at n-1.
+And the ROUND ARGUMENT itself: evidence is presented for the
+round its identity PROVES, verified within chain reach, never
+for the round its byte names.  A9 pins the sender coordinate of
+a recorded bit; this is the same obligation on the other
+coordinate, and no caller half carried it -- the Model states
+the fact (an act is OF a round by its identity) but nothing
+bound the ingress argument to it.  The byte names a position
+unambiguously only across the nameable span (Model), so a
+sender 256 or more positions behind speaks a byte that has
+recurred within that span -- the frontier's own at exactly 256,
+a retained round's beyond -- and a byte-keyed translation
+banks that sender's TRUE indication against a round it does not
+hold.  Such a bit is outside the Byzantine notes' containment in
+both directions -- it is no forgery, so the fault budget does
+not bound it, and no author disowns it -- and L5's all-n record
+and R4's advance evidence both consume that every bit was
+recorded for the round it was authored for.  The damage is
+bounded and it is not a new strand: a colliding sender is by
+arithmetic already past every retention window, hence already
+in the out-of-band territory RETAIN prices.  What it costs is a
+round released without its last true bit, and an advance whose
+evidence stands one honest process short.
 
 ## Relation to a deployment
 

@@ -70,10 +70,21 @@
  * Rounds are the wrapping unsigned char space 0..255 (the same
  * discipline as Bracha87 BA rounds).  The caller presents only
  * traffic it has authenticated for rounds within its chain reach
- * (system.md "Model"): rounds at or behind the frontier, where the
- * frontier is the next round this process runs.  Traffic for rounds
- * beyond reach cannot be verified and must be held by the caller;
- * defensively, such rounds are treated as inert here.
+ * (system.md "Model").  Reach is bounded on BOTH sides: ahead, by
+ * the frontier -- a round this process has not run cannot be
+ * verified; behind, by what it still retains, since verifying an
+ * act as being of round R consumes R's identity.  Traffic outside
+ * reach cannot be verified and must be held or dropped by the
+ * caller; defensively, rounds ahead are treated as inert here.
+ *
+ * THE BYTE IS NOT THE ROUND.  It names a position unambiguously only
+ * across the nameable span (system.md "Model"; I1 and the wrap
+ * release), so the byte of a position 256 or more behind the
+ * frontier RECURS within that span -- the frontier's own byte at
+ * exactly 256, a retained round's beyond.  A byte routes; an
+ * identity proves.  Every 'round' argument below is therefore the
+ * round the traffic's IDENTITY proves, never the round its byte
+ * names -- see the entries for what banking on the byte would cost.
  *
  * Operational limits:
  *   n:  unsigned char, encodes process count 1..256 (n + 1)
@@ -284,10 +295,22 @@ systemInit(
  * 'from'.  'possesses' is 1 if the traffic carried a possession
  * indication for that round (the deployment's analog of the
  * BKR94ACS_ACCEPTED bit riding a READY -- see system.md "Model",
- * possession evidence).  The possession record is updated FIRST,
- * then the dispatch classifies (reads following writes), so a
- * process serving or re-broadcasting a round it holds is never
- * misread as wanting it.  Only RETAINED rounds have a record: an
+ * possession evidence).
+ * 'round' MUST be the round the traffic's identity proves, verified
+ * within chain reach, and never the round its byte names.  The two
+ * differ for a sender 256 or more positions behind: its byte recurs
+ * within the nameable span (the frontier's at exactly 256, a
+ * retained round's beyond), so translating by the byte records a
+ * CORRECT process's true indication against a round it does not
+ * hold.  That bit is outside the containment below -- it is not a
+ * forgery, and the process it names is not the process it credits --
+ * so it can complete an all-n release on a false record and can
+ * carry the advance rule's evidence one honest process short.  A
+ * caller that cannot verify the traffic has no round to present it
+ * for.  The possession record is updated FIRST, then the dispatch
+ * classifies (reads following writes), so a process serving or
+ * re-broadcasting a round it holds is never misread as wanting
+ * it.  Only RETAINED rounds have a record: an
  * indication for a round not yet retained -- one still live, or one
  * awaiting the join that will run it -- is dropped, not banked.  The
  * drop is safe in itself -- nothing false is ever recorded -- but it
@@ -303,6 +326,11 @@ systemInit(
  * hold keyed on "not retained" also catches released rounds, and in
  * the wrapping round space such an entry outlives its round and
  * resurfaces at the next incarnation of that byte.
+ * The hold rides the round precondition above: a sender exactly 256
+ * behind speaks the FRONTIER's byte, so a byte-keyed hold would
+ * carry that sender's indication to the close and bank it there --
+ * the false bit delivered through this very discipline.  Hold only
+ * what identity proves is the frontier's.
  * The O1 inference recovers a dropped indication from the sender's
  * later-round traffic ONLY WHERE SUCH TRAFFIC COMES TO EXIST.  It is
  * not a general fallback: a cohort with nothing further to contribute
@@ -458,12 +486,23 @@ systemComplete(
  * here once the close retained the round.  Idempotent; unretained
  * rounds and out-of-range indices are ignored.
  *
+ * 'round' MUST be the round the evidence's identity proves -- the
+ * same obligation systemReceived carries, and it binds the linkage
+ * inference too: an act evidences possession of the round its own
+ * identity places it after, never of the round some byte names.
+ *
  * Byzantine-safe by construction: the record marks only 'from'
  * itself, so a forged indication retires only serves owed TO the
  * forger and can never strand a correct process.  Release requires
  * all n bits -- with at most t forgeries, reaching n still requires
  * every correct process's true indication.  No count-threshold
  * shortcut (system.md, Byzantine notes).
+ *
+ * That argument prices FORGERIES, and prices them by their author.
+ * It does not reach a bit the CALLER misplaced: a correct process's
+ * true indication, translated onto the wrong round, is a false bit
+ * no fault budget bounds and no author disowns.  The precondition
+ * above is what keeps the containment whole.
  *
  * Out actions:
  *   SYSTEM_ACT_RELEASE  the record reached all n.

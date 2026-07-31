@@ -34,20 +34,28 @@
 # from one merged dispatch:
 #
 #   act received      - an act for round R, verified within chain
-#                       reach (O1), arrives.  Traffic beyond chain
-#                       reach is not evidence: its sender still
-#                       owes it, so it re-arrives on that sender's
-#                       own retry cadence once reach extends.  A
-#                       caller MAY hold it as a latency
-#                       optimization; nothing in the calculus
-#                       requires the hold, and an unbounded hold
-#                       of ahead traffic would be the remote
-#                       inflation lever the Byzantine notes'
-#                       retention-budget claim excludes.  (The
-#                       FRONTIER round's possession indications
-#                       are the opposite case and MUST be held --
-#                       their carrier retires at quiescence; see
-#                       systemReceived's C11 obligation.)  Applies:
+#                       reach (O1), arrives.  R is the round the
+#                       act's IDENTITY proves, never the round its
+#                       byte names (C12: reach is bounded on both
+#                       sides).  Traffic beyond reach AHEAD is not
+#                       evidence: its sender still owes it, so it
+#                       re-arrives on that sender's own retry
+#                       cadence once reach extends.  A caller MAY
+#                       hold it as a latency optimization; nothing
+#                       in the calculus requires the hold, and an
+#                       unbounded hold of ahead traffic would be
+#                       the remote inflation lever the Byzantine
+#                       notes' retention-budget claim excludes.
+#                       Traffic beyond reach BEHIND is
+#                       unverifiable for good -- reach never
+#                       extends backward -- and its sender is
+#                       already in the out-of-band territory
+#                       RETAIN prices.  (The FRONTIER round's
+#                       possession indications are the opposite
+#                       case and MUST be held -- their carrier
+#                       retires at quiescence; see
+#                       systemReceived's C11 obligation, which
+#                       C12 binds to identity.)  Applies:
 #                       "deliver the act to the live instance",
 #                       "record serve owed to the sender for R",
 #                       "record participation owed for R".
