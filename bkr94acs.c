@@ -29,11 +29,20 @@
  * subprotocol).
  *
  * Step 1 lives in bkr94acsAcastInput (enter 1 on Fig1 ACCEPT).
- * Step 2 lives in bkr94acsBaInput (enter 0 fanout when the
- *   2t+1-BAs-with-output-1 threshold hits inside the Fig4Round
- *   DECIDE branch).
- * Step 3 lives in bkr94acsBaInput (BKR94ACS_ACT_COMPLETE
- *   when all N BAs have decided) and bkr94acsSubset
+ * Step 2 lives on the BPR sweep: bkr94acsFanoutDuty classifies
+ *   (HELD / TOLERANCE / MET) and bkr94acsFanout enters 0 into every
+ *   unentered BA once the 2t+1-BAs-with-output-1 count holds and
+ *   the caller's tolerance budget elapses.  The paper's "upon" is
+ *   enabling evidence, not a moment; see the bkr94acs.dtc Step 2
+ *   section.
+ * The BA round turn lives on the same sweep: bkr94acsBaInput only
+ *   BANKS evidence (Fig1 traffic, Fig3 store/validate/cascade);
+ *   bkr94acsTurnDuty classifies each BA's next round and
+ *   bkr94acsTurn computes it -- Bracha Fig4's "wait until validate
+ *   n-t k-messages" is the same enabling-evidence reading, and the
+ *   sample a turn consumes is still growing when it first suffices.
+ * Step 3 lives in bkr94acsTurn (BKR94ACS_ACT_COMPLETE when the
+ *   turn decides the last undecided BA) and bkr94acsSubset
  *   (SubSet = { j : BA_j = 1 }).
  */
 
@@ -320,7 +329,8 @@ bkr94acsInit(
  * Internal: enter this process's input value into BA_self.
  *
  * Called from both BKR94 Step 1 (enter=1 on Fig1 ACCEPT) and BKR94
- * Step 2 (enter=0 when the n-t-BAs-output-1 threshold fires).  The
+ * Step 2 (enter=0 when the caller fires bkr94acsFanout from the
+ * BPR sweep).  The
  * entered[] guard enforces the paper's single-input-per-BA rule:
  * "Once a BA has received an input from Pi (1 from step 1 or 0
  * from step 2), step 1 and step 2 stop touching it -- BA semantics
@@ -392,18 +402,15 @@ bkr94acsAcastInput(
   unsigned int k;
   unsigned char acsEvent;
   unsigned char inputToBAj;
-  unsigned char fanoutTriggered;
-  unsigned char postCountOneAtNT;
   unsigned char postCountAllN;
   unsigned char doInput1;
-  unsigned char doInput0Fanout;
   unsigned char doOutputSubset;
 
   /*
    * Encoded: a->n = actual_N - 1, so valid process indices are
    * 0..a->n inclusive.  "> a->n" rejects actual_N and above.
    *
-   * Do NOT short-circuit on BKR94ACS_F_COMPLETE.  This process has locally
+   * Do NOT short-circuit on a->complete.  This process has locally
    * decided all N BAs, but other processes may still be working on
    * some BAs and depend on THIS process's continued Fig1 echoes and
    * readys to reach their own n-t thresholds.  Bracha requires
@@ -412,11 +419,11 @@ bkr94acsAcastInput(
    * locally-complete process must keep participating until the
    * application decides to exit (e.g. the barren-sweep gate).
    * A blanket complete-guard causes classic post-decide stalls
-   * where the fastest process strands the slowest.  The per-action
-   * output blocks below (BA_DECIDED on Fig4 DECIDE, COMPLETE on
-   * the decided count crossing N, enters via bkr94acsEnter's
-   * entered-state dedup) are idempotent, so continuing after complete
-   * cannot output duplicate terminal actions.
+   * where the fastest process strands the slowest.  Step 1's enter
+   * below is idempotent (bkr94acsEnter's entered-state dedup), and
+   * the terminal actions live in bkr94acsTurn, gated there by
+   * Fig4's once-only DECIDE, so continuing after complete cannot
+   * output duplicates.
    */
   if (!a || process > a->n || from > a->n || !value || !out)
     return (0);
@@ -466,24 +473,21 @@ bkr94acsAcastInput(
        * BKR94 Step 1: "For each Pj for whom you (Pi) know Q(j) = 1,
        * participate in BA_j with input 1."  Q(j) = 1 is carried by
        * Fig1 ACCEPT for process j (Bracha87 Lemma 4 gives BKR94's Q
-       * assumption (2) for free).  Step 2's n-t BA-output-1 trigger
-       * fires in bkr94acsBaInput; only Step 1 is reachable at
-       * this dispatch site, but the bridge sees the full rule set so
-       * the unreachable outputs are zeroed by the dispatch and the
-       * post-include applies only doInput1.
+       * assumption (2) for free).  Step 2 is not dispatched from any
+       * arrival path -- it fires from the BPR sweep (bkr94acsFanout);
+       * only Step 1 is reachable at this dispatch site, but the
+       * bridge sees the Step 1 + Step 3 rule set so the unreachable
+       * Step 3 output is zeroed by the dispatch and the post-include
+       * applies only doInput1.
        */
       acsEvent = BKR94ACS_ACS_EVENT_Q;
       inputToBAj = bkr94acsEnterd(a)[process];
-      fanoutTriggered = (a->flags & BKR94ACS_F_THRESHOLD) ? 1 : 0;
-      postCountOneAtNT = 0;
       postCountAllN = 0;
       doInput1 = 0;
-      doInput0Fanout = 0;
       doOutputSubset = 0;
 #include "bkr94acsRules.c"
-      /* Step 2/3 outputs are unreachable on a Q event; the dispatch
-       * still resolves them to 0 at every leaf. */
-      (void)doInput0Fanout;
+      /* Step 3's output is unreachable on a Q event; the dispatch
+       * still resolves it to 0 at every leaf. */
       (void)doOutputSubset;
       if (doInput1)
         nact += bkr94acsEnter(a, process, 1, &out[nact]);
@@ -516,15 +520,6 @@ bkr94acsBaInput(
   unsigned int nf1;
   unsigned int nact;
   unsigned int k;
-  unsigned char *nextRound;
-  unsigned char acsEvent;
-  unsigned char inputToBAj;
-  unsigned char fanoutTriggered;
-  unsigned char postCountOneAtNT;
-  unsigned char postCountAllN;
-  unsigned char doInput1;
-  unsigned char doInput0Fanout;
-  unsigned char doOutputSubset;
 
   if (!a || process > a->n || initiator > a->n || from > a->n || !out)
     return (0);
@@ -548,20 +543,15 @@ bkr94acsBaInput(
    * 1. We do NOT short-circuit on bkr94acsDecision[process] != 0xFF.
    *    Bracha Fig4 requires a decided process to continue
    *    broadcasting so processes lagging in THIS BA can reach n-t
-   *    validated and decide.  The BKR94ACS_ACT_BA_DECIDED output
-   *    is gated by Fig4Round returning DECIDE, which fires exactly
-   *    once per BA, so idempotence holds.
+   *    validated and decide.
    *
-   * 2. We do NOT short-circuit on BKR94ACS_F_COMPLETE.  A locally-complete
+   * 2. We do NOT short-circuit on a->complete.  A locally-complete
    *    process has decided all N BAs but other processes may still be
    *    working on some BAs.  Their Fig1 instances for (process_X,
    *    round_Y, initiator_THIS) wait on THIS process's continued
    *    echoes and readys to cross n-t thresholds.  Dropping inputs
    *    after local complete strands lagging processes -- a classic
-   *    post-decide stall.  BKR94ACS_ACT_COMPLETE output is gated
-   *    by the decided count crossing N, which happens once;
-   *    continuing past complete cannot output a second
-   *    BKR94ACS_ACT_COMPLETE.
+   *    post-decide stall.
    *    Application exit is a separate concern (see the
    *    barren-sweep gate).
    */
@@ -576,7 +566,6 @@ bkr94acsBaInput(
     + ((unsigned long)round * N + initiator) * bf1sz);
   f4 = (struct bracha87Fig4 *)(pipe + f4off);
   f3 = &f4->fig3;
-  nextRound = &bkr94acsNextRound(a)[process];
   nact = 0;
 
   nf1 = bracha87Fig1Input(f1, type, from, &value, f1out);
@@ -598,192 +587,16 @@ bkr94acsBaInput(
 
       /*
        * Fig3 sender is the initiator (whose broadcast was accepted).
-       * validCount-out parameter is 0: the cascade work it would gate
-       * is internal to bracha87Fig3Accept; bracha87Fig3RoundComplete
-       * below is the predicate this loop actually consults.
+       * The arrival path ends here: the accept is BANKED -- stored,
+       * validated, cascaded (bracha87Fig3Accept holds every message
+       * and re-derives validity as prior rounds grow) -- but no
+       * round is turned.  Fig4's "wait until validate n-t
+       * k-messages" is enabling evidence over a still-growing
+       * sample, so the turn fires from the BPR sweep
+       * (bkr94acsTurn), caller-paced; BA_DECIDED / COMPLETE /
+       * BA_EXHAUSTED emerge there, never from this entry.
        */
       bracha87Fig3Accept(f3, round, initiator, cv[0], 0);
-
-      /*
-       * Check for completed rounds (including cascades).
-       */
-      while (*nextRound < mr
-          && bracha87Fig3RoundComplete(f3, *nextRound)) {
-        unsigned char rsnd[256];
-        unsigned char rval[256];
-        unsigned int rcnt;
-        unsigned int act;
-
-        rcnt = bracha87Fig3GetValid(f3, *nextRound, rsnd, rval);
-        act = bracha87Fig4Round(f4, *nextRound, rcnt, rsnd, rval);
-        ++*nextRound;
-
-        if (act & BRACHA87_DECIDE) {
-          const unsigned char *dec;
-          unsigned int nDecided;
-          unsigned int nDecidedOne;
-          unsigned int j;
-
-          /* BA-decided notification (always output; not part of
-           * BKR94 rules, just an observability signal). */
-          bkr94acsDecision(a)[process] = f4->decision;
-          out[nact].value = 0;
-          out[nact].skip = 0;
-          out[nact].act = BKR94ACS_ACT_BA_DECIDED;
-          out[nact].process = process;
-          out[nact].round = 0;
-          out[nact].type = 0;
-          out[nact].baValue = f4->decision;
-          out[nact].initiator = 0;
-          out[nact].accepted = 0;
-          ++nact;
-
-          /*
-           * Post-output decision counts, derived from baDecision[]
-           * (the decision just recorded above included).  Derived,
-           * not stored: a stored counter is a denormalization of
-           * baDecision[], and as an unsigned char it wrapped on the
-           * 256th decision, suppressing COMPLETE at 256 processes.  Only
-           * 0 and 1 match -- the 0xFF (undecided) and 0xFE (exhausted)
-           * sentinels fall out of the scan with no separate rule.
-           * One O(N) pass per BA decision, a rare event.
-           */
-          dec = bkr94acsDecision(a);
-          nDecided = 0;
-          nDecidedOne = 0;
-          for (j = 0; j < A_N(a); ++j)
-            if (dec[j] <= 1) {
-              ++nDecided;
-              if (dec[j] == 1)
-                ++nDecidedOne;
-            }
-
-          /*
-           * BKR94 Steps 2 and 3 dispatch.  The bridge maps "post-
-           * output BA-output-1 count >= n-t" to nDecidedOne >= n-t;
-           * "post-output BA-output count == n" to nDecided >= n.
-           * Step 2's threshold-firing rule (enter 0 to all unentered
-           * BAs once when count reaches n-t) and Step 3's
-           * all-decided rule (output SubSet) are both guarded by
-           * their respective post-output predicates and by
-           * acsEvent's branching on BA_1 vs BA_0.  Lemma 2 Part A
-           * case (i) requires Step 2's trigger to be a BA decide of
-           * 1, not a Fig1 accept; the .dtc carries that exactly.
-           */
-          acsEvent = f4->decision
-            ? BKR94ACS_ACS_EVENT_BA1
-            : BKR94ACS_ACS_EVENT_BA0;
-          inputToBAj = bkr94acsEnterd(a)[process];
-          fanoutTriggered = (a->flags & BKR94ACS_F_THRESHOLD) ? 1 : 0;
-          postCountOneAtNT = nDecidedOne >= A_N(a) - a->t;
-          postCountAllN = nDecided >= A_N(a);
-          doInput1 = 0;
-          doInput0Fanout = 0;
-          doOutputSubset = 0;
-#include "bkr94acsRules.c"
-          /* Step 1 is unreachable on a BA-output event; the dispatch
-           * still resolves doInput1 to 0 at every leaf. */
-          (void)doInput1;
-          if (doInput0Fanout) {
-            a->flags |= BKR94ACS_F_THRESHOLD;
-            for (j = 0; j < A_N(a); ++j)
-              nact += bkr94acsEnter(a, j, 0, &out[nact]);
-          }
-          if (doOutputSubset) {
-            a->flags |= BKR94ACS_F_COMPLETE;
-            out[nact].value = 0;
-            out[nact].skip = 0;
-            out[nact].act = BKR94ACS_ACT_COMPLETE;
-            out[nact].process = 0;
-            out[nact].round = 0;
-            out[nact].type = 0;
-            out[nact].baValue = 0;
-            out[nact].initiator = 0;
-            out[nact].accepted = 0;
-            ++nact;
-          }
-        }
-
-        if ((act & BRACHA87_BROADCAST)
-         && *nextRound < mr) {
-          /*
-           * Broadcast INITIAL for the new BA round
-           * (self is initiator).  Mark the corresponding
-           * (process, round=*nextRound, initiator=self)
-           * BA Fig1 as the initiator and store the
-           * value so bkr94acsRetry keeps retrying this INITIAL
-           * on subsequent ticks while F1_INITIATOR is set, plus
-           * BA_SEND/ECHO and BA_SEND/READY once F1_ECHOED /
-           * F1_RDSENT join (Implementation Note 11).  Same
-           * pattern as the round-0 case in bkr94acsEnter.
-           */
-          {
-            unsigned char binary;
-
-            binary = f4->value;
-            bracha87Fig1Initiator(baF1(a, process, *nextRound, a->self),
-                               &binary);
-          }
-
-          out[nact].value = 0;
-          out[nact].skip = 0;     /* fresh initiation: nothing to suppress */
-          out[nact].act = BKR94ACS_ACT_BA_SEND;
-          out[nact].process = process;
-          out[nact].round = *nextRound;
-          out[nact].type = BRACHA87_INITIAL;
-          out[nact].baValue = f4->value;
-          out[nact].initiator = a->self;
-          out[nact].accepted = 0;
-          ++nact;
-        }
-
-        if (act & BRACHA87_EXHAUSTED) {
-          /*
-           * Fig4 reached maxPhases with no decision -- a violation
-           * of BKR94 Lemma 2 Part B's "all BAs terminate" assumption.
-           * Bracha87 Fig4 has probabilistic termination; the
-           * BRACHA87_MAX_PHASES (85) ceiling is an unsigned-char
-           * round-encoding artifact, not a paper limit, but it caps
-           * the in-protocol attempts.
-           *
-           * Mutually exclusive with BRACHA87_DECIDE (decideV requires
-           * !haveDecided, EXHAUSTED requires sub=2 of last phase with
-           * !haveDecided && !decideV), so Step 2 / Step 3 dispatch
-           * above did not fire.  The 0xFE sentinel written below does
-           * not match the decided-count scan's <= 1 predicate, so an
-           * exhausted BA never counts as decided (no decision was
-           * made); we do NOT enter the rules dispatch (no BA-output
-           * event to feed it), do NOT substitute a value into
-           * bkr94acsDecision[process] -- any unilateral substitute
-           * could disagree with another process's actual decision and
-           * break SubSet agreement (Lemma 2 Part C).
-           *
-           * baDecision[process] = 0xFE marks the BA as exhausted so
-           * bkr94acsBaDecision can report the state and the
-           * process-retry-gate (which only skips decided-0) keeps
-           * retrying for this process -- other processes may
-           * still benefit from our continued echoes / readys on
-           * earlier rounds.
-           *
-           * After ++*nextRound the while loop exits naturally:
-           * *nextRound now equals mr, so the next iteration's
-           * "*nextRound < mr" guard fails.  Single output per
-           * BA per ACS instance is therefore structural; no
-           * additional dedup guard required.
-           */
-          bkr94acsDecision(a)[process] = 0xFE;
-          out[nact].value = 0;
-          out[nact].skip = 0;
-          out[nact].act = BKR94ACS_ACT_BA_EXHAUSTED;
-          out[nact].process = process;
-          out[nact].round = 0;
-          out[nact].type = 0;
-          out[nact].baValue = 0;
-          out[nact].initiator = 0;
-          out[nact].accepted = 0;
-          ++nact;
-        }
-      }
       continue;
     }
 
@@ -835,7 +648,7 @@ bkr94acsSubset(
    * BKR94 Step 3 read: SubSet_i = { j : BA_j had output 1 }.
    * Lemma 2 Part A gives |SubSet| >= 2t+1 = n-t; Part C gives
    * cross-process agreement on SubSet; Part D gives Q(j)=1 for every
-   * j in SubSet.  Caller must gate this on (a->flags & BKR94ACS_F_COMPLETE) to
+   * j in SubSet.  Caller must gate this on a->complete to
    * observe the final subset; a mid-run read reports the partial
    * set of decided-1 processes.
    */
@@ -1105,6 +918,309 @@ bkr94acsRetry(
       return (nact);
     }
   }
+}
+
+/*--------------------------------------------------------------------------*/
+/*  The sweep-side decisions -- BKR94 step 2 and the BA round turn          */
+/*                                                                          */
+/*  See the bkr94acs.dtc Step 2 and round-turn sections.  A rule's          */
+/*  "upon" / "wait until" names the evidence that enables an action, not    */
+/*  a moment; both decisions consume evidence that is still growing when    */
+/*  it first suffices, so the caller paces each from its sweep tick,        */
+/*  counting sweeps against its tolerance budget while TOLERANCE holds.     */
+/*  A zero budget (fire whenever enabled) is the eager schedule an          */
+/*  earlier revision hardwired into the arrival paths.                      */
+/*--------------------------------------------------------------------------*/
+
+/*
+ * Lemma 2 Part A case (i) requires Step 2's enabling count to be
+ * BA decides of 1 -- baDecision[] entries == 1 -- never Q(j)=1
+ * events or Fig1 accepts; firing on the Q count is the wrong
+ * reading of the paper (see the bkr94acs.dtc header).  The counts
+ * are derived by scan, never stored (the same wrap discipline as
+ * bkr94acsTurn's nDecided).
+ */
+unsigned char
+bkr94acsFanoutDuty(
+  const struct bkr94acs *a
+){
+  const unsigned char *entered;
+  const unsigned char *dec;
+  unsigned int N;
+  unsigned int j;
+  unsigned int one;
+  unsigned int unentered;
+
+  if (!a)
+    return (BKR94ACS_DUTY_HELD);
+  entered = bkr94acsEnterd(a);
+  dec = bkr94acsDecision(a);
+  N = A_N(a);
+  one = 0;
+  unentered = 0;
+  for (j = 0; j < N; ++j) {
+    if (dec[j] == 1)
+      ++one;
+    if (entered[j] == BKR94ACS_ENTER_NONE)
+      ++unentered;
+  }
+  if (!unentered)
+    return (BKR94ACS_DUTY_MET);
+  if (one >= N - a->t)
+    return (BKR94ACS_DUTY_TOLERANCE);
+  return (BKR94ACS_DUTY_HELD);
+}
+
+unsigned int
+bkr94acsFanout(
+  struct bkr94acs *a
+ ,struct bkr94acsAct *out
+){
+  unsigned int N;
+  unsigned int j;
+  unsigned int nact;
+
+  if (!a || !out)
+    return (0);
+  /*
+   * The TOLERANCE guard is the paper's floor: below the n-t
+   * BA-output-1 count, entering 0 is unsound (a mass of 0-inputs
+   * could force SubSet empty).  At MET nothing is unentered and
+   * the loop below would output nothing; returning early keeps the
+   * call cheap for a caller that fires unconditionally each sweep.
+   */
+  if (bkr94acsFanoutDuty(a) != BKR94ACS_DUTY_TOLERANCE)
+    return (0);
+  N = A_N(a);
+  nact = 0;
+  for (j = 0; j < N; ++j)
+    nact += bkr94acsEnter(a, j, 0, &out[nact]);
+  return (nact);
+}
+
+unsigned char
+bkr94acsTurnDuty(
+  const struct bkr94acs *a
+ ,unsigned char process
+){
+  struct bracha87Fig4 *f4;
+  struct bracha87Fig3 *f3;
+  unsigned char nextRound;
+
+  if (!a || process > a->n)
+    return (BKR94ACS_DUTY_HELD);
+  nextRound = bkr94acsNextRound(a)[process];
+  if (nextRound >= maxRounds(a))
+    return (BKR94ACS_DUTY_HELD);
+  f4 = baF4(a, process);
+  f3 = &f4->fig3;
+  if (!bracha87Fig3RoundComplete(f3, nextRound))
+    return (BKR94ACS_DUTY_HELD);
+  /*
+   * Count only -- the sample itself is materialized by the turn.  A
+   * paced caller queries this N times per sweep, so it must not pay
+   * GetValid's O(n) set walk or its 2x256-byte scratch.
+   */
+  if (bracha87Fig3ValidCount(f3, nextRound) >= A_N(a))
+    return (BKR94ACS_DUTY_MET);
+  return (BKR94ACS_DUTY_TOLERANCE);
+}
+
+unsigned int
+bkr94acsTurn(
+  struct bkr94acs *a
+ ,unsigned char process
+ ,unsigned char toleranceElapsed
+ ,struct bkr94acsAct *out
+){
+  struct bracha87Fig4 *f4;
+  struct bracha87Fig3 *f3;
+  unsigned char *nextRound;
+  unsigned char rsnd[256];
+  unsigned char rval[256];
+  unsigned int rcnt;
+  unsigned int act;
+  unsigned int mr;
+  unsigned int nact;
+  unsigned char duty;
+  unsigned char acsEvent;
+  unsigned char inputToBAj;
+  unsigned char postCountAllN;
+  unsigned char doInput1;
+  unsigned char doOutputSubset;
+
+  if (!a || process > a->n || !out)
+    return (0);
+  duty = bkr94acsTurnDuty(a, process);
+  if (duty == BKR94ACS_DUTY_HELD)
+    return (0);
+  if (duty == BKR94ACS_DUTY_TOLERANCE && !toleranceElapsed)
+    return (0);
+
+  mr = maxRounds(a);
+  f4 = baF4(a, process);
+  f3 = &f4->fig3;
+  nextRound = &bkr94acsNextRound(a)[process];
+  rcnt = bracha87Fig3GetValid(f3, *nextRound, rsnd, rval);
+  act = bracha87Fig4Round(f4, *nextRound, rcnt, rsnd, rval);
+  ++*nextRound;
+  nact = 0;
+
+  if (act & BRACHA87_DECIDE) {
+    const unsigned char *dec;
+    unsigned int nDecided;
+    unsigned int j;
+
+    /* BA-decided notification (always output; not part of
+     * BKR94 rules, just an observability signal).  Fig4Round
+     * returns DECIDE exactly once per BA (BRACHA87_F4_DECIDED is
+     * set-once; the decide rule requires !haveDecided), so this
+     * branch -- and the unguarded COMPLETE emission below, which
+     * fires on the decided count crossing N -- is structurally
+     * once-only. */
+    bkr94acsDecision(a)[process] = f4->decision;
+    out[nact].value = 0;
+    out[nact].skip = 0;
+    out[nact].act = BKR94ACS_ACT_BA_DECIDED;
+    out[nact].process = process;
+    out[nact].round = 0;
+    out[nact].type = 0;
+    out[nact].baValue = f4->decision;
+    out[nact].initiator = 0;
+    out[nact].accepted = 0;
+    ++nact;
+
+    /*
+     * Post-output decided count, derived from baDecision[]
+     * (the decision just recorded above included).  Derived,
+     * not stored: a stored counter is a denormalization of
+     * baDecision[], and as an unsigned char it wrapped on the
+     * 256th decision, suppressing COMPLETE at 256 processes.  Only
+     * 0 and 1 match -- the 0xFF (undecided) and 0xFE (exhausted)
+     * sentinels fall out of the scan with no separate rule.
+     * One O(N) pass per BA decision, a rare event.
+     */
+    dec = bkr94acsDecision(a);
+    nDecided = 0;
+    for (j = 0; j < A_N(a); ++j)
+      if (dec[j] <= 1)
+        ++nDecided;
+
+    /*
+     * BKR94 Step 3 dispatch.  The bridge maps "post-output
+     * BA-output count == n" to nDecided >= n; the all-decided
+     * rule (output SubSet) is guarded by that post-output
+     * predicate and by acsEvent's branching on BA_1 vs BA_0.
+     * Step 2 is not dispatched here -- its BA-output-1 count
+     * is derived on demand by bkr94acsFanoutDuty and the
+     * fanout fires from the same sweep (bkr94acsFanout).
+     */
+    acsEvent = f4->decision
+      ? BKR94ACS_ACS_EVENT_BA1
+      : BKR94ACS_ACS_EVENT_BA0;
+    inputToBAj = bkr94acsEnterd(a)[process];
+    postCountAllN = nDecided >= A_N(a);
+    doInput1 = 0;
+    doOutputSubset = 0;
+#include "bkr94acsRules.c"
+    /* Step 1 is unreachable on a BA-output event; the dispatch
+     * still resolves doInput1 to 0 at every leaf. */
+    (void)doInput1;
+    if (doOutputSubset) {
+      a->complete = 1;
+      out[nact].value = 0;
+      out[nact].skip = 0;
+      out[nact].act = BKR94ACS_ACT_COMPLETE;
+      out[nact].process = 0;
+      out[nact].round = 0;
+      out[nact].type = 0;
+      out[nact].baValue = 0;
+      out[nact].initiator = 0;
+      out[nact].accepted = 0;
+      ++nact;
+    }
+  }
+
+  if ((act & BRACHA87_BROADCAST)
+   && *nextRound < mr) {
+    /*
+     * Broadcast INITIAL for the new BA round
+     * (self is initiator).  Mark the corresponding
+     * (process, round=*nextRound, initiator=self)
+     * BA Fig1 as the initiator and store the
+     * value so bkr94acsRetry keeps retrying this INITIAL
+     * on subsequent ticks while F1_INITIATOR is set, plus
+     * BA_SEND/ECHO and BA_SEND/READY once F1_ECHOED /
+     * F1_RDSENT join (Implementation Note 11).  Same
+     * pattern as the round-0 case in bkr94acsEnter.
+     */
+    {
+      unsigned char binary;
+
+      binary = f4->value;
+      bracha87Fig1Initiator(baF1(a, process, *nextRound, a->self),
+                         &binary);
+    }
+
+    out[nact].value = 0;
+    out[nact].skip = 0;     /* fresh initiation: nothing to suppress */
+    out[nact].act = BKR94ACS_ACT_BA_SEND;
+    out[nact].process = process;
+    out[nact].round = *nextRound;
+    out[nact].type = BRACHA87_INITIAL;
+    out[nact].baValue = f4->value;
+    out[nact].initiator = a->self;
+    out[nact].accepted = 0;
+    ++nact;
+  }
+
+  if (act & BRACHA87_EXHAUSTED) {
+    /*
+     * Fig4 reached maxPhases with no decision -- a violation
+     * of BKR94 Lemma 2 Part B's "all BAs terminate" assumption.
+     * Bracha87 Fig4 has probabilistic termination; the
+     * BRACHA87_MAX_PHASES (85) ceiling is an unsigned-char
+     * round-encoding artifact, not a paper limit, but it caps
+     * the in-protocol attempts.
+     *
+     * Mutually exclusive with BRACHA87_DECIDE (decideV requires
+     * !haveDecided, EXHAUSTED requires sub=2 of last phase with
+     * !haveDecided && !decideV), so the Step 3 dispatch above
+     * did not fire.  The 0xFE sentinel written below does not
+     * match the decided-count scan's <= 1 predicate, so an
+     * exhausted BA never counts as decided (no decision was
+     * made); we do NOT enter the rules dispatch (no BA-output
+     * event to feed it), do NOT substitute a value into
+     * bkr94acsDecision[process] -- any unilateral substitute
+     * could disagree with another process's actual decision and
+     * break SubSet agreement (Lemma 2 Part C).
+     *
+     * baDecision[process] = 0xFE marks the BA as exhausted so
+     * bkr94acsBaDecision can report the state and the
+     * process-retry-gate (which only skips decided-0) keeps
+     * retrying for this process -- other processes may
+     * still benefit from our continued echoes / readys on
+     * earlier rounds.
+     *
+     * After ++*nextRound above, *nextRound equals mr, so
+     * bkr94acsTurnDuty reports HELD for this BA forever.  Single
+     * output per BA per ACS instance is therefore structural; no
+     * additional dedup guard required.
+     */
+    bkr94acsDecision(a)[process] = 0xFE;
+    out[nact].value = 0;
+    out[nact].skip = 0;
+    out[nact].act = BKR94ACS_ACT_BA_EXHAUSTED;
+    out[nact].process = process;
+    out[nact].round = 0;
+    out[nact].type = 0;
+    out[nact].baValue = 0;
+    out[nact].initiator = 0;
+    out[nact].accepted = 0;
+    ++nact;
+  }
+
+  return (nact);
 }
 
 /*--------------------------------------------------------------------------*/

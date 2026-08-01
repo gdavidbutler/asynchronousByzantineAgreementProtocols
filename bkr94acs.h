@@ -54,6 +54,25 @@
  * The "2t+1" in Step 2 is n-t in the paper's regime (n = 3t+1) and
  * is the implementation threshold for all supported (n, t).
  *
+ * Step 2's "upon" is enabling evidence in the paper's asynchronous
+ * model (unbounded finite delay, no clocks), not a moment: the
+ * count makes the fanout SOUND; the caller decides WHEN, pacing it
+ * from the BPR sweep (bkr94acsFanoutDuty / bkr94acsFanout).
+ * Firing at the instant the count holds -- a zero tolerance budget
+ * -- closes SubSet against every honest process whose A-Cast is
+ * still in flight, and under a persistent latency spread that
+ * excludes the same honest processes every ACS instance.
+ *
+ * The same reading governs the BA round turn.  Bracha's Fig4 "wait
+ * until validate n-t k-messages" is enabling evidence too, and the
+ * turn computes the round -- majority, the decide thresholds --
+ * over a validated sample that is still growing (n-t up to n).  So
+ * the arrival path only BANKS evidence (bkr94acsBaInput stores,
+ * validates, cascades); the turn fires from the BPR sweep
+ * (bkr94acsTurnDuty / bkr94acsTurn), caller-paced under the same
+ * tolerance discipline, and BA_DECIDED / COMPLETE / BA_EXHAUSTED
+ * emerge from turns, never from inputs.
+ *
  * Pure state machine: no I/O, no threads, no dynamic allocation.
  * Caller provides memory and delivers messages.
  *
@@ -210,24 +229,28 @@ struct bkr94acsAct {
 /*  BKR94 ACS state                                                      */
 /*************************************************************************/
 
-/* State flags (bitmap; same idiom as BRACHA87_F1_* / BRACHA87_F4_*) */
-#define BKR94ACS_F_THRESHOLD 0x01 /* BKR94 Step 2 has fired (enter-0 fanout done) */
-#define BKR94ACS_F_COMPLETE  0x02 /* all N BAs decided (Step 3 complete) */
-
 struct bkr94acs {
   unsigned char n;          /* process count encoding: actual = n + 1 */
   unsigned char t;          /* max Byzantine (n + 1 > 3t) */
   unsigned char vLen;       /* A-Cast value length encoding: actual = vLen + 1 */
   unsigned char maxPhases;  /* per binary BA instance */
   unsigned char self;       /* this process's index (needed for BA routing) */
-  unsigned char flags;      /* BKR94ACS_F_THRESHOLD / BKR94ACS_F_COMPLETE */
+  unsigned char complete;   /* boolean: all N BAs decided (Step 3); set
+                             * once, never cleared.  A stand-alone byte,
+                             * not a flag bitmap: it is the struct's one
+                             * boolean, and completion is the caller's
+                             * primary query -- read a->complete
+                             * directly. */
   /*
    * The BKR94 step-2 / step-3 decision counts are not stored: a
    * stored counter is a denormalization of baDecision[] (and, as the
    * unsigned char it once was, wrapped on the 256th decision so
-   * BKR94ACS_ACT_COMPLETE could never fire at 256 processes).  They are
-   * derived by scanning baDecision[] at each BA decision -- a rare
-   * event (see bkr94acsBaInput).
+   * BKR94ACS_ACT_COMPLETE could never fire at 256 processes).  They
+   * are derived by scanning baDecision[] on demand: the step-3 count
+   * once per BA decision (bkr94acsTurn's DECIDE branch, a rare
+   * event), the step-2 count at every bkr94acsFanoutDuty query --
+   * once per sweep for a paced caller, an O(N) walk that is the
+   * price of not storing a wrappable counter.
    *
    * pad puts data[] at offset 8 -- a multiple of sizeof (void *) on
    * all common 32- and 64-bit ABIs -- so data[] starts at the
@@ -262,30 +285,28 @@ bkr94acsInit(
 );
 
 /*
- * Maximum output actions from a single input call.
+ * Maximum output actions from a single library call.
  *
  * A-Cast input (BKR94ACS_CLS_ACAST):
  *   up to 2 ACAST_SEND (echo/ready) + 1 BA_SEND (enter-1 from BKR94 Step 1
- *   on accept).  Step 2's enter-0 fanout lives in BA input, not here.
- *   Bound: 3.
+ *   on accept).  Step 2's enter-0 fanout lives on the BPR sweep
+ *   (bkr94acsFanout), not here.  Bound: 3.
  *
  * BA input (BKR94ACS_CLS_BA):
- *   up to 2 (echo/ready) from the Fig1 input, plus a cascade over
- *   newly-validated rounds.  Adversarial delivery can make Fig3's
- *   forward cascade validate many rounds in a single Fig3Accept call
- *   (round k+1 unlocks when round k crosses n-t, etc.), so the
- *   per-call ceiling is:
- *     2 (echo/ready) + M (BA_SEND per round advanced)
- *       + 1 (BA_DECIDED, fires at most once per BA)
- *       + N (BKR94 Step 2 enter-0 fanout, fires at most once per ACS)
- *       + 1 (COMPLETE, fires at most once per ACS instance)
- *   where M = maxPhases * BRACHA87_ROUNDS_PER_PHASE is the BA's
- *   round bound and N = n + 1.
- *   Bound: M + N + 4.
+ *   up to 2 (echo/ready) from the Fig1 input.  The input only BANKS
+ *   evidence (Fig3 store/validate/cascade); round turns and their
+ *   acts live on the BPR sweep (bkr94acsTurn), not here.  Bound: 2.
  *
- * BA case strictly dominates, so the unified bound is
- * M + N + 4.  BKR94ACS_MAX_ACTS takes maxPhases so the cascade bound
- * is exact for the configured BA, not the 85-phase ceiling.
+ * Turn (bkr94acsTurn, one BA round fired from the sweep):
+ *   1 BA_SEND (next-round INITIAL) + 1 of BA_DECIDED or BA_EXHAUSTED
+ *   + 1 COMPLETE.  Bound: 3.
+ *
+ * Fanout (bkr94acsFanout, BKR94 Step 2 fired from the sweep):
+ *   one BA_SEND per BA unentered at the call.  Bound: N = n + 1.
+ *
+ * BKR94ACS_MAX_ACTS is the umbrella: M + n + 5 (M = maxPhases *
+ * BRACHA87_ROUNDS_PER_PHASE) covers every entry above with slack, so
+ * one out[] sized by it serves a whole caller loop.
  */
 #define BKR94ACS_MAX_ACTS(n, maxPhases) \
   ((unsigned int)(maxPhases) * BRACHA87_ROUNDS_PER_PHASE \
@@ -337,20 +358,13 @@ bkr94acsAcastInput(
  * Returns number of actions written to out[].
  * Caller provides out[] with room for BKR94ACS_MAX_ACTS(n, maxPhases) entries.
  *
- * The BA for each process is a full Fig1+Fig3+Fig4 pipeline
- * driven internally, deciding 0 or 1.
- *
- * On BKR94ACS_ACT_BA_SEND:
- *   Caller sends a BA message to all processes.
- *
- * On BKR94ACS_ACT_BA_DECIDED:
- *   BA for .process decided .baValue (0=exclude, 1=include).
- *
- * On BKR94ACS_ACT_COMPLETE:
- *   All N BAs decided. Common subset is final.
- *   Success signal, not a stop -- do not halt the loop here
- *   (post-decide continuation).
- *   Query with bkr94acsSubset().
+ * The BA for each process is a full Fig1+Fig3+Fig4 pipeline; this
+ * entry BANKS evidence only -- the Fig1 input's echo/ready traffic
+ * (at most 2 BKR94ACS_ACT_BA_SEND acts, which the caller sends to
+ * all processes) and, on a Fig1 ACCEPT, the Fig3 store/validate/
+ * cascade.  It never turns a round: BA_DECIDED / COMPLETE /
+ * BA_EXHAUSTED emerge from bkr94acsTurn on the BPR sweep, where the
+ * caller paces the sample each round is computed over.
  */
 unsigned int
 bkr94acsBaInput(
@@ -401,7 +415,7 @@ bkr94acsBaAccepted(
  * Query: get the decided common subset.
  * Returns count of included processes.
  * Fills processes[] with the included process indices (caller provides n entries).
- * Only valid after (a->flags & BKR94ACS_F_COMPLETE) is non-zero.
+ * Only valid after a->complete is non-zero.
  */
 unsigned int
 bkr94acsSubset(
@@ -499,6 +513,170 @@ bkr94acsRetry(
   struct bkr94acs *
  ,struct bracha87Retry *    /* cursor; init with bracha87RetryInit */
  ,struct bkr94acsAct *     /* out: room for BKR94ACS_RETRY_MAX_ACTS */
+);
+
+/*
+ * The sweep-side decisions and their shared trichotomy.
+ *
+ * In the papers' asynchronous model (unbounded finite delay, no
+ * clocks) a rule's "upon" / "wait until" names the evidence that
+ * ENABLES an action, never the moment it is taken -- the model has
+ * no moments.  Two of this layer's decisions consume evidence that
+ * is still growing when it first suffices, so their firing is paced
+ * by the caller from the BPR sweep tick, the deployment's only
+ * time-like notion:
+ *
+ *   the enter-0 fanout  (BKR94 step 2)      bkr94acsFanoutDuty/Fanout
+ *   the BA round turn   (Bracha Fig4 round)  bkr94acsTurnDuty/Turn
+ *
+ * Both duty queries classify with the same trichotomy (the system
+ * layer's R4 shape):
+ *
+ *   BKR94ACS_DUTY_HELD       not enabled: firing now would be
+ *                            unsound or is impossible; elapsed
+ *                            time is irrelevant -- wait.
+ *   BKR94ACS_DUTY_TOLERANCE  enabled, and waiting could still
+ *                            improve the outcome; the caller
+ *                            counts sweeps against its tolerance
+ *                            budget and fires when it elapses.
+ *   BKR94ACS_DUTY_MET        enabled with nothing left to wait
+ *                            for; firing is free.
+ *
+ * Caller discipline: per decision, count completed sweeps while
+ * duty is TOLERANCE; fire when the count exceeds the deployment's
+ * budget.  A zero budget recovers the eager schedule an earlier
+ * revision hardwired into the arrival paths -- provided the caller
+ * evaluates the verdict on EVERY attempt, since a clock that only
+ * advances at a sweep boundary fires one boundary late even at zero.
+ *
+ * THE UNIT IS THE FULL SWEEP -- one complete pass of the Retry
+ * cursor over every sent Fig 1 instance, bkr94acsSentFig1Count(a)
+ * calls, the same unit an abandonment policy counts barren sweeps
+ * in.  That is what makes a grace worth anything: a pass re-offers
+ * each sent instance exactly once, so a delayed A-Cast's INITIAL
+ * goes back on the wire once per sweep.  While TOLERANCE holds, the
+ * same sweeps are re-carrying that traffic, so the wait is spent on
+ * the recovery that can improve what the firing consumes -- but at
+ * the CURSOR'S RATE, one instance per call: a budget denominated in
+ * calls rather than passes re-offers only its own count out of
+ * bkr94acsSentFig1Count and can buy nothing at all.
+ *
+ * Two sizings follow, neither independent of the budget:
+ *   the cursor length -- bkr94acsSentFig1Count grows as the BAs
+ *     advance, so a budget priced in calls shrinks in real terms
+ *     over a run while one priced in passes does not;
+ *   the caller's own abandonment budget -- waiting is not progress,
+ *     so a tolerance clock and a barren clock advance on the same
+ *     boundaries, and a tolerance that does not expire strictly
+ *     before the abandon gate fires the decision into a caller that
+ *     is already leaving.
+ */
+#define BKR94ACS_DUTY_HELD      0
+#define BKR94ACS_DUTY_TOLERANCE 1
+#define BKR94ACS_DUTY_MET       2
+
+/*
+ * BKR94 Step 2 -- the enter-0 fanout.
+ *
+ * The paper's rule: "Upon completing 2t+1 BA protocols with output
+ * 1, enter input 0 to every BA protocol for which you have not yet
+ * entered a value."  Fired at the instant the local count crosses,
+ * the fastest n-t processes close SubSet against every honest
+ * process whose A-Cast is still in flight, and under a persistent
+ * latency spread that excludes the same honest processes every ACS
+ * instance.
+ *
+ * bkr94acsFanoutDuty (derived by scanning baDecision[] and the
+ * entered set; nothing stored):
+ *   HELD       BA-output-1 count < n-t: entering 0 is unsound
+ *              (Lemma 2 Part A).
+ *   TOLERANCE  count holds and unentered BAs remain: each delayed
+ *              A-Cast that completes during the grace enters 1 by
+ *              Step 1 and leaves the unentered set.
+ *   MET        nothing unentered: moot.
+ *
+ * bkr94acsFanout enters 0 into every BA still unentered at the
+ * call, outputting one BKR94ACS_ACT_BA_SEND per entry.  Returns 0
+ * -- and changes nothing -- unless duty is TOLERANCE, so an
+ * unconditional call per sweep is safe and is the simplest
+ * zero-budget caller.  Firing empties the unentered set, so
+ * once-per-instance is structural.
+ */
+unsigned char
+bkr94acsFanoutDuty(
+  const struct bkr94acs *
+);
+
+unsigned int
+bkr94acsFanout(
+  struct bkr94acs *
+ ,struct bkr94acsAct *     /* out: room for n + 1 entries (BKR94ACS_MAX_ACTS covers it) */
+);
+
+/*
+ * The BA round turn -- Bracha Fig4, one round of one process's BA.
+ *
+ * Bracha's Fig4 steps read "Wait until validate n-t k-messages"
+ * and then compute over the validated set -- the majority at
+ * (3i+1), the decide/adopt thresholds at (3i+3).  The set keeps
+ * growing past n-t (cascades, late arrivals) and the proofs hold
+ * for ANY >= n-t sample -- so the sample a turn consumes is purely
+ * a function of WHEN the turn fires.  The old arrival-path turn
+ * took the first n-t; a paced turn harvests more validated
+ * messages.  At (3i+3) the gain is one-directional: the decide/
+ * adopt counts are monotone thresholds (per-sender dedup: counts
+ * only grow), so a fuller sample can only convert coin phases into
+ * deterministic decides, never the reverse.  At (3i+1) the
+ * majority is a comparison, not a threshold -- a fuller sample can
+ * flip it -- but every >= n-t sample is proof-covered either way
+ * (when all correct processes enter a phase agreed, correct-value
+ * copies outnumber Byzantine ones in every such sample), so the
+ * flip trades between sound broadcasts, never against safety.
+ *
+ * bkr94acsTurnDuty(a, process):
+ *   HELD       the BA's next round is not complete (below n-t
+ *              validated), or its round space is exhausted.
+ *   TOLERANCE  complete at >= n-t but < n validated: turnable,
+ *              and waiting could still enlarge the sample.
+ *   MET        complete with all n validated: the full sample is
+ *              in hand, waiting buys nothing.
+ *
+ * bkr94acsTurn(a, process, toleranceElapsed, out) performs at most
+ * ONE round turn: fires iff duty is MET, or duty is TOLERANCE and
+ * toleranceElapsed is nonzero (MET needs no elapsed signal --
+ * firing is free).  Returns acts written, 0 when it did not fire.
+ * Acts: BKR94ACS_ACT_BA_SEND (the next round's INITIAL, self as
+ * initiator), BKR94ACS_ACT_BA_DECIDED or BKR94ACS_ACT_BA_EXHAUSTED,
+ * and BKR94ACS_ACT_COMPLETE -- at most 3; these acts emerge ONLY
+ * here, never from bkr94acsBaInput.  Post-decide continuation:
+ * turns continue past DECIDE until the round space is exhausted.
+ * A zero-budget caller drains: while (bkr94acsTurn(a, p, 1, out))
+ * per process after banking new evidence.  Cascaded validation can
+ * make several successive rounds turnable at once; each turn is
+ * its own call, and nothing here re-arms the caller's clock when
+ * one fires, so a paced caller spends ONE budget crossing a whole
+ * cascade rather than one per round.  Re-arming per round is the
+ * caller's to add and is not advised: it prices a catch-up the
+ * cohort has already earned.
+ * Scope the grace to UNDECIDED BAs (bkr94acsBaDecision == 0xFF):
+ * post-decide continuation rounds carry the pinned value and their
+ * sample no longer chooses anything, while their turn feeds the
+ * NEXT process's round -- holding them to the budget convoys the
+ * cohort, since one process's stall holds everyone else at n-t.
+ * The bundled example's sweep loop is the reference discipline.
+ */
+unsigned char
+bkr94acsTurnDuty(
+  const struct bkr94acs *
+ ,unsigned char            /* process: which process's BA */
+);
+
+unsigned int
+bkr94acsTurn(
+  struct bkr94acs *
+ ,unsigned char            /* process: which process's BA */
+ ,unsigned char            /* toleranceElapsed: caller's budget verdict */
+ ,struct bkr94acsAct *     /* out: room for 3 entries (BKR94ACS_MAX_ACTS covers it) */
 );
 
 /*************************************************************************/

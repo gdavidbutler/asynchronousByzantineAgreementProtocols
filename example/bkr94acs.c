@@ -43,10 +43,22 @@
  *   (from project root) make example_bkr94acs
  *
  * Usage:
- *   ./example_bkr94acs [-v] [-s seed] n t acast0 acast1 ...
+ *   ./example_bkr94acs [-v] [-s seed] [-d process] [-g budget] n t acast0 ...
  *
  * Example:
  *   ./example_bkr94acs 4 1 joe sam sally tim
+ *
+ * The sweep-side pacing pair (-d names the WAN laggard, -g the grace):
+ *   ./example_bkr94acs -d 3 4 1 joe sam sally tim
+ *     the eager schedule (budget 0) excludes the delayed honest
+ *     process: SubSet = 3 of 4, its value accepted everywhere but
+ *     excluded -- participation loss, not value loss
+ *   ./example_bkr94acs -d 3 -g 8 4 1 joe sam sally tim
+ *     the identical schedule under an 8-sweep grace includes it:
+ *     SubSet = 4 of 4, step 2 never fires
+ * What the pair deliberately shows the eager run giving up is the
+ * whole demonstration; a run without -d never even enables step 2
+ * (every A-Cast enters 1 before three BAs decide).
  */
 
 #include <stdio.h>
@@ -212,6 +224,104 @@ typeName(
 }
 
 /*--------------------------------------------------------------------------*/
+/*  Act framing -- the canonical packed-byte template                       */
+/*                                                                          */
+/*  Three sources hand the pump acts of the same kinds: a delivery          */
+/*  (bkr94acs{Acast,Ba}Input), the step-2 fanout (bkr94acsFanout), and a     */
+/*  BA round turn (bkr94acsTurn).  They differ only in what enabled them,    */
+/*  never in how their acts are framed, so all three route here: the wire    */
+/*  byte composed per bkr94acs.h, the BPR per-process suppress mask          */
+/*  honored, and the three terminal acts reported.  'tag' names the source   */
+/*  in the verbose trace.                                                   */
+/*--------------------------------------------------------------------------*/
+
+static void
+qActs(
+  const struct bkr94acsAct *acts
+ ,unsigned int nacts
+ ,unsigned char self
+ ,unsigned int n
+ ,unsigned int vLen
+ ,unsigned int verbose
+ ,const char *tag
+){
+  unsigned int k;
+  unsigned int p;
+
+  for (k = 0; k < nacts; ++k) {
+    switch (acts[k].act) {
+
+    case BKR94ACS_ACT_ACAST_SEND:
+      if (!acts[k].value)
+        break;
+      if (verbose)
+        printf("process %u: -> ACAST %s(process=%u)%s\n",
+               (unsigned)self, typeName(acts[k].type),
+               (unsigned)acts[k].process, tag);
+      for (p = 0; p < n; ++p) {
+        /* BPR per-process suppression: a transport skips recipients the
+         * action is provably no longer owed to (echoed -> INITIAL,
+         * readied -> ECHO, accepted -> READY).  Sound under loss; here
+         * (no loss) it merely trims redundant retries.  The READY
+         * suppress mask is fed by the ACCEPTED wire bit this loop
+         * round-trips (egress .accepted -> bit 4 -> ingress
+         * bkr94acs*Accepted); the same round-trip is exercised under
+         * loss in test_bkr94acs_blackbox.c. */
+        if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
+          continue;
+        qPush(BKR94ACS_CLS_ACAST, acts[k].process, 0, 0,
+              acts[k].type, acts[k].accepted, self, (unsigned char)p,
+              acts[k].value, vLen);
+      }
+      break;
+
+    case BKR94ACS_ACT_BA_SEND:
+      if (verbose)
+        printf("process %u: -> BA %s(process=%u, round=%u, initiator=%u, val=%u)%s\n",
+               (unsigned)self, typeName(acts[k].type),
+               (unsigned)acts[k].process, (unsigned)acts[k].round,
+               (unsigned)acts[k].initiator,
+               (unsigned)acts[k].baValue, tag);
+      for (p = 0; p < n; ++p) {
+        if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
+          continue;
+        qPush(BKR94ACS_CLS_BA, acts[k].process, acts[k].round,
+              acts[k].initiator, acts[k].type, acts[k].accepted,
+              self, (unsigned char)p,
+              &acts[k].baValue, 1);
+      }
+      break;
+
+    case BKR94ACS_ACT_BA_DECIDED:
+      if (verbose)
+        printf("process %u: BA[%u] decided %u\n",
+               (unsigned)self, (unsigned)acts[k].process,
+               (unsigned)acts[k].baValue);
+      break;
+
+    case BKR94ACS_ACT_COMPLETE:
+      if (verbose)
+        printf("process %u: BKR94 ACS COMPLETE\n", (unsigned)self);
+      break;
+
+    case BKR94ACS_ACT_BA_EXHAUSTED:
+      /*
+       * Not verbose-gated: BA_EXHAUSTED is a fatal protocol-level
+       * event (BKR94 Lemma 2 Part B's BA-termination assumption
+       * was violated for this instance), not informational like
+       * BA_DECIDED / COMPLETE.  An application's silence on this
+       * action would teach the wrong pattern.
+       */
+      printf("process %u: BA[%u] EXHAUSTED -- ACS cannot complete "
+             "(no decision in %u phases)\n",
+             (unsigned)self, (unsigned)acts[k].process,
+             (unsigned)MAX_PHASES);
+      break;
+    }
+  }
+}
+
+/*--------------------------------------------------------------------------*/
 /*  String comparison for qsort                                             */
 /*--------------------------------------------------------------------------*/
 
@@ -239,10 +349,22 @@ main(
   unsigned int shuffleSeed;
   unsigned int origSeed;
   unsigned int vLen;
+  int dproc;                /* -d: the delayed (WAN laggard) process, -1 none */
+  unsigned int graceBudget; /* -g: tolerance budget in sweeps, 0 = eager */
 
   /* Per-process BKR94 ACS state */
   struct bkr94acs *processes[MAX_PROCESSES];
   unsigned long acsSize;
+  struct bracha87Retry retry[MAX_PROCESSES];
+
+  /* Sweep-side pacing state (the header's caller discipline: count
+   * sweeps while a decision's duty holds TOLERANCE, fire when the
+   * count exceeds the budget; reset whenever duty leaves TOLERANCE) */
+  unsigned int turnTicks[MAX_PROCESSES][MAX_PROCESSES];
+  unsigned int fanoutTicks[MAX_PROCESSES];
+  unsigned int fanoutFires;
+  unsigned int sweepCount;
+  unsigned int released;
 
   /* A-Cast strings */
   char acasts[MAX_PROCESSES][MAX_VLEN];
@@ -260,6 +382,8 @@ main(
   verbose = 0;
   shuffleSeed = 0;
   exitCode = 0;
+  dproc = -1;
+  graceBudget = 0;
 
   arg = 1;
   while (arg < argc && argv[arg][0] == '-') {
@@ -270,6 +394,16 @@ main(
       ++arg;
       if (arg >= argc) goto usage;
       shuffleSeed = (unsigned int)atoi(argv[arg]);
+      ++arg;
+    } else if (argv[arg][1] == 'd' && argv[arg][2] == '\0') {
+      ++arg;
+      if (arg >= argc) goto usage;
+      dproc = atoi(argv[arg]);
+      ++arg;
+    } else if (argv[arg][1] == 'g' && argv[arg][2] == '\0') {
+      ++arg;
+      if (arg >= argc) goto usage;
+      graceBudget = (unsigned int)atoi(argv[arg]);
       ++arg;
     } else {
       goto usage;
@@ -287,6 +421,21 @@ main(
   if (n <= 3 * t) {
     fprintf(stderr, "need n > 3t (n=%u, t=%u)\n", n, t);
     return (1);
+  }
+  if (dproc >= 0) {
+    if ((unsigned int)dproc >= n) {
+      fprintf(stderr, "-d process must be < n\n");
+      return (1);
+    }
+    /*
+     * At t = 0, n-t = n: step 2's count can never reach n while a BA
+     * is unentered, so TOLERANCE -- the release trigger below -- is
+     * unreachable and the delayed A-Cast would be held forever.
+     */
+    if (t < 1) {
+      fprintf(stderr, "-d needs t >= 1\n");
+      return (1);
+    }
   }
   if ((unsigned int)(argc - arg) < n) {
     fprintf(stderr, "need %u A-Cast strings\n", n);
@@ -331,6 +480,7 @@ main(
     bkr94acsInit(processes[i], (unsigned char)(n - 1), (unsigned char)t,
                  (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i,
                  demoCoin, 0);
+    bracha87RetryInit(&retry[i]);
   }
 
   /*----------------------------------------------------------------------*/
@@ -359,6 +509,11 @@ main(
     struct bkr94acsAct acastAct;
     unsigned int nActs;
 
+    /* The -d process is the WAN laggard: only its OUTBOUND A-Cast is
+     * delayed.  It runs, receives, retries, and enters like everyone
+     * else; its INITIAL releases in the sweep loop below. */
+    if (dproc >= 0 && i == (unsigned int)dproc)
+      continue;
     nActs = bkr94acsAcast(processes[i],
                             (const unsigned char *)acasts[i],
                             &acastAct);
@@ -375,241 +530,248 @@ main(
     qShuffle(&shuffleSeed);
 
   /*----------------------------------------------------------------------*/
-  /*  Process message queue                                               */
+  /*  Drive to completion: drain ingress, tick the sweep, repeat -- the   */
+  /*  bkr94acs.h application loop.  The sweep carries the BPR retry and   */
+  /*  the two sweep-side protocol decisions, each paced by -g's           */
+  /*  tolerance budget (0 = fire whenever enabled, the eager schedule).   */
   /*----------------------------------------------------------------------*/
 
-  while (Qhead < Qtail) {
-    struct msg *m;
-    struct bkr94acs *st;
-    struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
-    unsigned int nacts;
-    unsigned int k;
-    unsigned int oldTail;
-    unsigned char cls;
-    unsigned char type;
-    unsigned char baValue;
+  released = (dproc < 0) ? 1 : 0;
+  sweepCount = 0;
+  fanoutFires = 0;
+  memset(turnTicks, 0, sizeof (turnTicks));
+  memset(fanoutTicks, 0, sizeof (fanoutTicks));
 
-    m = &MsgQ[Qhead++];
-    st = processes[m->to];
+  for (;;) {
+    unsigned int progress;
 
-    /* Unpack the wire byte back into class and Bracha87 type. */
-    cls = m->clsType & BKR94ACS_CLS_MASK;
-    type = m->clsType & BRACHA87_TYPE_MASK;
+    ++sweepCount;
+    progress = 0;
 
-    /*
-     * Do NOT skip messages addressed to locally-complete processes.
-     * A process that has decided all N BAs must keep processing
-     * incoming messages so its Fig1 echoes/readys continue to
-     * reach processes still working on some BAs.  Skipping replicates
-     * the post-decide stall the library itself was fixed to avoid
-     * (see bkr94acs.c bkr94acsBaInput comment on
-     * BKR94ACS_F_COMPLETE).  The simulation loop terminates when the
-     * message queue drains, not when any one process reaches complete.
-     */
-    oldTail = Qtail;
+    /*--------------------------------------------------------------------*/
+    /*  Drain ingress.  Deliveries BANK evidence and emit the protocol's  */
+    /*  own echo/ready traffic; no decision fires here.                   */
+    /*--------------------------------------------------------------------*/
 
-    /*
-     * Sender (m->from) is the authenticated message sender; for INITIAL
-     * messages the library checks it against the designated initiator
-     * (process for acasts, initiator for BA) and drops a
-     * forged non-initiator INITIAL, so this no-loss honest demo needs
-     * no extra filter here.  A deployment with Byzantine processes relies on
-     * that library check -- do NOT strip it by pre-validating away the
-     * 'from' argument.
-     */
-    if (cls == BKR94ACS_CLS_ACAST) {
-      if (verbose)
-        printf("process %u: recv ACAST %s(process=%u) from %u\n",
-               (unsigned)m->to, typeName(type),
-               (unsigned)m->process, (unsigned)m->from);
+    while (Qhead < Qtail) {
+      struct msg *m;
+      struct bkr94acs *st;
+      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
+      unsigned int nacts;
+      unsigned int oldTail;
+      unsigned char cls;
+      unsigned char type;
+      unsigned char baValue;
 
-      nacts = bkr94acsAcastInput(st, m->process, type, m->from,
-                                    m->value, acts);
+      m = &MsgQ[Qhead++];
+      st = processes[m->to];
+
+      /* Unpack the wire byte back into class and Bracha87 type. */
+      cls = m->clsType & BKR94ACS_CLS_MASK;
+      type = m->clsType & BRACHA87_TYPE_MASK;
+
       /*
-       * ACCEPTED-annotation ingress: bit 4 on a READY says its sender
-       * has accepted this Fig1 and consumes no further (ready, v) from
-       * us.  Route it AFTER the matching Input above, so rdFrom is
-       * recorded first and acFrom stays a subset of rdFrom.
+       * Do NOT skip messages addressed to locally-complete processes.
+       * A process that has decided all N BAs must keep processing
+       * incoming messages so its Fig1 echoes/readys continue to
+       * reach processes still working on some BAs.  Skipping replicates
+       * the post-decide stall the library itself was fixed to avoid
+       * (see bkr94acs.c bkr94acsBaInput comment on
+       * a->complete).  The loop terminates on completion plus
+       * quiescence below, not when any one process reaches complete.
        */
-      if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
-        bkr94acsAcastAccepted(st, m->process, m->from);
-    } else {
-      /* Recover the BA binary value (+D_FLAG) from the wire byte. */
-      baValue = (unsigned char)
-        (((m->clsType >> 3) & 1) | (m->clsType & BRACHA87_D_FLAG));
-      if (verbose)
-        printf("process %u: recv BA %s(process=%u, round=%u, val=%u) from %u\n",
-               (unsigned)m->to, typeName(type),
-               (unsigned)m->process, (unsigned)m->round,
-               (unsigned)baValue, (unsigned)m->from);
+      oldTail = Qtail;
 
-      nacts = bkr94acsBaInput(st, m->process, m->round,
-                                     m->initiator, type,
-                                     m->from, baValue, acts);
-      /* Same ACCEPTED ingress as the A-Cast class (Input first). */
-      if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
-        bkr94acsBaAccepted(st, m->process, m->round,
-                                  m->initiator, m->from);
-    }
-
-    /* Enqueue output actions as network messages */
-    for (k = 0; k < nacts; ++k) {
-      unsigned int p;
-
-      switch (acts[k].act) {
-
-      case BKR94ACS_ACT_ACAST_SEND:
-        if (!acts[k].value)
-          break;
+      /*
+       * Sender (m->from) is the authenticated message sender; for INITIAL
+       * messages the library checks it against the designated initiator
+       * (process for acasts, initiator for BA) and drops a
+       * forged non-initiator INITIAL, so this no-loss honest demo needs
+       * no extra filter here.  A deployment with Byzantine processes relies on
+       * that library check -- do NOT strip it by pre-validating away the
+       * 'from' argument.
+       */
+      if (cls == BKR94ACS_CLS_ACAST) {
         if (verbose)
-          printf("process %u: -> ACAST %s(process=%u)\n",
-                 (unsigned)m->to, typeName(acts[k].type),
-                 (unsigned)acts[k].process);
-        for (p = 0; p < n; ++p) {
-          /* BPR per-process suppression: a transport skips recipients the
-           * action is provably no longer owed to (echoed -> INITIAL,
-           * readied -> ECHO, accepted -> READY).  Sound under loss; here
-           * (no loss) it merely trims redundant retries.  The READY
-           * suppress mask is fed by the ACCEPTED wire bit this loop
-           * round-trips (egress .accepted -> bit 4 -> ingress
-           * bkr94acs*Accepted); the same round-trip is exercised under
-           * loss in test_bkr94acs_blackbox.c. */
-          if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
-            continue;
-          qPush(BKR94ACS_CLS_ACAST, acts[k].process, 0, 0,
-                acts[k].type, acts[k].accepted, m->to, (unsigned char)p,
-                acts[k].value, vLen);
-        }
-        break;
+          printf("process %u: recv ACAST %s(process=%u) from %u\n",
+                 (unsigned)m->to, typeName(type),
+                 (unsigned)m->process, (unsigned)m->from);
 
-      case BKR94ACS_ACT_BA_SEND:
-        if (verbose)
-          printf("process %u: -> BA %s(process=%u, round=%u, initiator=%u, val=%u)\n",
-                 (unsigned)m->to, typeName(acts[k].type),
-                 (unsigned)acts[k].process, (unsigned)acts[k].round,
-                 (unsigned)acts[k].initiator,
-                 (unsigned)acts[k].baValue);
-        for (p = 0; p < n; ++p) {
-          if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
-            continue;
-          qPush(BKR94ACS_CLS_BA, acts[k].process, acts[k].round,
-                acts[k].initiator, acts[k].type, acts[k].accepted,
-                m->to, (unsigned char)p,
-                &acts[k].baValue, 1);
-        }
-        break;
-
-      case BKR94ACS_ACT_BA_DECIDED:
-        if (verbose)
-          printf("process %u: BA[%u] decided %u\n",
-                 (unsigned)m->to, (unsigned)acts[k].process,
-                 (unsigned)acts[k].baValue);
-        break;
-
-      case BKR94ACS_ACT_COMPLETE:
-        if (verbose)
-          printf("process %u: BKR94 ACS COMPLETE\n", (unsigned)m->to);
-        break;
-
-      case BKR94ACS_ACT_BA_EXHAUSTED:
+        nacts = bkr94acsAcastInput(st, m->process, type, m->from,
+                                      m->value, acts);
         /*
-         * Not verbose-gated: BA_EXHAUSTED is a fatal protocol-level
-         * event (BKR94 Lemma 2 Part B's BA-termination assumption
-         * was violated for this instance), not informational like
-         * BA_DECIDED / COMPLETE.  An application's silence on this
-         * action would teach the wrong pattern.
+         * ACCEPTED-annotation ingress: bit 4 on a READY says its sender
+         * has accepted this Fig1 and consumes no further (ready, v) from
+         * us.  Route it AFTER the matching Input above, so rdFrom is
+         * recorded first and acFrom stays a subset of rdFrom.
          */
-        printf("process %u: BA[%u] EXHAUSTED -- ACS cannot complete "
-               "(no decision in %u phases)\n",
-               (unsigned)m->to, (unsigned)acts[k].process,
-               (unsigned)MAX_PHASES);
-        break;
+        if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
+          bkr94acsAcastAccepted(st, m->process, m->from);
+      } else {
+        /* Recover the BA binary value (+D_FLAG) from the wire byte. */
+        baValue = (unsigned char)
+          (((m->clsType >> 3) & 1) | (m->clsType & BRACHA87_D_FLAG));
+        if (verbose)
+          printf("process %u: recv BA %s(process=%u, round=%u, val=%u) from %u\n",
+                 (unsigned)m->to, typeName(type),
+                 (unsigned)m->process, (unsigned)m->round,
+                 (unsigned)baValue, (unsigned)m->from);
+
+        nacts = bkr94acsBaInput(st, m->process, m->round,
+                                       m->initiator, type,
+                                       m->from, baValue, acts);
+        /* Same ACCEPTED ingress as the A-Cast class (Input first). */
+        if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
+          bkr94acsBaAccepted(st, m->process, m->round,
+                                    m->initiator, m->from);
+      }
+
+      /* Enqueue output actions as network messages.  A duplicate
+       * (BPR-retried) delivery returns 0 acts -- Input dedup, the
+       * invariant that makes the progress gate below sound. */
+      if (nacts)
+        progress = 1;
+      qActs(acts, nacts, m->to, n, vLen, verbose, "");
+
+      if (shuffleSeed && Qtail > oldTail)
+        qShuffle(&shuffleSeed);
+    }
+
+    /* The queue is drained (Qhead == Qtail): reset the indices so the
+     * append-only store's capacity bounds one sweep's traffic, not the
+     * whole run's -- without this a long retirement tail fills the
+     * queue and qPush's silent drop would fake quiescence. */
+    Qhead = Qtail = 0;
+
+    /*--------------------------------------------------------------------*/
+    /*  The delayed A-Cast releases at the first sweep its own process    */
+    /*  observes step 2 leave HELD: the WAN knife edge.  Under a budget   */
+    /*  that is TOLERANCE -- the grace clock is running and the next      */
+    /*  drain delivers the INITIAL, so step 1 wins.  At -g 0 TOLERANCE    */
+    /*  never survives to a sweep boundary (the tick fires the fanout     */
+    /*  within the same pass that decides the n-t'th BA), so the first    */
+    /*  observable state is MET: the door shut before the laggard's       */
+    /*  INITIAL could leave, and the release demonstrates the arrival     */
+    /*  that was one sweep too late.                                      */
+    /*--------------------------------------------------------------------*/
+
+    if (!released
+     && bkr94acsFanoutDuty(processes[dproc]) != BKR94ACS_DUTY_HELD) {
+      struct bkr94acsAct acastAct;
+
+      released = 1;
+      progress = 1;
+      printf("process %d: delayed A-Cast \"%s\" releases (sweep %u)\n",
+             dproc, acasts[dproc], sweepCount);
+      if (bkr94acsAcast(processes[dproc],
+                          (const unsigned char *)acasts[dproc],
+                          &acastAct) == 1)
+        for (j = 0; j < n; ++j)
+          qPush(BKR94ACS_CLS_ACAST, acastAct.process, 0, 0,
+                BRACHA87_INITIAL, acastAct.accepted,
+                (unsigned char)dproc, (unsigned char)j,
+                (const unsigned char *)acasts[dproc], vLen);
+    }
+
+    /*--------------------------------------------------------------------*/
+    /*  Sweep tick: the BPR retry plus the sweep-side decisions.          */
+    /*--------------------------------------------------------------------*/
+
+    for (i = 0; i < n; ++i) {
+      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
+      unsigned int nacts;
+      unsigned int p;
+      unsigned char duty;
+
+      /* One retry call per process per sweep -- looping until idle
+       * would flood the network; see bracha87.h's flood warning.
+       * Receivers dedup at Fig1Input, so under perfect delivery a
+       * retry's duplicates produce no new state; here it carries the
+       * -d laggard's late INITIAL and re-carries anything a lossy
+       * transport would have dropped. */
+      nacts = bkr94acsRetry(processes[i], &retry[i], acts);
+      qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [retry]");
+
+      /*
+       * BA round turns, paced per (instance, BA): count sweeps while
+       * bkr94acsTurnDuty holds TOLERANCE, pass the elapsed signal
+       * once the count exceeds -g.  MET fires free -- the full
+       * sample is in hand and waiting buys nothing.  The grace is
+       * scoped to UNDECIDED BAs: once bkr94acsBaDecision reports a
+       * decision, post-decide continuation rounds carry the pinned
+       * value and their sample no longer chooses anything, so
+       * holding them to the budget would only convoy the cohort
+       * (each process's round-k INITIAL waits on its own turn of
+       * k-1, and one process's stall holds everyone at n-t).  One
+       * turn per BA per sweep: an undecided cascade's later rounds
+       * each get their own grace.
+       */
+      for (p = 0; p < n; ++p) {
+        duty = bkr94acsTurnDuty(processes[i], (unsigned char)p);
+        if (duty == BKR94ACS_DUTY_TOLERANCE)
+          ++turnTicks[i][p];
+        else
+          turnTicks[i][p] = 0;
+        nacts = bkr94acsTurn(processes[i], (unsigned char)p,
+                             turnTicks[i][p] > graceBudget
+                             || bkr94acsBaDecision(processes[i],
+                                  (unsigned char)p) != 0xFF, acts);
+        if (nacts)
+          progress = 1;
+        qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [turn]");
+      }
+
+      /*
+       * BKR94 step 2, paced the same way -- after the turns, because
+       * only a turn produces the decisions it counts.  While its
+       * TOLERANCE holds, the retry above is still carrying the
+       * delayed A-Cast: each one that completes enters 1 by step 1
+       * and leaves the unentered set before the fanout reads it.
+       */
+      duty = bkr94acsFanoutDuty(processes[i]);
+      if (duty == BKR94ACS_DUTY_TOLERANCE)
+        ++fanoutTicks[i];
+      else
+        fanoutTicks[i] = 0;
+      if (fanoutTicks[i] > graceBudget) {
+        nacts = bkr94acsFanout(processes[i], acts);
+        if (nacts) {
+          fanoutFires += nacts;
+          progress = 1;
+          printf("process %u: step 2 fires (sweep %u) -- enter 0 in %u unentered BA(s)\n",
+                 i, sweepCount, nacts);
+        }
+        qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [step 2]");
       }
     }
 
-    if (shuffleSeed && Qtail > oldTail)
-      qShuffle(&shuffleSeed);
-  }
+    /*--------------------------------------------------------------------*/
+    /*  Terminate by the documented abandonment pattern: every process    */
+    /*  complete AND a barren sweep -- no delivery, turn, or fanout       */
+    /*  produced a fresh act.  BPR keeps re-sending (the library          */
+    /*  prescribes no stop; see README.md "Abandonment"), but Input       */
+    /*  dedup returns 0 acts for a duplicate, so retries never register   */
+    /*  as progress -- the invariant test_bkr94acs_blackbox C8 pins.      */
+    /*  The cap is a harness guard, not protocol.                         */
+    /*--------------------------------------------------------------------*/
 
-  /*----------------------------------------------------------------------*/
-  /*  Retry tick                                                           */
-  /*                                                                      */
-  /*  In a real deployment, the BPR retry is called once per tick.         */
-  /*  Looping until idle would flood the network -- see bracha87.h's       */
-  /*  flood warning.  The call is shown here as a representative tick.    */
-  /*----------------------------------------------------------------------*/
+    if (!progress) {
+      unsigned int allDone;
 
-  for (i = 0; i < n; ++i) {
-    struct bracha87Retry retry;
-    struct bkr94acsAct pacts[BKR94ACS_RETRY_MAX_ACTS];
-    unsigned int n_pacts;
-    unsigned int k;
-    unsigned int p;
-
-    bracha87RetryInit(&retry);
-    n_pacts = bkr94acsRetry(processes[i], &retry, pacts);
-    for (k = 0; k < n_pacts; ++k) {
-      switch (pacts[k].act) {
-      case BKR94ACS_ACT_ACAST_SEND:
-        if (!pacts[k].value) break;
-        for (p = 0; p < n; ++p) {
-          if (pacts[k].skip && BRACHA87_SKIP_TST(pacts[k].skip, p))
-            continue;
-          qPush(BKR94ACS_CLS_ACAST, pacts[k].process, 0, 0,
-                pacts[k].type, pacts[k].accepted,
-                (unsigned char)i, (unsigned char)p,
-                pacts[k].value, vLen);
+      allDone = 1;
+      for (i = 0; i < n; ++i)
+        if (!processes[i]->complete) {
+          allDone = 0;
+          break;
         }
+      if (allDone)
         break;
-      case BKR94ACS_ACT_BA_SEND:
-        for (p = 0; p < n; ++p) {
-          if (pacts[k].skip && BRACHA87_SKIP_TST(pacts[k].skip, p))
-            continue;
-          qPush(BKR94ACS_CLS_BA, pacts[k].process, pacts[k].round,
-                pacts[k].initiator, pacts[k].type, pacts[k].accepted,
-                (unsigned char)i, (unsigned char)p,
-                &pacts[k].baValue, 1);
-        }
-        break;
-      default:
-        /* BA_DECIDED / COMPLETE / BA_EXHAUSTED don't appear in retry
-         * output (no retry component); ignore. */
-        break;
-      }
     }
-  }
-
-  /*----------------------------------------------------------------------*/
-  /*  Drain the post-retry queue.  Receivers dedup at Fig1Input,          */
-  /*  so under perfect delivery these retries produce no new state.       */
-  /*----------------------------------------------------------------------*/
-
-  while (Qhead < Qtail) {
-    struct msg *m;
-    struct bkr94acsAct dacts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
-
-    m = &MsgQ[Qhead++];
-    if ((m->clsType & BKR94ACS_CLS_MASK) == BKR94ACS_CLS_ACAST) {
-      bkr94acsAcastInput(processes[m->to], m->process,
-                            m->clsType & BRACHA87_TYPE_MASK, m->from,
-                            m->value, dacts);
-      /* Same ACCEPTED ingress as the main loop (Input first). */
-      if ((m->clsType & BRACHA87_TYPE_MASK) == BRACHA87_READY
-       && (m->clsType & BKR94ACS_ACCEPTED))
-        bkr94acsAcastAccepted(processes[m->to], m->process, m->from);
-    } else {
-      bkr94acsBaInput(processes[m->to], m->process, m->round,
-                             m->initiator, m->clsType & BRACHA87_TYPE_MASK,
-                             m->from,
-                             (unsigned char)(((m->clsType >> 3) & 1)
-                                             | (m->clsType & BRACHA87_D_FLAG)),
-                             dacts);
-      if ((m->clsType & BRACHA87_TYPE_MASK) == BRACHA87_READY
-       && (m->clsType & BKR94ACS_ACCEPTED))
-        bkr94acsBaAccepted(processes[m->to], m->process, m->round,
-                                  m->initiator, m->from);
+    if (sweepCount > 100000) {
+      fprintf(stderr, "no convergence within the sweep cap\n");
+      exitCode = 1;
+      break;
     }
-    /* Retry-induced acts are duplicates; discarded. */
   }
 
   /*----------------------------------------------------------------------*/
@@ -634,7 +796,7 @@ main(
       unsigned int cnt;
       const char *sorted[MAX_PROCESSES];
 
-      if (!(processes[i]->flags & BKR94ACS_F_COMPLETE)) {
+      if (!processes[i]->complete) {
         /*
          * Distinguish exhaustion from other incompleteness causes:
          * the library exposes 0xFE in bkr94acsBaDecision for BAs
@@ -703,6 +865,40 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
+  /*  The -d demonstration's verdict: included under grace, excluded      */
+  /*  under the eager schedule -- and in the eager case the value still   */
+  /*  arrived everywhere, pinning that exclusion is participation loss,   */
+  /*  never value loss.                                                   */
+  /*----------------------------------------------------------------------*/
+
+  if (dproc >= 0) {
+    unsigned char subset[MAX_PROCESSES];
+    unsigned int cnt;
+    unsigned int inSubset;
+    unsigned int acceptedEverywhere;
+
+    cnt = bkr94acsSubset(processes[0], subset);
+    inSubset = 0;
+    for (j = 0; j < cnt; ++j)
+      if (subset[j] == (unsigned char)dproc)
+        inSubset = 1;
+    acceptedEverywhere = 1;
+    for (i = 0; i < n; ++i)
+      if (!bkr94acsAcastValue(processes[i], (unsigned char)dproc))
+        acceptedEverywhere = 0;
+    printf("\nDelayed process %d (grace budget %u, %u sweeps): %s\n",
+           dproc, graceBudget, sweepCount,
+           inSubset
+             ? "INCLUDED -- the grace let step 1 win"
+             : "EXCLUDED -- the eager schedule shut the door");
+    printf("step 2 fired %u enter-0 act(s); the delayed value was %s"
+           "accepted at every process%s\n",
+           fanoutFires,
+           acceptedEverywhere ? "" : "NOT ",
+           inSubset ? "" : " -- participation loss, not value loss");
+  }
+
+  /*----------------------------------------------------------------------*/
   /*  Cleanup                                                             */
   /*----------------------------------------------------------------------*/
 
@@ -715,12 +911,18 @@ cleanup:
 
 usage:
   fprintf(stderr,
-    "usage: example_bkr94acs [-v] [-s seed] n t acast0 acast1 ...\n"
+    "usage: example_bkr94acs [-v] [-s seed] [-d process] [-g budget] n t acast0 acast1 ...\n"
     "  n            total processes (1-%d)\n"
     "  t            max Byzantine faults\n"
     "  acast*      per-process A-Cast strings\n"
-    "  -v           verbose: trace every message\n"
-    "  -s seed      shuffle seed (0 = ordered delivery)\n",
+    "  -v           verbose: trace every message\n",
     MAX_PROCESSES);
+  fprintf(stderr,
+    "  -s seed      shuffle seed (0 = ordered delivery)\n"
+    "  -d process   hold that process's A-Cast until step 2 first\n"
+    "               enables (the WAN laggard; needs t >= 1)\n"
+    "  -g budget    tolerance budget in sweeps for the sweep-side\n"
+    "               decisions (0 = eager; with -d, a sufficient\n"
+    "               budget includes the laggard in SubSet)\n");
   return (1);
 }

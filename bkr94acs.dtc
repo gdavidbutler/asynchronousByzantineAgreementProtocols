@@ -34,18 +34,27 @@
 # on the count of Q(j) = 1 events, would be the wrong reading of
 # the paper.
 #
+# Step 2, like every rule in the paper, is stated in the
+# asynchronous model: unbounded (finite) message delay, no clocks
+# (BKR94ACS.txt, Model and tools).  Each rule's "upon" names the
+# evidence that enables an action; the model has no notion of the
+# moment the action is taken, and Lemma 2 Part B consumes only that
+# the 0-inputs are eventually entered once the n-t count holds.  An
+# earlier revision of this table encoded Step 2 on the arrival
+# path, firing at the instant the local count crossed n-t.  That
+# eager schedule was this capture's reading, not the paper's -- it
+# dropped the unbounded-latency notion the model rests on.  The
+# Step 2 section below records the rule; its firing is paced by the
+# caller from the BPR sweep tick, completing for this layer the BPR
+# integration bracha87.[hc] already has.  A zero tolerance budget
+# recovers the eager schedule.
+#
 # Inputs (the situation when an ACS-layer event is processed;
 # j is the process to which the event refers):
 #   "kind of ACS event"     { Q(j) = 1, BA_j outputs 0, BA_j outputs 1 }
 #   "input to BA_j"         { none, 0, 1 }
 #                             - the value, if any, this process
 #                               has previously entered to BA_j
-#   "input-0 fanout already triggered"               { yes, no }
-#   "post-output BA-output-1 count >= n-t"           { yes, no }
-#                             - n-t = 2t+1 in Bracha's regime;
-#                               the count is the number of BA_j
-#                               that have output 1, after this
-#                               event is recorded
 #   "post-output BA-output count == n"               { yes, no }
 #                             - the total number of BAs that
 #                               have output any value, after
@@ -53,7 +62,6 @@
 #
 # Outputs:
 #   "input 1 to BA_j"               { yes, no }
-#   "input 0 to all unentered BAs"    { yes, no }
 #   "output SubSet"                 { yes, no }
 #                                     - SubSet := { j : BA_j had output 1 }
 #                                       computed when this output fires
@@ -78,22 +86,91 @@ no,"BA_j outputs 1",
 # Step 2 - Input 0 to all unentered BAs at n-t BA outputs of 1
 # ================================================================
 
-# Rule 2.  Upon BA_j outputting 1, if the count of BAs that have
-# output 1 has reached n-t (= 2t+1 in Bracha's regime) and the
-# input-0 fanout has not yet fired, enter input 0 to every BA
-# for which I have not yet entered a value.  The "fanout already
-# triggered" guard makes this fire exactly once per ACS instance.
+# Rule 2 -- recorded here, fired from the BPR sweep.
 #
-# The fanout itself - iterating over the N BAs and inputting 0
-# where input is none - is a C-side loop; the DTC fires the
-# go-signal "input 0 to all unentered BAs" and the C does the
-# enumeration.
-@"input 0 to all unentered BAs","kind of ACS event","post-output BA-output-1 count >= n-t","input-0 fanout already triggered"
-yes,"BA_j outputs 1",yes,no
-no,"BA_j outputs 1",yes,yes
-no,"BA_j outputs 1",no,
-no,"BA_j outputs 0",,
-no,"Q(j) = 1",,
+# The paper's rule: "Upon completing 2t+1 BA protocols with output
+# 1, enter input 0 to every BA protocol for which you have not yet
+# entered a value."
+#
+# Enabling evidence, not a moment (header note above).  Fired at
+# the instant the count crosses -- the earlier revision of this
+# table -- the fastest n-t processes close SubSet against every
+# honest process whose A-Cast is still in flight, and under a
+# persistent latency spread the same honest processes are excluded
+# every ACS instance.  Nothing in the model compels that
+# eagerness; the deployment's answer to unbounded latency is the
+# BPR sweep, so the firing lives there, beside the retry/retire
+# decisions that already do.
+#
+# bkr94acsFanoutDuty classifies the decision, derived by scanning
+# baDecision[] and entered[] (never stored):
+#
+#   HELD      - BA-output-1 count < n-t.  The paper's floor: enter
+#               0 below it and a mass of 0-inputs could force
+#               SubSet empty.  Elapsed tolerance is irrelevant.
+#   TOLERANCE - count >= n-t and unentered BAs remain.  Enabled.
+#               The caller counts sweeps against its budget and
+#               calls bkr94acsFanout when the budget elapses; a
+#               zero budget is the eager schedule.  While TOLERANCE
+#               holds, the same sweep keeps retrying the delayed
+#               processes' A-Casts (BPR gate below: undecided ->
+#               retry), so the grace is spent on exactly the
+#               recovery work that can make the firing unnecessary.
+#   MET       - no unentered BAs remain; nothing to give up on.
+#               Absorbing: the fanout empties the unentered set, so
+#               once-per-instance is structural and the old "fanout
+#               already triggered" latch (BKR94ACS_F_THRESHOLD) is
+#               gone.
+#
+# The trichotomy mirrors the system layer's R4 advance rule
+# (system.md MET / TOLERANCE / HELD): the same decision -- proceed
+# without the tail -- at this layer's grain, under the same caller
+# discipline (count sweeps only while TOLERANCE; the budget is
+# deployment tuning).
+#
+# Out of the merged dispatch because its inputs (the n-t count,
+# the unentered set, elapsed tolerance) appear in no other rule --
+# merging would duplicate its DAG at every leaf -- and tolerance
+# is deployment vocabulary, not paper vocabulary.  The enabling
+# predicate and the fanout loop (enter 0 where input is none) are
+# plain C in bkr94acsFanoutDuty / bkr94acsFanout, the same
+# treatment as the BPR retry gate below.
+
+# ================================================================
+# The BA round turn -- not a BKR94 rule; fired from the BPR sweep
+# ================================================================
+
+# The composition's other sweep-side decision.  Bracha's Fig4 steps
+# read "Wait until validate n-t k-messages" and then compute over
+# the validated set (the majority at 3i+1, the decide/adopt
+# thresholds at 3i+3).  The set keeps growing past n-t and Bracha's
+# proofs hold for ANY >= n-t sample -- so the sample a turn
+# consumes is purely a function of WHEN the turn fires.  An earlier
+# revision turned rounds inside the arrival path (bkr94acsBaInput's
+# cascade loop), consuming the first n-t; the same eager-schedule
+# reading Step 2 carried, with a different cost: not exclusion (a
+# late round-k message still validates and still serves round-k+1
+# validation) but coin luck.  At 3i+3 the decide/adopt counts are
+# monotone thresholds (per-sender dedup: counts only grow), so a
+# fuller sample can only convert coin phases into deterministic
+# decides; at 3i+1 the majority is a comparison a fuller sample can
+# flip -- both outcomes proof-covered, the flip trading between
+# sound broadcasts, never against safety.
+#
+# The arrival path now only BANKS evidence (Fig1 input, Fig3
+# store/validate/cascade -- Fig3 itself was always deferral-shaped:
+# every message is stored and validity re-derived as prior rounds
+# grow).  bkr94acsTurnDuty classifies a BA's next round with the
+# shared trichotomy (HELD below n-t validated or round space
+# exhausted / TOLERANCE at >= n-t with the sample still growable /
+# MET at all n validated -- the full sample, firing is free), and
+# bkr94acsTurn computes one round under the same caller discipline
+# as the fanout.  BA_DECIDED / COMPLETE / BA_EXHAUSTED emerge from
+# turns only; the Step 3 dispatch below rides the turn's decide.
+#
+# bracha87.[hc] needed no change: bracha87Fig3RoundComplete,
+# bracha87Fig3GetValid, and bracha87Fig4Round were already the
+# caller-shaped seam; the eager loop was this composition's choice.
 
 # ================================================================
 # Step 3 - Output SubSet when all n BAs have output

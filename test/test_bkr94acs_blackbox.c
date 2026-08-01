@@ -21,9 +21,26 @@
  *      MAX_ACTS bound, SentFig1Count monotone, barren-sweep
  *      signal, drop convergence, silent-Byzantine canary, Input
  *      dedup (retried wire returns 0 acts).
- *   D. EXHAUSTED -- single output + 0xFE sentinel + permanent
- *      !complete; Retry continues post-EXHAUSTED.
+ *   D. EXHAUSTED -- single output (read off the zero-budget turn
+ *      drain, the only place the act can appear) + 0xFE sentinel +
+ *      permanent !complete + HELD forever after; Retry continues
+ *      post-EXHAUSTED.
  *   E. Byzantine -- equivocating A-Caster (Bracha Lemma 2 inheritance).
+ *   F. Step 2 pacing -- the same delayed-A-Cast schedule under two
+ *      budgets: eager excludes the delayed honest process (F1), the
+ *      grace includes it (F2); a dead slot holds TOLERANCE forever
+ *      and the budgeted fanout completes past it (F3).  Duty
+ *      trichotomy monotone (MET absorbing, TOLERANCE never back to
+ *      HELD) at every fDrive sweep.
+ *   G. Round-turn pacing -- deliveries bank and decide nothing (G1),
+ *      TOLERANCE needs the caller's elapsed signal (G2), MET fires
+ *      without it (G3), a drained instance is turn-quiescent (G4).
+ *
+ * Caller discipline (bkr94acs.h): the arrival path only banks
+ * evidence.  BKR94 step 2 (bkr94acsFanout) and the BA round turn
+ * (bkr94acsTurn) fire from the caller's sweep, so every driver here
+ * bridges at a ZERO tolerance budget -- the eager schedule -- except
+ * where a section makes one of the two the isolated variable.
  *
  * Header encoding convention (CRITICAL):
  *   n parameter is encoded; actual process count = n + 1
@@ -313,6 +330,35 @@ observeAndOutput(
   }
 }
 
+/* BA round turns at a ZERO tolerance budget -- the bridge bkr94acs.h
+ * prescribes for a caller that wants the eager schedule: after any
+ * delivery or retry that may have banked evidence, turn every BA that
+ * became turnable.  The while() is required (cascaded validation can
+ * unlock several successive rounds), and the sweep runs over ALL BAs
+ * of the instance because an A-Cast accept enters round 0 of a BA the
+ * arrival did not name.  BA_SENDs go to the wire; BA_DECIDED /
+ * COMPLETE / BA_EXHAUSTED are observation-only. */
+static void
+drainTurns(
+  struct bkr94acs *process
+ ,struct processObs *obs
+ ,unsigned char self
+ ,unsigned int nAct
+ ,unsigned int vBytes
+ ,struct bkr94acsAct *out
+ ,unsigned int dropPercent
+ ,int silentProcess
+){
+  unsigned int b, n;
+
+  for (b = 0; b < nAct; ++b)
+    while ((n = bkr94acsTurn(process, (unsigned char)b, 1, out)) > 0) {
+      CHECK(n <= 3, "turn outputs at most 3 acts");
+      observeAndOutput(obs, self, nAct, out, n, vBytes, dropPercent,
+                     silentProcess);
+    }
+}
+
 /* Deliver one wire message to its recipient process; observe the
  * resulting acts. */
 static void
@@ -327,13 +373,24 @@ deliverWire(
 ){
   unsigned int n;
 
-  if (w->cls == BKR94ACS_CLS_ACAST)
+  if (w->cls == BKR94ACS_CLS_ACAST) {
     n = bkr94acsAcastInput(process, w->process, w->type, w->from,
                               w->value, out);
-  else
+    CHECK(n <= 3, "A-Cast input act count within its bound (2 + enter-1)");
+  } else {
     n = bkr94acsBaInput(process, w->process, w->round, w->initiator,
                                w->type, w->from, w->baValue, out);
-  CHECK(n <= outCap, "act count within MAX_ACTS bound");
+    CHECK(n <= 2, "BA input act count within its bound (echo/ready only)");
+  }
+  observeAndOutput(obs, w->to, nAct, out, n, vBytes, 0, -1);
+
+  /* Sweep-side decisions at zero tolerance budget, turns first
+   * (only a turn produces the decisions the fanout counts; a fanout
+   * cannot make a round turnable -- it writes only entered[] and
+   * round-0 initiator state, which no turn duty reads). */
+  drainTurns(process, obs, w->to, nAct, vBytes, out, 0, -1);
+  n = bkr94acsFanout(process, out);
+  CHECK(n <= outCap, "fanout act count within MAX_ACTS bound");
   observeAndOutput(obs, w->to, nAct, out, n, vBytes, 0, -1);
 }
 
@@ -407,9 +464,9 @@ assertLemma2(
   unsigned int sz0, szI;
   unsigned int i, j;
 
-  /* Part B: all processes complete (BKR94ACS_F_COMPLETE flag in a->flags). */
+  /* Part B: all processes complete (a->complete). */
   for (i = 0; i < nAct; ++i)
-    CHECK(processes[i]->flags & BKR94ACS_F_COMPLETE,
+    CHECK(processes[i]->complete,
           "Lemma 2 Part B: process completed");
 
   /* Part A: |SubSet| >= n - t for every process. */
@@ -531,7 +588,7 @@ freeCluster(
 /*    2. Call bkr94acsRetry once on every non-silent process; output acts.  */
 /*    3. Verify process-level invariants (Retry act count <= MAX,         */
 /*       SentFig1Count monotone non-decreasing).                 */
-/*    4. Exit when all non-silent processes carry BKR94ACS_F_COMPLETE.    */
+/*    4. Exit when all non-silent processes carry complete.    */
 /*                                                                    */
 /*  Silent process (-1 = none): never receives wires, never has its      */
 /*  A-Cast/Retry called, never appears in completion check.           */
@@ -611,6 +668,15 @@ runWithRetry(
       }
       observeAndOutput(&obs[w.to], w.to, nAct, out, n, vLen,
                      dropPercent, silentProcess);
+      /* Sweep-side decisions at zero budget, turns first (see
+       * deliverWire).  The wires ride the same lossy output path; a
+       * dropped INITIAL is BPR-retried like any other, so firing
+       * here stays loss-safe. */
+      drainTurns(processes[w.to], &obs[w.to], w.to, nAct, vLen, out,
+                 dropPercent, silentProcess);
+      n = bkr94acsFanout(processes[w.to], out);
+      observeAndOutput(&obs[w.to], w.to, nAct, out, n, vLen,
+                     dropPercent, silentProcess);
     }
 
     /* Retry every non-silent process once.  Per .h:
@@ -625,6 +691,11 @@ runWithRetry(
       if (n > maxRetryActs)
         maxRetryActs = n;
       observeAndOutput(&obs[i], (unsigned char)i, nAct, retryOut, n, vLen,
+                     dropPercent, silentProcess);
+      drainTurns(processes[i], &obs[i], (unsigned char)i, nAct, vLen, out,
+                 dropPercent, silentProcess);
+      n = bkr94acsFanout(processes[i], out);
+      observeAndOutput(&obs[i], (unsigned char)i, nAct, out, n, vLen,
                      dropPercent, silentProcess);
     }
 
@@ -644,7 +715,7 @@ runWithRetry(
     for (i = 0; i < nAct; ++i) {
       if (silentProcess >= 0 && (int)i == silentProcess)
         continue;
-      if (!(processes[i]->flags & BKR94ACS_F_COMPLETE)) {
+      if (!processes[i]->complete) {
         allComplete = 0;
         break;
       }
@@ -662,13 +733,20 @@ runWithRetry(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Synthetic Fig1 ACCEPT helper for Section D's EXHAUSTED setup.     */
-/*  Drives a single (process, round, initiator) BA Fig1 to    */
-/*  ACCEPT at process 'a' with the given binary value, by feeding 1      */
-/*  INITIAL + 3 distinct READYs (Bracha87 Rule 5 then Rule 6 fires).  */
-/*  Used by D1/D2 to construct an EXHAUSTED scenario without driving  */
-/*  a multi-process simulation.  Same approach as test_bkr94acs.c's      */
-/*  feedFig1Accept; entirely public-API.                              */
+/*  Synthetic Fig1 ACCEPT helper for Section D's EXHAUSTED setup and  */
+/*  Section G's duty arms.  Drives a single (process, round,           */
+/*  initiator) BA Fig1 to ACCEPT at process 'a' with the given binary  */
+/*  value, by feeding 1 INITIAL + 3 distinct READYs (Bracha87 Rule 5   */
+/*  then Rule 6 fires).  Entirely public-API.                         */
+/*                                                                    */
+/*  The inputs only BANK evidence -- per bkr94acs.h an accept can      */
+/*  produce nothing but echo/ready acts.  BA_EXHAUSTED (like DECIDED   */
+/*  and COMPLETE) emerges from bkr94acsTurn, so 'turned' selects the   */
+/*  caller's schedule: nonzero drains turns at a zero budget after     */
+/*  every input (the eager schedule D1/D2 want, counting EXHAUSTED     */
+/*  from the turn's acts), zero banks without turning (Section G,      */
+/*  which must read a duty class over a round the caller has not yet   */
+/*  consumed).                                                        */
 /* ------------------------------------------------------------------ */
 
 static unsigned int
@@ -679,6 +757,7 @@ feedBAAccept(
  ,unsigned char initiator
  ,unsigned char value
  ,struct bkr94acsAct *out
+ ,unsigned int turned
  ,unsigned int *exhaustedSeen
 ){
   unsigned int total = 0;
@@ -687,10 +766,16 @@ feedBAAccept(
 
   n = bkr94acsBaInput(a, process, round, initiator,
                              BRACHA87_INITIAL, initiator, value, out);
-  for (k = 0; k < n; ++k)
-    if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED && out[k].process == process)
-      ++*exhaustedSeen;
+  CHECK(n <= 2, "feedBAAccept: BA input outputs at most 2 acts");
   total += n;
+  if (turned)
+    while ((n = bkr94acsTurn(a, process, 1, out)) > 0) {
+      for (k = 0; k < n; ++k)
+        if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED
+         && out[k].process == process)
+          ++*exhaustedSeen;
+      total += n;
+    }
 
   /* Three distinct READYs trip Rule 5 (rd>=t+1) then Rule 6 (rd>=2t+1)
    * -> ACCEPT.  Senders 1, 2, 3 (initiator's own READY isn't needed
@@ -698,12 +783,134 @@ feedBAAccept(
   for (sender = 1; sender <= 3; ++sender) {
     n = bkr94acsBaInput(a, process, round, initiator,
                                BRACHA87_READY, sender, value, out);
-    for (k = 0; k < n; ++k)
-      if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED && out[k].process == process)
-        ++*exhaustedSeen;
+    CHECK(n <= 2, "feedBAAccept: BA input outputs at most 2 acts");
     total += n;
+    if (turned)
+      while ((n = bkr94acsTurn(a, process, 1, out)) > 0) {
+        for (k = 0; k < n; ++k)
+          if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED
+           && out[k].process == process)
+            ++*exhaustedSeen;
+        total += n;
+      }
   }
   return (total);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Section F driver: drain + retry sweeps with CALLER-PACED step 2   */
+/*  per the bkr94acs.h discipline -- count completed sweeps while     */
+/*  bkr94acsFanoutDuty holds TOLERANCE, call bkr94acsFanout when the  */
+/*  count exceeds the budget.  n = 4, no loss.                        */
+/*                                                                    */
+/*    budget < 0   never fire the fanout                              */
+/*    budget >= 0  per process, fire after budget TOLERANCE sweeps    */
+/*    silent >= 0  that process is dead: never receives, never        */
+/*                 retries, excluded from pacing and completion       */
+/*                                                                    */
+/*  Also pins the duty trichotomy's monotonicity at every live        */
+/*  process: MET is absorbing and TOLERANCE never regresses to HELD   */
+/*  (decides and entries only accumulate).                            */
+/*  Returns 0 when every live process completed within maxIters.      */
+/* ------------------------------------------------------------------ */
+
+static int
+fDrive(
+  struct bkr94acs **processes
+ ,struct processObs *obs
+ ,struct bracha87Retry *cursors
+ ,int budget
+ ,int silent
+ ,unsigned int maxIters
+ ,unsigned int *toleranceSweepsMax  /* out: max per-process TOLERANCE sweeps */
+ ,unsigned int *fanoutActsTotal     /* out: total fanout acts, all processes */
+){
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+  struct wire w;
+  unsigned int sweeps[4];
+  unsigned char prevDuty[4];
+  unsigned int n, p, iter;
+  int allDone;
+
+  for (p = 0; p < 4; ++p) {
+    sweeps[p] = 0;
+    prevDuty[p] = bkr94acsFanoutDuty(processes[p]);
+  }
+  *toleranceSweepsMax = 0;
+  *fanoutActsTotal = 0;
+
+  allDone = 0;
+  for (iter = 0; iter < maxIters && !allDone; ++iter) {
+    while (qSize() > 0) {
+      qPopHead(&w);
+      if (silent >= 0 && (int)w.to == silent)
+        continue;
+      if (w.cls == BKR94ACS_CLS_ACAST) {
+        n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                  w.from, w.value, out);
+        if (w.accepted)
+          bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
+      } else {
+        n = bkr94acsBaInput(processes[w.to], w.process, w.round,
+                                   w.initiator, w.type, w.from,
+                                   w.baValue, out);
+        if (w.accepted)
+          bkr94acsBaAccepted(processes[w.to], w.process, w.round,
+                                    w.initiator, w.from);
+      }
+      observeAndOutput(&obs[w.to], w.to, 4, out, n, 1, 0, silent);
+    }
+
+    for (p = 0; p < 4; ++p) {
+      unsigned char duty;
+
+      if (silent >= 0 && (int)p == silent)
+        continue;
+      n = bkr94acsRetry(processes[p], &cursors[p], out);
+      observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, silent);
+
+      /* The round turn is drained at a ZERO budget before the
+       * fanout: the decisions a turn produces are what enables
+       * step 2, so only the FANOUT's pacing is the variable this
+       * section isolates.  No drain after it -- a fanout writes
+       * only entered[] and round-0 initiator state, which no turn
+       * duty reads, so it cannot make a round turnable. */
+      drainTurns(processes[p], &obs[p], (unsigned char)p, 4, 1, out, 0,
+                 silent);
+
+      duty = bkr94acsFanoutDuty(processes[p]);
+      CHECK(!(prevDuty[p] == BKR94ACS_DUTY_MET
+              && duty != BKR94ACS_DUTY_MET),
+            "F: MET is absorbing");
+      CHECK(!(prevDuty[p] == BKR94ACS_DUTY_TOLERANCE
+              && duty == BKR94ACS_DUTY_HELD),
+            "F: TOLERANCE never regresses to HELD");
+      prevDuty[p] = duty;
+
+      if (duty == BKR94ACS_DUTY_TOLERANCE) {
+        ++sweeps[p];
+        if (sweeps[p] > *toleranceSweepsMax)
+          *toleranceSweepsMax = sweeps[p];
+        if (budget >= 0 && sweeps[p] > (unsigned int)budget) {
+          n = bkr94acsFanout(processes[p], out);
+          *fanoutActsTotal += n;
+          observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0,
+                         silent);
+        }
+      }
+    }
+
+    allDone = 1;
+    for (p = 0; p < 4; ++p) {
+      if (silent >= 0 && (int)p == silent)
+        continue;
+      if (!processes[p]->complete) {
+        allDone = 0;
+        break;
+      }
+    }
+  }
+  return (allDone ? 0 : -1);
 }
 
 /* ================================================================== */
@@ -736,6 +943,7 @@ main(
     unsigned long sz;
     struct bkr94acs *a;
     unsigned char buf[MAX_PROCESSES];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 10)];
     unsigned int j;
 
     sz = bkr94acsSz(3, 0, 10);
@@ -747,8 +955,8 @@ main(
 
     bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
 
-    CHECK((a->flags & BKR94ACS_F_COMPLETE) == 0,
-          "fresh: BKR94ACS_F_COMPLETE clear");
+    CHECK(a->complete == 0,
+          "fresh: complete clear");
     CHECK(bkr94acsSentFig1Count(a) == 0,
           "fresh: SentFig1Count == 0");
     for (j = 0; j < 4; ++j)
@@ -758,6 +966,20 @@ main(
     for (j = 0; j < 4; ++j)
       CHECK(bkr94acsAcastValue(a, (unsigned char)j) == 0,
             "fresh: AcastValue == 0");
+
+    /* No evidence banked, so no BA has a complete round: every duty
+     * reads HELD and an unconditional turn -- with or without the
+     * elapsed signal -- outputs nothing. */
+    for (j = 0; j < 4; ++j) {
+      CHECK(bkr94acsTurnDuty(a, (unsigned char)j) == BKR94ACS_DUTY_HELD,
+            "fresh: TurnDuty == HELD");
+      CHECK(bkr94acsTurn(a, (unsigned char)j, 0, out) == 0,
+            "fresh: Turn without the elapsed signal outputs nothing");
+      CHECK(bkr94acsTurn(a, (unsigned char)j, 1, out) == 0,
+            "fresh: Turn with the elapsed signal outputs nothing");
+    }
+    CHECK(bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_HELD,
+          "fresh: FanoutDuty == HELD");
 
     free(a);
   }
@@ -816,7 +1038,7 @@ main(
     unsigned long sz;
     struct bkr94acs *a;
     unsigned char dv[1];
-    struct bkr94acsAct dout[1];
+    struct bkr94acsAct dout[3];  /* A-Cast wants 1, Turn wants 3 */
 
     dv[0] = 0;
 
@@ -824,6 +1046,11 @@ main(
     CHECK(bkr94acsSentFig1Count(0) == 0,
           "SentFig1Count(NULL): 0");
     CHECK(bkr94acsAcast(0, dv, dout) == 0, "A-Cast(NULL a): 0");
+    /* Per .h TurnDuty reads HELD on bad args ("no turnable round"),
+     * and Turn is safe to call unconditionally. */
+    CHECK(bkr94acsTurnDuty(0, 0) == BKR94ACS_DUTY_HELD,
+          "TurnDuty(NULL): HELD");
+    CHECK(bkr94acsTurn(0, 0, 1, dout) == 0, "Turn(NULL a): 0");
 
     sz = bkr94acsSz(3, 0, 10);
     a = (struct bkr94acs *)calloc(1, sz);
@@ -834,6 +1061,12 @@ main(
           "BaDecision(process == n): 0xFF");
     CHECK(bkr94acsBaDecision(a, 255) == 0xFF,
           "BaDecision(process 255): 0xFF");
+    CHECK(bkr94acsTurnDuty(a, 4) == BKR94ACS_DUTY_HELD,
+          "TurnDuty(process == n): HELD");
+    CHECK(bkr94acsTurnDuty(a, 255) == BKR94ACS_DUTY_HELD,
+          "TurnDuty(process 255): HELD");
+    CHECK(bkr94acsTurn(a, 4, 1, dout) == 0, "Turn(process == n): 0");
+    CHECK(bkr94acsTurn(a, 255, 1, dout) == 0, "Turn(process 255): 0");
 
     free(a);
   }
@@ -1583,15 +1816,23 @@ main(
               }
             }
             observeAndOutput(&obs[w.to], w.to, n, out, nDeliv, vLen, 0, -1);
+            drainTurns(processes[w.to], &obs[w.to], w.to, n, vLen, out, 0, -1);
+            nDeliv = bkr94acsFanout(processes[w.to], out);
+            observeAndOutput(&obs[w.to], w.to, n, out, nDeliv, vLen, 0, -1);
           }
           for (i = 0; i < n; ++i) {
             nDeliv = bkr94acsRetry(processes[i], &cursors[i], retryOut);
             observeAndOutput(&obs[i], (unsigned char)i, n, retryOut, nDeliv,
                            vLen, 0, -1);
+            drainTurns(processes[i], &obs[i], (unsigned char)i, n, vLen, out,
+                       0, -1);
+            nDeliv = bkr94acsFanout(processes[i], out);
+            observeAndOutput(&obs[i], (unsigned char)i, n, out, nDeliv,
+                           vLen, 0, -1);
           }
           allComplete = 1;
           for (i = 0; i < n; ++i)
-            if (!(processes[i]->flags & BKR94ACS_F_COMPLETE)) {
+            if (!processes[i]->complete) {
               allComplete = 0;
               break;
             }
@@ -1643,8 +1884,13 @@ main(
      * so neither the >2t case (i) nor the >t case (ii) of Fig4
      * step 3 fires.  Fig4 returns BRACHA87_EXHAUSTED.  BKR94 surfaces
      * BKR94ACS_ACT_BA_EXHAUSTED exactly once, sets baDecision[0]=0xFE,
-     * and never sets BKR94ACS_F_COMPLETE (no unilateral substitute is safe --
-     * Part C of Lemma 2 agreement would break). */
+     * and never sets complete (no unilateral substitute is safe --
+     * Part C of Lemma 2 agreement would break).
+     *
+     * The arrival path banks; the act comes from the zero-budget turn
+     * drain feedBAAccept runs after every input, and the last round's
+     * turn is the one that carries it (after it TurnDuty is HELD
+     * forever -- the round space is consumed). */
     unsigned long sz;
     struct bkr94acs *a;
     struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
@@ -1661,20 +1907,28 @@ main(
     for (round = 0; round < 3; ++round)
       for (b = 0; b < 4; ++b)
         feedBAAccept(a, 0, (unsigned char)round, (unsigned char)b,
-                            (b < 2) ? 0 : 1, out, &exhaustedSeen);
+                            (b < 2) ? 0 : 1, out, 1, &exhaustedSeen);
 
     CHECK(exhaustedSeen == 1, "D1: BA_EXHAUSTED output exactly once");
     CHECK(bkr94acsBaDecision(a, 0) == 0xFE,
           "D1: baDecision[0] == 0xFE (exhausted sentinel)");
-    CHECK((a->flags & BKR94ACS_F_COMPLETE) == 0,
-          "D1: BKR94ACS_F_COMPLETE remains clear (no unilateral substitute)");
+    CHECK(a->complete == 0,
+          "D1: complete remains clear (no unilateral substitute)");
+    CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_HELD,
+          "D1: TurnDuty HELD after EXHAUSTED (round space consumed)");
 
     /* Subsequent BA input for the exhausted process must NOT
-     * retry BA_EXHAUSTED. */
+     * retry BA_EXHAUSTED -- neither on the input (which can only
+     * output echo/ready) nor on the turn that follows it. */
     n = bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, 0, 0, out);
+    CHECK(n <= 2, "D1: later BA input within the 2-act bound");
     for (k = 0; k < n; ++k)
       if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
         ++exhaustedSeen;
+    while ((n = bkr94acsTurn(a, 0, 1, out)) > 0)
+      for (k = 0; k < n; ++k)
+        if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
+          ++exhaustedSeen;
     CHECK(exhaustedSeen == 1, "D1: no duplicate BA_EXHAUSTED on later input");
 
     free(a);
@@ -1708,7 +1962,7 @@ main(
     for (round = 0; round < 3; ++round)
       for (b = 0; b < 4; ++b)
         feedBAAccept(a, 0, (unsigned char)round, (unsigned char)b,
-                            (b < 2) ? 0 : 1, synthOut, &exhaustedSeen);
+                            (b < 2) ? 0 : 1, synthOut, 1, &exhaustedSeen);
     CHECK(exhaustedSeen == 1, "D2: EXHAUSTED setup OK");
     CHECK(bkr94acsSentFig1Count(a) > 0,
           "D2: post-EXHAUSTED SentFig1Count > 0");
@@ -1822,22 +2076,30 @@ main(
                                           w.initiator, w.type, w.from,
                                           w.baValue, out);
           observeAndOutput(&obs[w.to], w.to, n, out, nact, vLen, 0, -1);
+          drainTurns(processes[w.to], &obs[w.to], w.to, n, vLen, out, 0, -1);
+          nact = bkr94acsFanout(processes[w.to], out);
+          observeAndOutput(&obs[w.to], w.to, n, out, nact, vLen, 0, -1);
         }
         for (p = 1; p < n; ++p) {
           unsigned int nact = bkr94acsRetry(processes[p], &cursors[p], retryOut);
           observeAndOutput(&obs[p], (unsigned char)p, n, retryOut, nact, vLen,
                          0, -1);
+          drainTurns(processes[p], &obs[p], (unsigned char)p, n, vLen, out,
+                     0, -1);
+          nact = bkr94acsFanout(processes[p], out);
+          observeAndOutput(&obs[p], (unsigned char)p, n, out, nact, vLen,
+                         0, -1);
         }
         allComplete = 1;
         for (p = 1; p < n; ++p)
-          if (!(processes[p]->flags & BKR94ACS_F_COMPLETE)) { allComplete = 0; break; }
+          if (!processes[p]->complete) { allComplete = 0; break; }
         if (allComplete) break;
       }
       free(out);
 
       /* Honest processes (1, 2, 3) all completed. */
       for (p = 1; p < n; ++p)
-        CHECK(processes[p]->flags & BKR94ACS_F_COMPLETE,
+        CHECK(processes[p]->complete,
               "E1: honest process completes despite equivocating A-Caster");
 
       /* Honest processes agree on SubSet (Lemma 2 Part C). */
@@ -1903,6 +2165,399 @@ main(
     }
   }
   e1_done: ;
+
+  /* ---------------------------------------------------------------- */
+  /*  Section F -- Step 2 pacing (bkr94acsFanoutDuty / bkr94acsFanout)*/
+  /*                                                                  */
+  /*  The same delayed-A-Cast schedule under two budgets: the eager   */
+  /*  schedule (F1) excludes the delayed honest process every time    */
+  /*  and the grace (F2) includes it -- the pair is the WAN           */
+  /*  starvation seed and its remedy.  F3 is the liveness half: a     */
+  /*  dead slot holds TOLERANCE forever, the budget bounds the tax,   */
+  /*  and firing after it completes the instance.                     */
+  /* ---------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------- */
+  BANNER("F1: eager schedule excludes a delayed honest A-Cast");
+  /* ---------------------------------------------------------------- */
+  {
+    struct bracha87Retry cursors[4];
+    struct bkr94acsAct acastOut[1];
+    unsigned int tolSweeps, fanActs;
+    unsigned int n, p;
+
+    if (allocCluster(processes, 4, 1, 0, 8) == 0) {
+      for (p = 0; p < MAX_PROCESSES; ++p) obsInit(&obs[p]);
+      for (p = 0; p < 4; ++p) bracha87RetryInit(&cursors[p]);
+      qReset();
+
+      /* Processes 0-2 A-Cast now; process 3 is the WAN laggard --
+       * only its OUTBOUND A-Cast is delayed.  The process itself
+       * runs: it receives, retries, enters, completes. */
+      for (p = 0; p < 3; ++p) {
+        acasts[p] = (unsigned char)(0xE0 + p);
+        n = bkr94acsAcast(processes[p], &acasts[p], acastOut);
+        observeAndOutput(&obs[p], (unsigned char)p, 4, acastOut, n, 1, 0, -1);
+      }
+
+      CHECK(fDrive(processes, obs, cursors, 0, -1, 500,
+                   &tolSweeps, &fanActs) == 0,
+            "F1: all four complete without 3's A-Cast");
+      /* Every process fired exactly one enter-0 (BA_3), and BA_3
+       * decided 0 -- honest 3 shut out of SubSet. */
+      CHECK(fanActs == 4, "F1: one enter-0 act per process");
+      for (p = 0; p < 4; ++p) {
+        unsigned char subset[4];
+
+        CHECK(bkr94acsSubset(processes[p], subset) == 3,
+              "F1: |SubSet| == 3");
+        CHECK(bkr94acsBaDecision(processes[p], 3) == 0,
+              "F1: delayed process's BA decided 0");
+        CHECK(bkr94acsFanoutDuty(processes[p]) == BKR94ACS_DUTY_MET,
+              "F1: duty MET after the fanout");
+      }
+
+      /* The delayed A-Cast arrives after the close: it still accepts
+       * everywhere (the value is not lost) but the subset is fixed --
+       * the paper's per-instance honest-exclusion allowance.  Under a
+       * persistent latency spread the SAME process re-suffers this
+       * every instance; that compounding is what F2's grace removes. */
+      acasts[3] = 0xE3;
+      n = bkr94acsAcast(processes[3], &acasts[3], acastOut);
+      observeAndOutput(&obs[3], 3, 4, acastOut, n, 1, 0, -1);
+      fDrive(processes, obs, cursors, 0, -1, 50, &tolSweeps, &fanActs);
+      for (p = 0; p < 4; ++p) {
+        unsigned char subset[4];
+
+        CHECK(bkr94acsAcastValue(processes[p], 3) != 0,
+              "F1: late A-Cast accepted everywhere (value not lost)");
+        CHECK(bkr94acsSubset(processes[p], subset) == 3,
+              "F1: subset unchanged by the late arrival");
+        CHECK(bkr94acsBaDecision(processes[p], 3) == 0,
+              "F1: exclusion final for this instance");
+      }
+      freeCluster(processes, 4);
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("F2: grace includes the same delayed honest A-Cast");
+  /* ---------------------------------------------------------------- */
+  {
+    struct bracha87Retry cursors[4];
+    struct bkr94acsAct acastOut[1];
+    struct bkr94acsAct fout[4];
+    unsigned int tolSweeps, fanActs;
+    unsigned int n, p;
+
+    if (allocCluster(processes, 4, 1, 0, 8) == 0) {
+      for (p = 0; p < MAX_PROCESSES; ++p) obsInit(&obs[p]);
+      for (p = 0; p < 4; ++p) bracha87RetryInit(&cursors[p]);
+      qReset();
+
+      /* Identical schedule to F1 -- but the budget never elapses. */
+      for (p = 0; p < 3; ++p) {
+        acasts[p] = (unsigned char)(0xE0 + p);
+        n = bkr94acsAcast(processes[p], &acasts[p], acastOut);
+        observeAndOutput(&obs[p], (unsigned char)p, 4, acastOut, n, 1, 0, -1);
+      }
+
+      /* Without the fanout the instance parks at TOLERANCE: BAs 0-2
+       * decide 1, BA_3 stays unentered, completion is impossible --
+       * and the sweep keeps retrying (BPR gate: undecided -> retry). */
+      CHECK(fDrive(processes, obs, cursors, -1, -1, 30,
+                   &tolSweeps, &fanActs) != 0,
+            "F2: incomplete while the budget holds");
+      CHECK(fanActs == 0, "F2: fanout never fired");
+      CHECK(tolSweeps >= 5, "F2: TOLERANCE held across the sweeps");
+      for (p = 0; p < 4; ++p)
+        CHECK(bkr94acsFanoutDuty(processes[p]) == BKR94ACS_DUTY_TOLERANCE,
+              "F2: duty TOLERANCE at every process while waiting");
+
+      /* The delayed A-Cast arrives INSIDE the grace: step 1 enters 1,
+       * BA_3 decides 1, and the fanout is never needed. */
+      acasts[3] = 0xE3;
+      n = bkr94acsAcast(processes[3], &acasts[3], acastOut);
+      observeAndOutput(&obs[3], 3, 4, acastOut, n, 1, 0, -1);
+      CHECK(fDrive(processes, obs, cursors, -1, -1, 500,
+                   &tolSweeps, &fanActs) == 0,
+            "F2: all four complete inside the grace");
+      CHECK(fanActs == 0, "F2: completion without any enter-0");
+      for (p = 0; p < 4; ++p) {
+        unsigned char subset[4];
+
+        CHECK(bkr94acsSubset(processes[p], subset) == 4,
+              "F2: |SubSet| == 4 -- the delayed honest process included");
+        CHECK(bkr94acsBaDecision(processes[p], 3) == 1,
+              "F2: delayed process's BA decided 1");
+        CHECK(bkr94acsFanoutDuty(processes[p]) == BKR94ACS_DUTY_MET,
+              "F2: duty MET with nothing given up");
+        CHECK(bkr94acsFanout(processes[p], fout) == 0,
+              "F2: fanout at MET outputs nothing");
+      }
+      freeCluster(processes, 4);
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("F3: budgeted fanout completes past a dead slot");
+  /* ---------------------------------------------------------------- */
+  {
+    struct bracha87Retry cursors[4];
+    struct bkr94acsAct acastOut[1];
+    unsigned int tolSweeps, fanActs;
+    unsigned int n, p;
+
+    if (allocCluster(processes, 4, 1, 0, 8) == 0) {
+      for (p = 0; p < MAX_PROCESSES; ++p) obsInit(&obs[p]);
+      for (p = 0; p < 4; ++p) bracha87RetryInit(&cursors[p]);
+      qReset();
+
+      /* Process 3 is DEAD, not delayed: it never A-Casts and never
+       * runs.  TOLERANCE cannot resolve on its own -- nothing can
+       * enter BA_3 with 1 -- so the budget is a pure tax here, and
+       * firing after it is what completes the instance.  This is why
+       * the budget must be bounded: slow and dead are locally
+       * indistinguishable, and only the fanout ends the wait. */
+      for (p = 0; p < 3; ++p) {
+        acasts[p] = (unsigned char)(0xE0 + p);
+        n = bkr94acsAcast(processes[p], &acasts[p], acastOut);
+        observeAndOutput(&obs[p], (unsigned char)p, 4, acastOut, n, 1, 0, 3);
+      }
+
+      CHECK(fDrive(processes, obs, cursors, 3, 3, 500,
+                   &tolSweeps, &fanActs) == 0,
+            "F3: three live processes complete past the dead slot");
+      CHECK(tolSweeps > 3, "F3: the full budget was waited out");
+      CHECK(fanActs == 3, "F3: one enter-0 act per live process");
+      for (p = 0; p < 3; ++p) {
+        unsigned char subset[4];
+
+        CHECK(bkr94acsSubset(processes[p], subset) == 3,
+              "F3: |SubSet| == 3");
+        CHECK(bkr94acsBaDecision(processes[p], 3) == 0,
+              "F3: dead slot decided 0");
+        CHECK(bkr94acsFanoutDuty(processes[p]) == BKR94ACS_DUTY_MET,
+              "F3: duty MET after the budgeted fanout");
+      }
+      freeCluster(processes, 4);
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /*  Section G -- Round-turn pacing (bkr94acsTurnDuty/bkr94acsTurn)  */
+  /*                                                                  */
+  /*  Section F isolates the fanout's pacing; this isolates the BA    */
+  /*  round turn's.  The arrival path banks evidence and decides      */
+  /*  nothing (G1); a round complete at n-t validated waits for the   */
+  /*  caller's elapsed signal (G2); a round complete at all n --      */
+  /*  the full sample, nothing left to wait for -- fires without it   */
+  /*  (G3); and a zero-budget drained instance is turn-quiescent      */
+  /*  (G4).                                                           */
+  /* ---------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------- */
+  BANNER("G1: deliveries alone decide nothing");
+  /* ---------------------------------------------------------------- */
+  {
+    /* A full honest exchange at n=4 t=1 with every wire delivered and
+     * NO turn called.  Per bkr94acs.h the inputs store, validate and
+     * cascade; BA_DECIDED / COMPLETE / BA_EXHAUSTED emerge only from
+     * bkr94acsTurn.  The fanout is not called either -- step 2 needs
+     * n-t BAs decided 1, which no delivery can produce. */
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+    struct bkr94acsAct acastOut[1];
+    struct wire w;
+    unsigned int n, p, b;
+    unsigned int turnable = 0;
+
+    if (allocCluster(processes, 4, 1, 0, 8) == 0) {
+      for (p = 0; p < MAX_PROCESSES; ++p) obsInit(&obs[p]);
+      qReset();
+
+      for (p = 0; p < 4; ++p) {
+        acasts[p] = (unsigned char)(0xF0 + p);
+        n = bkr94acsAcast(processes[p], &acasts[p], acastOut);
+        observeAndOutput(&obs[p], (unsigned char)p, 4, acastOut, n, 1, 0, -1);
+      }
+
+      while (qSize() > 0) {
+        qPopHead(&w);
+        if (w.cls == BKR94ACS_CLS_ACAST) {
+          n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                    w.from, w.value, out);
+          CHECK(n <= 3, "G1: A-Cast input within its bound");
+          if (w.accepted)
+            bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
+        } else {
+          n = bkr94acsBaInput(processes[w.to], w.process, w.round,
+                                     w.initiator, w.type, w.from,
+                                     w.baValue, out);
+          CHECK(n <= 2, "G1: BA input within its bound (echo/ready only)");
+          if (w.accepted)
+            bkr94acsBaAccepted(processes[w.to], w.process, w.round,
+                                      w.initiator, w.from);
+        }
+        observeAndOutput(&obs[w.to], w.to, 4, out, n, 1, 0, -1);
+      }
+
+      for (p = 0; p < 4; ++p) {
+        CHECK(!processes[p]->complete,
+              "G1: no process completes without a turn");
+        CHECK(obs[p].completeCount == 0, "G1: no COMPLETE observed");
+        for (b = 0; b < 4; ++b) {
+          CHECK(obs[p].baDecidedCount[b] == 0, "G1: no BA_DECIDED observed");
+          CHECK(obs[p].exhaustedCount[b] == 0,
+                "G1: no BA_EXHAUSTED observed");
+          CHECK(bkr94acsBaDecision(processes[p], (unsigned char)b) == 0xFF,
+                "G1: every BA still undecided");
+          if (bkr94acsTurnDuty(processes[p], (unsigned char)b)
+              != BKR94ACS_DUTY_HELD)
+            ++turnable;
+        }
+      }
+      /* The evidence IS banked -- the duty query says turns are owed.
+       * Without this arm the section would pass on a machine that
+       * simply ate the exchange. */
+      CHECK(turnable > 0,
+            "G1: turns owed after the exchange (evidence banked)");
+
+      freeCluster(processes, 4);
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("G2: TOLERANCE requires the elapsed signal");
+  /* ---------------------------------------------------------------- */
+  {
+    /* Three of BA_0's four round-0 Fig1s accept, all carrying the same
+     * value: the round is complete at n-t = 3 validated but the sample
+     * can still grow to n, so the turn is enabled and waiting is still
+     * worth something -- TOLERANCE.  It fires only on the caller's
+     * budget verdict. */
+    unsigned long sz;
+    struct bkr94acs *a;
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+    unsigned int dummy = 0;
+    unsigned int sentBefore;
+    unsigned int sawNextRound = 0;
+    unsigned int n, k;
+
+    sz = bkr94acsSz(3, 0, 8);
+    a = (struct bkr94acs *)calloc(1, sz);
+    if (!a) goto g2_done;
+    bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
+
+    for (k = 0; k < 3; ++k)
+      feedBAAccept(a, 0, 0, (unsigned char)k, 1, out, 0, &dummy);
+
+    CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_TOLERANCE,
+          "G2: duty TOLERANCE at n-t of n validated");
+
+    sentBefore = bkr94acsSentFig1Count(a);
+    CHECK(bkr94acsTurn(a, 0, 0, out) == 0,
+          "G2: turn without the elapsed signal does not fire");
+    CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_TOLERANCE,
+          "G2: the refused turn left the duty unchanged");
+    CHECK(bkr94acsSentFig1Count(a) == sentBefore,
+          "G2: the refused turn started no round");
+    CHECK(bkr94acsBaDecision(a, 0) == 0xFF, "G2: BA_0 still undecided");
+    CHECK(a->complete == 0, "G2: not complete");
+
+    n = bkr94acsTurn(a, 0, 1, out);
+    CHECK(n > 0, "G2: turn fires once the caller's budget elapses");
+    CHECK(n <= 3, "G2: turn outputs at most 3 acts");
+    for (k = 0; k < n; ++k)
+      if (out[k].act == BKR94ACS_ACT_BA_SEND
+       && out[k].type == BRACHA87_INITIAL
+       && out[k].initiator == 0
+       && out[k].round == 1)
+        ++sawNextRound;
+    CHECK(sawNextRound == 1,
+          "G2: the fired turn broadcasts the next round's INITIAL");
+
+    free(a);
+  }
+  g2_done: ;
+
+  /* ---------------------------------------------------------------- */
+  BANNER("G3: MET fires free");
+  /* ---------------------------------------------------------------- */
+  {
+    /* Same construction with the fourth Fig1 accepted too: the round is
+     * complete with ALL n validated, so waiting buys nothing and the
+     * turn is free -- it fires with toleranceElapsed == 0. */
+    unsigned long sz;
+    struct bkr94acs *a;
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+    unsigned int dummy = 0;
+    unsigned int n, k;
+
+    sz = bkr94acsSz(3, 0, 8);
+    a = (struct bkr94acs *)calloc(1, sz);
+    if (!a) goto g3_done;
+    bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
+
+    for (k = 0; k < 4; ++k)
+      feedBAAccept(a, 0, 0, (unsigned char)k, 1, out, 0, &dummy);
+
+    CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_MET,
+          "G3: duty MET with all n validated");
+    n = bkr94acsTurn(a, 0, 0, out);
+    CHECK(n > 0, "G3: MET turn fires without the elapsed signal");
+    CHECK(n <= 3, "G3: turn outputs at most 3 acts");
+
+    /* One turn per call: round 1 has no messages, so the duty drops
+     * back to HELD and a second call outputs nothing. */
+    CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_HELD,
+          "G3: next round incomplete -- duty back to HELD");
+    CHECK(bkr94acsTurn(a, 0, 1, out) == 0,
+          "G3: nothing left to turn even with the elapsed signal");
+
+    free(a);
+  }
+  g3_done: ;
+
+  /* ---------------------------------------------------------------- */
+  BANNER("G4: turns are quiescent at completion");
+  /* ---------------------------------------------------------------- */
+  {
+    /* A zero-budget drained convergence (runHonest turns after every
+     * delivery).  Post-decide continuation runs the turns past DECIDE
+     * to the end of the round space, so at quiescence every BA is
+     * either out of rounds or has no complete round left: HELD
+     * everywhere, and a further turn outputs nothing. */
+    unsigned int nAct = 4, t = 1, vLen = 1, mp = 10;
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 10)];
+    unsigned int p, b;
+
+    if (allocCluster(processes, nAct, t, vLen - 1, mp) == 0) {
+      for (p = 0; p < MAX_PROCESSES; ++p) obsInit(&obs[p]);
+      memset(acasts, 0, sizeof (acasts));
+      for (i = 0; i < nAct; ++i)
+        acasts[i * vLen] = (unsigned char)(0x60 + i);
+
+      runHonest(nAct, vLen, mp, acasts, 0 /*ordered*/, processes, obs);
+
+      for (p = 0; p < nAct; ++p) {
+        CHECK(processes[p]->complete, "G4: the zero-budget drain converged");
+        /* The same exchange G1 ran, with turns: the acts G1 never saw
+         * are all here, so the HELD reading below is quiescence and
+         * not an inert machine. */
+        CHECK(obs[p].completeCount == 1, "G4: COMPLETE observed once");
+        for (b = 0; b < nAct; ++b) {
+          CHECK(obs[p].baDecidedCount[b] == 1,
+                "G4: BA_DECIDED observed once per BA");
+          CHECK(bkr94acsTurnDuty(processes[p], (unsigned char)b)
+                == BKR94ACS_DUTY_HELD,
+                "G4: every TurnDuty HELD at quiescence");
+          CHECK(bkr94acsTurn(processes[p], (unsigned char)b, 1, out) == 0,
+                "G4: re-calling Turn outputs nothing");
+        }
+      }
+      freeCluster(processes, nAct);
+    }
+  }
 
   /* ---------------------------------------------------------------- */
   /*  Summary                                                         */

@@ -10,6 +10,17 @@
 # event, Figure 4 updates the local value, may decide, and
 # broadcasts for the next step.
 #
+# "Wait until validate n-t k-messages" is enabling evidence in the
+# paper's asynchronous model (unbounded finite delay, no clocks),
+# not a moment: the proofs hold for ANY >= n-t validated sample,
+# and the validated set keeps growing past n-t.  This layer
+# therefore exposes the round turn as a caller-shaped seam --
+# bracha87Fig3RoundComplete (the enabling predicate),
+# bracha87Fig3GetValid (the current sample), bracha87Fig4Round (the
+# computation) -- and takes no position on WHEN a completed round
+# is computed.  The composing layer paces it (bkr94acs turns rounds
+# from the BPR sweep; see the bkr94acs.dtc round-turn section).
+#
 # Round numbering here is the paper's, 1-based: phase i owns
 # rounds 3i+1, 3i+2, 3i+3, and each step reads the messages of
 # its OWN round.  The C is 0-based (phase i owns rounds 3i, 3i+1,

@@ -986,6 +986,26 @@ applySysActs(
       if (n)
         p->active = 1;              /* a fresh cascade; dedup returns 0 */
       emitAcs(p, rd, out, n);
+      /* The sweep-side decisions at zero tolerance budget -- this
+       * caller deliberately keeps the eager tempo so instrument
+       * baselines stay comparable; a WAN-grade budget belongs on the
+       * sweep.  Turns first: only a turn produces the decisions the
+       * fanout counts, and a fanout cannot make a round turnable (it
+       * writes only entered[] and round-0 initiator state, which no
+       * turn duty reads).  Turns drain per BA and over every process,
+       * since cascade unlocks successive rounds of one BA and an
+       * A-Cast accept opens round 0 of another; the instance pointer
+       * is re-read each turn because a release inside emitAcs frees
+       * it. */
+      for (j = 0; j < N; ++j)
+        while ((n = bkr94acsTurn(p->acs[rd], (unsigned char)j, 1, out)) > 0) {
+          p->active = 1;
+          emitAcs(p, rd, out, n);
+        }
+      n = bkr94acsFanout(p->acs[rd], out);
+      if (n)
+        p->active = 1;
+      emitAcs(p, rd, out, n);
       break;
 
     case SYSTEM_ACT_SERVE:

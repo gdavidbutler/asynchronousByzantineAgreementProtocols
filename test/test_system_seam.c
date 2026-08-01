@@ -3079,6 +3079,29 @@ applySysActs(
       if (m)
         p->activeThisTick = 1;         /* a fresh cascade -- dedup returns 0 */
       emitAcs(r, p, sa[i].round, out, m);
+      /* the sweep-side decisions at zero tolerance budget -- the eager
+       * tempo, preserved so this instrument's records stay comparable;
+       * a WAN-grade budget belongs on the sweep.  Turns first (only a
+       * turn produces the decisions the fanout counts; a fanout cannot
+       * make a round turnable), drained per BA and over every process:
+       * cascade unlocks successive rounds of one BA and an A-Cast
+       * accept opens round 0 of another.  The instance pointer is
+       * re-read each turn -- a release inside emitAcs frees it, and
+       * bkr94acsTurn reads a freed slot as HELD */
+      {
+        unsigned int j;
+
+        for (j = 0; j < NACT; ++j)
+          while ((m = bkr94acsTurn(p->acs[sa[i].round], (unsigned char)j,
+                                   1, out)) > 0) {
+            p->activeThisTick = 1;
+            emitAcs(r, p, sa[i].round, out, m);
+          }
+      }
+      m = bkr94acsFanout(p->acs[sa[i].round], out);
+      if (m)
+        p->activeThisTick = 1;
+      emitAcs(r, p, sa[i].round, out, m);
       break;
 
     case SYSTEM_ACT_SERVE:

@@ -281,7 +281,15 @@ not a library demand).  An instance's COMPLETE -- the library's
 BKR94ACS_ACT_COMPLETE, all n BAs decided -- is the only
 cross-process clock.  No wall-clock predicate appears anywhere
 in this specification; wall time may pace actions (the tick) but
-never decides anything.
+never decides anything.  The coupling to an instance is
+OUTCOME-SHAPED and the dependency runs one way: this layer
+consumes what an instance produced -- COMPLETE, the acts riding
+its traffic, the possession they evidence -- and is deliberately
+indifferent to the instance's internal schedule, which is the
+caller's below (the enter-0 fanout and the BA round turns are
+sweep-paced deployment knobs); no requirement, obligation, or
+lemma here reads WHEN an instance's outcomes arrive, only WHAT
+arrived and for which round.
 
 Executions are CAUSALLY WELL-FOUNDED, and the proofs consume that
 where they induct over histories.  An act is authored before it is

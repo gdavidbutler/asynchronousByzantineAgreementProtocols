@@ -20,30 +20,18 @@ none,BKR94ACS_ENTER_NONE
 0,BKR94ACS_ENTER_ZERO
 1,BKR94ACS_ENTER_ONE
 
-@"input-0 fanout already triggered",~fanoutTriggered
-yes,1
-no,0
-
-@"post-output BA-output-1 count >= n-t",~postCountOneAtNT
-yes,1
-no,0
-
 @"post-output BA-output count == n",~postCountAllN
 yes,1
 no,0
 
 # Domain action -> boolean local that drives a post-dispatch side effect.
 # - doInput1: bkr94acsEnter(a, process, 1, ...)
-# - doInput0Fanout: loop over all BAs, enter 0 where unentered; set
-#   BKR94ACS_F_THRESHOLD in a->flags.
-# - doOutputSubset: output BKR94ACS_ACT_COMPLETE; set BKR94ACS_F_COMPLETE
-#   in a->flags.
+# - doOutputSubset: output BKR94ACS_ACT_COMPLETE; set a->complete
+# Rule 2's enter-0 fanout is not dispatched here -- it is fired from
+# the BPR sweep by bkr94acsFanout (see the Step 2 section of
+# bkr94acs.dtc).
 
 @~doInput1,"input 1 to BA_j"
-1,yes
-0,no
-
-@~doInput0Fanout,"input 0 to all unentered BAs"
 1,yes
 0,no
 

@@ -8,7 +8,7 @@
  * Verifies:
  *   Agreement  -- all honest processes decide the same subset
  *   Validity   -- subset contains at least n-t processes
- *   Totality   -- all BAs decide (BKR94ACS_F_COMPLETE flag set)
+ *   Totality   -- all BAs decide (complete set)
  *   Values     -- accepted A-Cast values match what was A-Cast
  *   Ordering   -- deterministic sort produces identical order at each process
  */
@@ -123,6 +123,63 @@ qShuffle(
   }
 }
 
+/*
+ * BKR94 Step 2 at zero tolerance budget: fire the enter-0 fanout
+ * the moment it is enabled -- the eager schedule bkr94acsBaInput
+ * hardwired before the firing moved to the BPR sweep -- and
+ * broadcast its BA_SEND acts from 'self' to all n processes.
+ */
+static void
+qFanout(
+  struct bkr94acs *st
+ ,unsigned char self
+ ,unsigned int n
+){
+  struct bkr94acsAct acts[MAX_PROCESSES];
+  unsigned int nacts;
+  unsigned int k;
+  unsigned int p;
+
+  nacts = bkr94acsFanout(st, acts);
+  for (k = 0; k < nacts; ++k)
+    for (p = 0; p < n; ++p)
+      qPush(BKR94ACS_CLS_BA, acts[k].process, acts[k].round,
+            acts[k].initiator, acts[k].type, self, (unsigned char)p,
+            &acts[k].baValue, 1);
+}
+
+/*
+ * Bracha Fig4's round turn at zero tolerance budget: turn every
+ * turnable round of every BA of one instance -- the eager schedule
+ * bkr94acsBaInput hardwired before the turn moved to the BPR sweep --
+ * and broadcast the next-round INITIALs from 'self' to all n
+ * processes.  BA_DECIDED / COMPLETE / BA_EXHAUSTED carry no wire
+ * traffic, so only BA_SEND is pushed.
+ */
+static void
+qTurns(
+  struct bkr94acs *st
+ ,unsigned char self
+ ,unsigned int n
+){
+  struct bkr94acsAct acts[3];   /* bkr94acsTurn bound */
+  unsigned int nacts;
+  unsigned int k;
+  unsigned int p;
+  unsigned int q;
+
+  for (p = 0; p < n; ++p)
+    while ((nacts = bkr94acsTurn(st, (unsigned char)p, 1, acts)) > 0)
+      for (k = 0; k < nacts; ++k) {
+        if (acts[k].act != BKR94ACS_ACT_BA_SEND)
+          continue;
+        for (q = 0; q < n; ++q)
+          qPush(BKR94ACS_CLS_BA, acts[k].process, acts[k].round,
+                acts[k].initiator, acts[k].type, self, (unsigned char)q,
+                &acts[k].baValue, 1);
+      }
+}
+
 /*--------------------------------------------------------------------------*/
 /*  BKR94 ACS simulation engine                                             */
 /*--------------------------------------------------------------------------*/
@@ -198,7 +255,7 @@ runAcs(
      * reach processes still working on some BAs.  Skipping replicates
      * the post-decide stall the library itself was fixed to avoid
      * (see bkr94acs.c bkr94acsBaInput comment on
-     * BKR94ACS_F_COMPLETE).
+     * a->complete).
      */
     oldTail = Qtail;
 
@@ -235,13 +292,24 @@ runAcs(
       }
     }
 
+    /*
+     * Turns first (only a turn produces the decisions the fanout
+     * counts), then the fanout.  No trailing drain: a fanout writes
+     * only entered[] and the round-0 Fig1 initiator state, which no
+     * turn duty reads, so it cannot make any round turnable --
+     * those rounds turn as their evidence arrives on later
+     * deliveries.
+     */
+    qTurns(st, m->to, n);
+    qFanout(st, m->to, n);
+
     if (shuffleSeed && Qtail > oldTail)
       qShuffle(&shuffleSeed);
   }
 
   /* Collect results */
   for (i = 0; i < n; ++i) {
-    results[i].complete = (processes[i]->flags & BKR94ACS_F_COMPLETE) ? 1 : 0;
+    results[i].complete = processes[i]->complete ? 1 : 0;
     results[i].subsetCnt = bkr94acsSubset(processes[i], results[i].subset);
   }
 
@@ -529,7 +597,7 @@ testValues(
 
     m = &MsgQ[Qhead++];
     st = processes[m->to];
-    if (st->flags & BKR94ACS_F_COMPLETE)
+    if (st->complete)
       continue;
 
     if (m->cls == BKR94ACS_CLS_ACAST) {
@@ -564,6 +632,9 @@ testValues(
         break;
       }
     }
+
+    qTurns(st, m->to, n);
+    qFanout(st, m->to, n);
   }
 
   /* Check A-Cast values at each process for each included process */
@@ -572,7 +643,7 @@ testValues(
     unsigned char subset[MAX_PROCESSES];
     unsigned int cnt;
 
-    check("values: complete", processes[i]->flags & BKR94ACS_F_COMPLETE);
+    check("values: complete", processes[i]->complete);
     cnt = bkr94acsSubset(processes[i], subset);
     for (j = 0; j < cnt; ++j) {
       const unsigned char *pv;
@@ -798,14 +869,18 @@ testPostDecideContinuation(
   check("post-decide input outputs BA_SEND ECHO", nEcho >= 1);
 
   /*
-   * Feed more messages to drive Fig3 round 0 to n-t validated, so
-   * Fig4Round round 0 fires in the already-decided branch and
-   * outputs a BROADCAST action for round 1 without DECIDE.  Deliver
-   * INITIALs for enough initiators for Fig1 to accept via echoes
-   * between them.  Easiest: INITIAL from every process for every
-   * initiator -- the simple all-to-all simulation pattern.
+   * Feed more messages to drive Fig3 round 0 to n-t validated, so the
+   * zero-budget turn drain runs Fig4Round round 0 in the
+   * already-decided branch and outputs a BROADCAST action for round 1
+   * without DECIDE.  Deliver INITIALs for enough initiators for Fig1
+   * to accept via echoes between them.  Easiest: INITIAL from every
+   * process for every initiator -- the simple all-to-all simulation
+   * pattern.  The arrivals only bank evidence; every act examined
+   * below comes from bkr94acsTurn.
    */
   {
+    struct bkr94acsAct tacts[3];   /* bkr94acsTurn bound */
+    unsigned int nturn;
     unsigned char initiator;
     unsigned char from;
     unsigned char type;
@@ -817,22 +892,23 @@ testPostDecideContinuation(
         for (from = 0; from < N; ++from) {
           unsigned int kk;
 
-          nacts = bkr94acsBaInput(a, 0, 0, initiator,
-                                         type, from, value, acts);
-          for (kk = 0; kk < nacts; ++kk) {
-            /*
-             * A post-decide BA_SEND with round > 0 proves Fig4Round
-             * fired in the already-decided else branch and output
-             * a continuation broadcast.
-             */
-            if (acts[kk].act == BKR94ACS_ACT_BA_SEND
-             && acts[kk].round > 0)
-              hasPostDecideBroadcast = 1;
-            /* BA_DECIDED must not re-fire for process 0 */
-            if (acts[kk].act == BKR94ACS_ACT_BA_DECIDED
-             && acts[kk].process == 0)
-              check("no duplicate BA_DECIDED post-decide", 0);
-          }
+          (void)bkr94acsBaInput(a, 0, 0, initiator,
+                                       type, from, value, acts);
+          while ((nturn = bkr94acsTurn(a, 0, 1, tacts)) > 0)
+            for (kk = 0; kk < nturn; ++kk) {
+              /*
+               * A post-decide BA_SEND with round > 0 proves the turn
+               * ran Fig4Round in the already-decided else branch and
+               * output a continuation broadcast.
+               */
+              if (tacts[kk].act == BKR94ACS_ACT_BA_SEND
+               && tacts[kk].round > 0)
+                hasPostDecideBroadcast = 1;
+              /* BA_DECIDED must not re-fire for process 0 */
+              if (tacts[kk].act == BKR94ACS_ACT_BA_DECIDED
+               && tacts[kk].process == 0)
+                check("no duplicate BA_DECIDED post-decide", 0);
+            }
         }
       }
     }
@@ -849,22 +925,24 @@ testPostDecideContinuation(
 /*                                                                          */
 /*  Pre-fix, bkr94acsAcastInput counted Fig1 ACCEPTs and fired the          */
 /*  enter-0 fanout when nAccepted reached n-t.  BKR94 Lemma 2 Part A        */
-/*  case (i) requires the step-2 trigger to be "2t+1 BAs terminated with    */
-/*  output 1", not "2t+1 Fig1 ACCEPTs" -- these coincide only in benign     */
-/*  runs and diverge under asynchrony or Byzantine scheduling.              */
+/*  case (i) requires the step-2 enabling count to be "2t+1 BAs             */
+/*  terminated with output 1", not "2t+1 Fig1 ACCEPTs" -- these coincide    */
+/*  only in benign runs and diverge under asynchrony or Byzantine           */
+/*  scheduling.                                                             */
 /*                                                                          */
 /*  This test pins the corrected semantics by driving all N Fig1            */
 /*  instances to ACCEPT on a single process via bkr94acsAcastInput and      */
 /*  asserting:                                                              */
-/*    - BKR94ACS_F_THRESHOLD stays clear after each accept (step 2 not      */
-/*      fired),                                                             */
+/*    - bkr94acsFanoutDuty stays HELD after each accept (accepts never      */
+/*      enable step 2; zero BAs have decided) and a bkr94acsFanout call     */
+/*      outputs nothing,                                                    */
 /*    - no BKR94ACS_ACT_BA_SEND with baValue=0 comes out of the             */
 /*      A-Cast path (no enter-0 fanout),                                    */
 /*    - entered[j] == BKR94ACS_ENTER_ONE for every j (step 1 fired per      */
 /*      accept).                                                            */
 /*                                                                          */
-/*  With the pre-fix code the (n-t)th accept would flip threshold to 1      */
-/*  and output a burst of enter-0 BA_SEND actions.                          */
+/*  With the pre-fix code the (n-t)th accept would fire the fanout and      */
+/*  output a burst of enter-0 BA_SEND actions.                              */
 /*--------------------------------------------------------------------------*/
 
 static void
@@ -941,12 +1019,16 @@ testStepTwoTrigger(
     }
 
     /*
-     * Pre-fix, threshold flipped to 1 on the (n-t)th accept
-     * (process == 2 here) and the enter-0 fanout fired for the one
-     * still-un-entered process.
+     * Pre-fix, the fanout fired on the (n-t)th accept (process == 2
+     * here) for the one still-un-entered process.  Accepts feed
+     * step 1 only; with zero BA decides the fanout must never
+     * classify TOLERANCE (HELD while entries remain, MET once step
+     * 1 has entered all N) and firing it must output nothing.
      */
-    check("A-Cast accepts don't fire step 2",
-          (a->flags & BKR94ACS_F_THRESHOLD) == 0);
+    check("A-Cast accepts don't enable step 2",
+          bkr94acsFanoutDuty(a) != BKR94ACS_DUTY_TOLERANCE);
+    check("fanout call outside TOLERANCE outputs nothing",
+          bkr94acsFanout(a, acts) == 0);
   }
 
   check("no enter-0 output from A-Cast path", enterZeroSeen == 0);
@@ -961,7 +1043,7 @@ testStepTwoTrigger(
     check("entered[j] == ENTER_ONE after accept", entered[process] == 1);
 
   free(a);
-  printf("  n=4 t=1: step 2 stays in BA path, step 1 fires per accept\n");
+  printf("  n=4 t=1: accepts never enable step 2, step 1 fires per accept\n");
 }
 
 /*--------------------------------------------------------------------------*/
@@ -1202,12 +1284,15 @@ testBpr(
             break;
           }
         }
+
+        qTurns(processes[m->to], m->to, 4);
+        qFanout(processes[m->to], m->to, 4);
       }
 
       /* Idle threshold check */
       progress = 0;
       for (p = 0; p < 4; ++p)
-        if (!(processes[p]->flags & BKR94ACS_F_COMPLETE)) {
+        if (!processes[p]->complete) {
           progress = 1;
           break;
         }
@@ -1244,6 +1329,9 @@ testBpr(
             break;
           }
         }
+
+        qTurns(processes[p], (unsigned char)p, 4);
+        qFanout(processes[p], (unsigned char)p, 4);
       }
 
       ++totalSwept;
@@ -1257,7 +1345,7 @@ testBpr(
     }
 
     for (p = 0; p < 4; ++p) {
-      results[p].complete = (processes[p]->flags & BKR94ACS_F_COMPLETE) ? 1 : 0;
+      results[p].complete = processes[p]->complete ? 1 : 0;
       results[p].subsetCnt = bkr94acsSubset(processes[p], results[p].subset);
     }
 
@@ -1647,12 +1735,15 @@ testBprByzantineSilent(
           break;
         }
       }
+
+      qTurns(processes[m->to], m->to, 4);
+      qFanout(processes[m->to], m->to, 4);
     }
 
     /* Idle threshold on honest processes */
     progress = 0;
     for (p = 0; p < 3; ++p)
-      if (!(processes[p]->flags & BKR94ACS_F_COMPLETE)) {
+      if (!processes[p]->complete) {
         progress = 1;
         break;
       }
@@ -1688,6 +1779,9 @@ testBprByzantineSilent(
           break;
         }
       }
+
+      qTurns(processes[p], (unsigned char)p, 4);
+      qFanout(processes[p], (unsigned char)p, 4);
     }
 
     ++totalSwept;
@@ -1700,7 +1794,7 @@ testBprByzantineSilent(
   }
 
   for (p = 0; p < 3; ++p) {
-    results[p].complete = (processes[p]->flags & BKR94ACS_F_COMPLETE) ? 1 : 0;
+    results[p].complete = processes[p]->complete ? 1 : 0;
     results[p].subsetCnt = bkr94acsSubset(processes[p], results[p].subset);
   }
 
@@ -1814,11 +1908,14 @@ runRetryOnlyE2e(
           break;
         }
       }
+
+      qTurns(processes[m->to], m->to, 4);
+      qFanout(processes[m->to], m->to, 4);
     }
 
     progress = 0;
     for (p = 0; p < 4; ++p)
-      if (!(processes[p]->flags & BKR94ACS_F_COMPLETE)) {
+      if (!processes[p]->complete) {
         progress = 1;
         break;
       }
@@ -1853,6 +1950,9 @@ runRetryOnlyE2e(
           break;
         }
       }
+
+      qTurns(processes[p], (unsigned char)p, 4);
+      qFanout(processes[p], (unsigned char)p, 4);
     }
 
     ++totalSwept;
@@ -1867,7 +1967,7 @@ runRetryOnlyE2e(
   }
 
   for (p = 0; p < 4; ++p) {
-    results[p].complete = (processes[p]->flags & BKR94ACS_F_COMPLETE) ? 1 : 0;
+    results[p].complete = processes[p]->complete ? 1 : 0;
     results[p].subsetCnt = bkr94acsSubset(processes[p], results[p].subset);
   }
 
@@ -1908,13 +2008,14 @@ testBprHighDrop(
 /*                                                                          */
 /*  Setup: n=4, t=1, maxPhases=1, vLen=0, self=0.  We drive only one BA     */
 /*  (process=0) directly via bkr94acsBaInput, bypassing the                 */
-/*  A-Cast layer.                                                           */
+/*  A-Cast layer.  Arrivals bank evidence only; each is followed by the     */
+/*  zero-budget turn drain, which is where BA_EXHAUSTED emerges.            */
 /*                                                                          */
 /*  Per round, each of the 4 initiators' Fig1 is driven to ACCEPT at        */
 /*  process 0 by feeding INITIAL + 3 distinct READYs (>= 2t+1=3 readys =>   */
-/*  Bracha Rule 6 fires).  After the 3rd Fig1 ACCEPTs in a round,           */
-/*  Fig3RoundComplete fires and Fig4Round runs.  The 4th ACCEPT adds a      */
-/*  4th validation so that the next round's fig3IsValid call sees N(k-1)    */
+/*  Bracha Rule 6 fires).  Once the 3rd Fig1 ACCEPTs in a round that        */
+/*  round is complete and the drain's Fig4Round runs.  The 4th ACCEPT adds  */
+/*  a 4th validation so that the next round's fig3IsValid call sees N(k-1)  */
 /*  permissive (cnt[0]=cnt[1]=2 in a 4-element set, both reachable in       */
 /*  some n-t=3 subset), letting the next round's split values validate.     */
 /*                                                                          */
@@ -1945,6 +2046,7 @@ feedFig1Accept(
  ,struct bkr94acsAct *out
  ,unsigned int *exhaustedSeen
 ){
+  struct bkr94acsAct tout[3];   /* bkr94acsTurn bound */
   unsigned int total;
   unsigned int n;
   unsigned int k;
@@ -1952,12 +2054,13 @@ feedFig1Accept(
 
   total = 0;
   /* INITIAL from initiator: process 0 echoes (Rule 1) */
-  n = bkr94acsBaInput(a, process, round, initiator,
-                             BRACHA87_INITIAL, initiator, value, out);
-  for (k = 0; k < n; ++k)
-    if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED && out[k].process == process)
-      ++*exhaustedSeen;
-  total += n;
+  total += bkr94acsBaInput(a, process, round, initiator,
+                                  BRACHA87_INITIAL, initiator, value, out);
+  while ((n = bkr94acsTurn(a, process, 1, tout)) > 0)
+    for (k = 0; k < n; ++k)
+      if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED
+       && tout[k].process == process)
+        ++*exhaustedSeen;
 
   /*
    * Three distinct READYs.  rdCnt sequence: 1, 2, 3.
@@ -1966,12 +2069,13 @@ feedFig1Accept(
    *   sender=3: rdCnt=3, Rule 6 fires (rd>=2t+1=3) => ACCEPT, cascade.
    */
   for (sender = 1; sender <= 3; ++sender) {
-    n = bkr94acsBaInput(a, process, round, initiator,
-                               BRACHA87_READY, sender, value, out);
-    for (k = 0; k < n; ++k)
-      if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED && out[k].process == process)
-        ++*exhaustedSeen;
-    total += n;
+    total += bkr94acsBaInput(a, process, round, initiator,
+                                    BRACHA87_READY, sender, value, out);
+    while ((n = bkr94acsTurn(a, process, 1, tout)) > 0)
+      for (k = 0; k < n; ++k)
+        if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED
+         && tout[k].process == process)
+          ++*exhaustedSeen;
   }
   return (total);
 }
@@ -2009,18 +2113,21 @@ testExhausted(
         exhaustedSeen == 1);
   check("baDecision[0] == 0xFE (exhausted sentinel)",
         bkr94acsBaDecision(a, 0) == 0xFE);
-  check("BKR94ACS_F_COMPLETE remains clear after EXHAUSTED",
-        (a->flags & BKR94ACS_F_COMPLETE) == 0);
+  check("complete remains clear after EXHAUSTED",
+        a->complete == 0);
 
   /*
    * After EXHAUSTED, the per-process retry gate keeps retrying
    * (0xFE != 0), and additional BA inputs for this process
-   * must not retry EXHAUSTED.  Drive any further input and check.
+   * must not retry EXHAUSTED.  nextRound has reached maxRounds, so
+   * the turn drain is HELD forever -- the single output is
+   * structural.  Drive any further input and check.
    */
-  n = bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, 0, 0, out);
-  for (k = 0; k < n; ++k)
-    if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
-      ++exhaustedSeen;
+  (void)bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, 0, 0, out);
+  while ((n = bkr94acsTurn(a, 0, 1, out)) > 0)
+    for (k = 0; k < n; ++k)
+      if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
+        ++exhaustedSeen;
   check("no duplicate EXHAUSTED on subsequent input",
         exhaustedSeen == 1);
 
@@ -2028,7 +2135,7 @@ testExhausted(
          "baDecision=0x%02X; complete=%u\n",
          exhaustedSeen,
          (unsigned)bkr94acsBaDecision(a, 0),
-         (unsigned)((a->flags & BKR94ACS_F_COMPLETE) ? 1 : 0));
+         (unsigned)(a->complete ? 1 : 0));
 
   free(a);
 }
