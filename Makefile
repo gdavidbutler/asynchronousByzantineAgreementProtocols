@@ -239,6 +239,30 @@ test_system_seam_W_SERVE_ROTOK: test/test_system_seam.c system.o bkr94acs.o \
 	  -DW_SERVE_ROTOK -I. -o $@ \
 	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
 
+test_system_seam_W_SERVE_YIELD: test/test_system_seam.c system.o bkr94acs.o \
+                                bracha87.o system.h bkr94acs.h bracha87.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 \
+	  -DW_SERVE_YIELD -I. -o $@ \
+	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+
+test_system_seam_W_SERVE_YIELDFLOOR: test/test_system_seam.c system.o bkr94acs.o \
+                                 bracha87.o system.h bkr94acs.h bracha87.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 \
+	  -DW_SERVE_YIELDFLOOR -I. -o $@ \
+	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+
+test_system_seam_W_SERVE_WIRE: test/test_system_seam.c system.o bkr94acs.o \
+                               bracha87.o system.h bkr94acs.h bracha87.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 \
+	  -DW_SERVE_WIRE -I. -o $@ \
+	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+
+test_system_seam_W_SERVE_NORESUME: test/test_system_seam.c system.o bkr94acs.o \
+                                   bracha87.o system.h bkr94acs.h bracha87.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 \
+	  -DW_SERVE_NORESUME -I. -o $@ \
+	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+
 test_system_seam_W_R2C_SILENT: test/test_system_seam.c system.o bkr94acs.o \
                                bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_R2C_SILENT -I. -o $@ \
@@ -285,6 +309,8 @@ seam-premises: test_system_seam_W_A4_PARTITION test_system_seam_W_A6_PIN0 \
                test_system_seam_W_A6_PIN1 test_system_seam_W_A5_NOINFER \
                test_system_seam_W_A9_SYBIL test_system_seam_W_SERVE_CAP0 \
                test_system_seam_W_SERVE_ROTDROP test_system_seam_W_SERVE_ROTOK \
+               test_system_seam_W_SERVE_YIELD test_system_seam_W_SERVE_YIELDFLOOR \
+               test_system_seam_W_SERVE_WIRE test_system_seam_W_SERVE_NORESUME \
                test_system_seam_W_R2C_SILENT test_system_seam_W_REACH_WSHRINK \
                test_system_seam_W_L2_NOBYTEMATCH test_system_seam_W_L2_NOREARM \
                test_system_seam_W_I10_WRONGARTIFACT \
@@ -297,10 +323,22 @@ seam-premises: test_system_seam_W_A4_PARTITION test_system_seam_W_A6_PIN0 \
 	-./test_system_seam_W_SERVE_CAP0 8
 	./test_system_seam_W_SERVE_ROTDROP 8
 	./test_system_seam_W_SERVE_ROTOK 8
+	-./test_system_seam_W_SERVE_YIELD 8
+	./test_system_seam_W_SERVE_YIELDFLOOR 8
+# 16 seeds, not 8: the BYZ-MIXED coverage arm needs them to find its
+# subject, and a control that exits non-zero on a lapsed coverage arm
+# reports a failure it does not have.
+	./test_system_seam_W_SERVE_WIRE 16
+	-./test_system_seam_W_SERVE_NORESUME 8
 	./test_system_seam_W_R2C_SILENT 8
 	./test_system_seam_W_REACH_WSHRINK 8
 	-./test_system_seam_W_L2_NOBYTEMATCH 8
-	-./test_system_seam_W_L2_NOREARM 8
+# 16 seeds at 8% LOSS, not the default sweep: this arm reds at ONE seed and
+# the relocation described in its header moved that seed to 40, past any
+# sample the matrix draws.  At 8% the same red reproduces ten times over,
+# and the clean build is 0 failures at that rate -- so the loss is the
+# reproduction, not the cause.
+	-./test_system_seam_W_L2_NOREARM 16 8
 	-./test_system_seam_W_I10_WRONGARTIFACT 8
 	-./test_system_seam_W_L2_NOCLOSEVOID 8
 

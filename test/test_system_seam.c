@@ -923,19 +923,21 @@
  * 2026-07-25 (stage 2, tranche 2): THE REST OF THE MATRIX.
  * ------------------------------------------------------------------
  *
- * Eight more arms, the same two kinds and the same discipline: one
+ * Ten more arms, the same two kinds and the same discipline: one
  * premise per arm, a FALSIFYING arm must fire a NAMED red, a CONTROL
- * asserts its prediction positively and exits 0.  Three arms carry a
+ * asserts its prediction positively and exits 0.  Five arms carry a
  * configuration beside their -D, because the premise IS a configuration
- * (W_REACH_WSHRINK) or the scenario the premise is about costs two
- * faults and t = 1 buys one (the two SERVE-rotation arms).
+ * (W_REACH_WSHRINK), the scenario the premise is about costs two
+ * faults and t = 1 buys one (the two SERVE-rotation arms), or the
+ * clause only reads as distinct from the cap when the cap exceeds the
+ * floor (the two discharge-order arms, which need t = 2).
  *
  * THE CALLER'S SERVE MECHANICS HAD TO BE BUILT BEFORE THEY COULD BE
  * WITHDRAWN.  The baseline glue reads the SERVE cap as unbounded and
  * the rotation as vacuous: a SERVE act names a want bitmap and the glue
  * births a leg to every process in it, that tick.  Nothing is starved,
  * so both clauses are supplied for free -- and a clause supplied for
- * free is a clause never shown to be load-bearing.  The three SERVE
+ * free is a clause never shown to be load-bearing.  The five SERVE
  * arms therefore compile in the mechanics system.md actually pins (C1):
  * a duty space of (wanting process, round) pairs ordered by process
  * then round, at most CAP duties granted per tick, and a cursor.  CAP
@@ -1040,6 +1042,152 @@
  *                   rotating) and ticks do not (12598 against 12627):
  *                   the pin changes the SHAPE of the discharge and not
  *                   its outcome.
+ *
+ *   W_SERVE_YIELD   NOT A WITHDRAWAL.  This arm builds the discharge
+ *   THE SPEC'S      order SERVE states -- the sequence first, without
+ *   OWN ORDER       remainder -- and runs it.  The serve walk is granted
+ *                   only on a tick where this process put nothing else on
+ *                   the wire (missionActs, counted where traffic is framed:
+ *                   emitAcs and emitExchAct).  n = 7, t = 2.
+ *                   RESULT 72758/0 at 16 seeds, with serves 0 at every
+ *                   seed and every scenario.  The returner is starved for
+ *                   the whole run, the sequence completes without it, and
+ *                   THAT IS THE ARM PASSING.
+ *                   IT DID NOT START THERE: the first cut reported 417
+ *                   failures, and every one of them was the INSTRUMENT
+ *                   disagreeing with the spec.  What it cost to fix is
+ *                   worth recording, because the same shape will recur.
+ *                   THE GROUND-TRUTH ARM KNEW ONE LEGITIMATE DEFICIT AND
+ *                   NOW KNOWS TWO.  It accepted a PARTITIONED
+ *                   classification only where the process HOLDS the round
+ *                   its duty is held on and only the evidence is missing
+ *                   -- an EVIDENTIAL deficit, and it reads the duty class
+ *                   because R4 is what strands such a process.  A returner
+ *                   starved by the order is a CAPACITY deficit and takes
+ *                   NEITHER conjunct: it sits at duty MET, not HELD,
+ *                   because nothing about R4 blocks it -- it simply cannot
+ *                   COMPLETE a round the cohort has left behind, and the
+ *                   adoption that would close it is what the order
+ *                   withheld.  Requiring HELD for the second ground was
+ *                   the first cut here and it accepted nothing.
+ *                   THE VETO IS UNCHANGED, and it is what keeps this from
+ *                   being a weakening: arrived-but-unbanked still REJECTS
+ *                   under either deficit, so evidence that reached a
+ *                   process and was dropped is still a glue defect and
+ *                   M_SEAM_NOPEND keeps its red (11 failures, re-verified).
+ *                   The ledger (yieldDenied, per wanting process) is all
+ *                   zero in every build that compiles no order, so the
+ *                   predicate is literally unchanged elsewhere -- the three
+ *                   config baselines and all sixteen other premise arms
+ *                   re-run byte-identical.
+ *                   TWO ARMS INVERTED RATHER THAN LAPSING, which is the
+ *                   discipline worth copying: B's serves-born arm asserts
+ *                   serveMsgs == 0 where the order granted nothing all run
+ *                   (the yield really held) instead of being skipped, and
+ *                   the BYZ-MIXED coverage arm -- whose subject rides a
+ *                   serve and so has none here -- lapses NAMED, on the
+ *                   sweep-level grant total, rather than passing quietly
+ *                   on an empty set.
+ *
+ *                   The zero is self-sustaining and R2c is why: a correct
+ *                   process is never send-silent, and the victim's own
+ *                   non-accept keeps the READY retries unretirable, so
+ *                   this instrument never reaches a quiet tick.  That is a
+ *                   property of a run with a permanent absentee and of the
+ *                   PRESSURE PROXY this arm uses, not of the order -- see
+ *                   W_SERVE_WIRE, which makes the wire a quantity and gets
+ *                   the relief the proxy cannot show.
+ *
+
+ *   W_SERVE_YIELDFLOOR  the CONTRAST, kept because it localized the 417.
+ *   DIAGNOSTIC      Same build, same order, except a mission tick clamps
+ *                   the cap to one grant instead of none.  80225/0 at 16
+ *                   seeds.  Only the floor differed, so the original 417
+ *                   were the yield's doing and not a defect in the arm --
+ *                   which is how the instrument was identified as the
+ *                   thing needing correction.  It
+ *                   corresponds to no clause: the spec reserves no share,
+ *                   and this build is here as an instrument control, not
+ *                   as a reading of SERVE.
+ *
+ *                   ONE MORE MEASUREMENT, from the Fable adversarial
+ *                   review 2026-08-01, kept because it bounds what this
+ *                   instrument can show.  Counting ONLY the live frontier
+ *                   round's carriers as mission -- a narrower yield class
+ *                   than the one built here -- the floorless arm runs
+ *                   80225/0: the yield never bites, because a process
+ *                   holding under R4 runs no instance and its carriers
+ *                   are quiet.  That is R4's hold seen as the wire
+ *                   freeing, and it is why the BROAD class is the one
+ *                   worth instrumenting: it is the only one under which
+ *                   a deployment's wire is ever actually full.
+ *
+ *                   BOTH ARE DISTINCT FROM -DSCHED_KINDFLIP, which puts
+ *                   leg and exchange traffic AHEAD of ACS tails in the
+ *                   DELIVERY order: that reorders what was already sent,
+ *                   while these two decide whether the serve is sent.
+ *
+ *   W_SERVE_WIRE    THE WIRE MADE A QUANTITY -- the arm the discharge
+ *   CONTROL         order actually needs.  WIREBUDGET slots per process
+ *                   per tick; mission traffic is never dropped (that is
+ *                   what "the sequence goes first" means, and dropping it
+ *                   would change the run instead of measuring it) but it
+ *                   SPENDS slots, and the serve walk is granted only the
+ *                   remainder.  n = 7, t = 2, budget 32.
+ *                   RESULT 80463/0 at 16 seeds -- serves 104-117 per
+ *                   seed, adoptions at every healing scenario, zero
+ *                   classifications.
+ *                   THIS IS THE SELF-FUNDING CLAIM MEASURED.  Nothing
+ *                   schedules relief for recovery, and none is reserved:
+ *                   the arm asserts that BOTH tick classes occurred
+ *                   (wireStarved > 0 and wireFreed > 0 -- non-vacuity in
+ *                   both directions, since a wire that never binds proves
+ *                   nothing and one that never frees cannot show the
+ *                   relief), and the heal completes anyway, on slots the
+ *                   sequence left because it was holding under R4 or had
+ *                   only its retry tail to send.  A stalled sequence IS
+ *                   the bandwidth.
+ *                   THE BUDGET IS MEASURED, NOT DERIVED, and the sweep is
+ *                   the record: at 4 and 8 slots the wire never frees
+ *                   (serves 0 at six of twenty scenario-seed lines; 104
+ *                   and 97 failures), at 128 it never binds (20 failures,
+ *                   the starved-tick assertion once per scenario-seed),
+ *                   and 32 is where both classes occur and the run is
+ *                   clean.  A tick here is a whole delivery drain plus a
+ *                   retry plus the exchanges, so the count is coarse by
+ *                   construction; what the arm needs is not a realistic
+ *                   bandwidth but a wire that is sometimes full.
+ *
+ *   W_SERVE_NORESUME  the clause's OTHER half withdrawn: the yield makes a
+ *   FALSIFYING      RETIREMENT.  Same wire, same budget; a duty the wire
+ *                   had no slot for is DROPPED rather than deferred, so a
+ *                   serve withheld under pressure is never offered again.
+ *                   M1's forbidden gate at round granularity.
+ *                   RESULT 80 FAILURES at 16 seeds, and they are the
+ *                   DESIGNATED ORACLE ALONE -- 16 at each of the five
+ *                   scenarios, every one of them "spare capacity never
+ *                   leaves a want unserved".  Nothing else moves: the
+ *                   heal checks, the safety arms and the posture arm are
+ *                   silent at every seed.  The withdrawal costs the
+ *                   clause and costs nothing else, which is what a
+ *                   matched red is for.
+ *                   WHY THE ORACLE IS THE CLAUSE AND NOT ITS CONSEQUENCE,
+ *                   recorded so it is not re-attempted: a heal-completion
+ *                   oracle CANNOT score this pair.  Measured at budget 20,
+ *                   before this oracle existed, the heal checks fired 12
+ *                   times in the control and 12 in the withdrawal at 16
+ *                   seeds -- indistinguishable, because a legitimately
+ *                   starved returner reds the every-process quantifiers
+ *                   exactly as a retired duty does.  The direct reading
+ *                   separates them wherever the wire binds at all: the
+ *                   walk grants until the cap or until nothing is owed,
+ *                   so a slot left unspent beside a standing want is not
+ *                   a deferral -- nothing deferred it.
+ *                   ONE SUBTLETY, and getting it wrong made the control
+ *                   red at 79: a want clears when its owner EVIDENCES
+ *                   possession, never when the serve is granted, so the
+ *                   oracle must exclude the duties granted on the same
+ *                   tick or it counts every healthy grant as a retirement.
  *
  *   W_R2C_SILENT    R2c withdrawn (a decided process never goes send-
  *   CONTROL         silent): the glue stops driving a round's ACS
@@ -1171,7 +1319,26 @@
  *                    HELD.  Rarer than NOVOID's ten because the premature
  *                    latch needs the OLD candidate's witnesses to have
  *                    reached t, not merely to exist.
- *
+ *                    RELOCATED 2026-08-01, and the arm's own record
+ *                    corrects a wrong conclusion: it was first reported
+ *                    DARK at HEAD on a 16- then a 32-seed sample.  It is
+ *                    not.  It reds at 64 seeds -- 2 failures, BYZ-MIXED
+ *                    SEED 40, the same E plus fabrication pair -- its one
+ *                    seed having moved past every sample drawn.  The
+ *                    step-2 and round-turn relocation shifted the
+ *                    scheduler RNG (the same effect that re-froze the
+ *                    default sweep 42781 -> 42804); the pre-bridge build
+ *                    reds at 16 seeds, 31528/2.  Exposed, not caused.
+ *                    REPRODUCE IT WITH LOSS, since a 64-seed run is not a
+ *                    matrix step: 16 seeds at 8% loss fires the same red
+ *                    ten times over (20 failures, all the designated
+ *                    pair), and the CLEAN build is 0 at that rate -- so
+ *                    the loss is the reproduction and not the cause.
+ *                    THE LESSON, since it generalizes: a red of one or
+ *                    two failures at a single seed can leave an 8-seed
+ *                    matrix silently on any schedule shift, and reports
+ *                    GREEN while its clause has no countermodel.
+
  *   W_I10_WRONGARTIFACT I10's CALLER HALF withdrawn (the C7 seam pin,
  *   FALSIFYING       and F6 in the obligation map -- it is consumed by
  *                    L6 and appears in no caller list).  The machine
@@ -2010,7 +2177,9 @@ static const char *CurTest = "<none>";
  * of one, and a ROTATION over the duty space ordered by wanting process and
  * then by round -- "granted oldest-want-first in rotation".  Each arm
  * withdraws exactly one clause and nothing else. */
-#if defined(W_SERVE_CAP0) || defined(W_SERVE_ROTDROP) || defined(W_SERVE_ROTOK)
+#if defined(W_SERVE_CAP0) || defined(W_SERVE_ROTDROP) || defined(W_SERVE_ROTOK) \
+ || defined(W_SERVE_YIELD) || defined(W_SERVE_YIELDFLOOR) \
+ || defined(W_SERVE_WIRE) || defined(W_SERVE_NORESUME)
 #define W_SERVEWALK 1
 #if defined(W_SERVE_CAP0)
 #define W_SERVECAP  0               /* the FLOOR withdrawn: a cap read to zero,
@@ -2021,6 +2190,54 @@ static const char *CurTest = "<none>";
 #endif
 #if defined(W_SERVE_ROTDROP) || defined(W_SERVE_ROTOK)
 #define W_SERVEFLOOD 1
+#endif
+
+/* THE DISCHARGE ORDER (system.md SERVE discharge + R4's hold; the C1 seam
+ * pin's third clause).  The spec orders the two traffic classes on a finite
+ * wire -- the sequence first, without remainder -- and reserves NO share for
+ * recovery: under pressure a want is ignored outright, the duty deferred and
+ * never retired.  The baseline glue models no wire capacity at all, so it
+ * supplies the order for free by never contending; these arms make the
+ * contention explicit.  MISSION is the
+ * sequence's own emission this tick (the round instance's acts and the
+ * exchange's), counted where it is framed; recovery is the serve walk that
+ * follows it in the same tick.  Distinct from -DSCHED_KINDFLIP, which
+ * reorders DELIVERY of traffic already sent: this is whether the serve is
+ * granted at all. */
+#if defined(W_SERVE_YIELD) || defined(W_SERVE_YIELDFLOOR) \
+ || defined(W_SERVE_WIRE) || defined(W_SERVE_NORESUME)
+#define W_SERVEPRIO 1
+#endif
+
+/* THE FINITE WIRE, and the two arms that need one.  W_SERVE_YIELD's mission
+ * class is "did this process emit at all", which is a PRESSURE PROXY and not
+ * a capacity: it reads a three-message retry trickle exactly as it reads a
+ * round at full volume, so its wire is never free and its serve count is
+ * zero forever.  That answers whether a saturated wire starves recovery; it
+ * cannot answer what the spec's self-funding claim actually says, which is
+ * that the wire FREES when the sequence cannot proceed.
+ * WIREBUDGET makes the wire a quantity: slots per process per tick.  Mission
+ * traffic is never dropped -- that is what "the sequence goes first" means,
+ * and dropping it would change the run instead of measuring it -- but it
+ * SPENDS slots, and the serve walk is granted only what is left.  A tick at
+ * full volume leaves nothing; a tick spent holding under R4, or one where
+ * the sequence has only its retry tail to send, leaves slots and recovery
+ * takes them.  Nobody schedules that relief; it is what a stalled sequence
+ * IS.
+ * THE NUMBER IS MEASURED, NOT DERIVED, and the sweep is the record: at 4
+ * and 8 slots the wire never frees (serves 0 at six of twenty scenario-seed
+ * lines, 104 and 97 failures), at 128 it never binds (20 failures -- the
+ * starved-tick assertion, one per scenario-seed), and 32 is where both tick
+ * classes occur and the heal still completes.  A tick here is a whole
+ * delivery drain plus a retry plus the exchanges, so the slot count is
+ * coarse by construction; what the arm needs is not a realistic bandwidth
+ * but a wire that is sometimes full and sometimes not.  -D overridable,
+ * because the number is a deployment's and not a claim. */
+#if defined(W_SERVE_WIRE) || defined(W_SERVE_NORESUME)
+#define W_SERVEWIRE 1
+#ifndef WIREBUDGET
+#define WIREBUDGET 32
+#endif
 #endif
 
 #if defined(W_REACH_WSHRINK) && WENC != 0
@@ -2067,6 +2284,17 @@ static const char *CurTest = "<none>";
 #else
 #define WSTARVED(r) 0
 #endif
+
+/* THE CAPACITY DEFICIT, readable only by the instrument.  Set when a
+ * discharge order took the walk's capacity and left this process's want
+ * standing -- the spec's own behaviour, not a loss and not a defect.  Zero
+ * in every build that compiles no order. */
+#ifdef W_SERVEPRIO
+#define YIELDSTARVED(r, i) ((r)->st.yieldDenied[i])
+#else
+#define YIELDSTARVED(r, i) 0
+#endif
+
 /* the mute arm under a shut pin: all-n possession is unreachable, so the
  * tolerance escape is the SOLE route past round 0 and shutting it wedges
  * the cohort there.  Sharp enough to assert POSITIVELY. */
@@ -2510,6 +2738,19 @@ struct proc {
   unsigned int serveDuty;            /* the caller's rotation over the
                                       * (wanting process, round) duty space */
 #endif
+#ifdef W_SERVEPRIO
+  unsigned int missionActs;          /* the sequence's own emissions this
+                                      * tick -- what recovery yields to */
+#endif
+#ifdef W_SERVEPRIO
+  unsigned char granted2[NACT][ROUNDS]; /* duties granted THIS tick -- a want
+                                      * clears on possession, never on the
+                                      * grant, so the oracle must know */
+#endif
+#ifdef W_SERVE_NORESUME
+  unsigned char serveDropped[NACT][ROUNDS]; /* duties this glue retired for
+                                      * lack of wire -- the withdrawal */
+#endif
 #ifdef W_A9_SYBIL
   unsigned int sybil;                /* A9 withdrawal: recorded-act counter */
 #endif
@@ -2526,6 +2767,21 @@ struct stats {
   unsigned long heldDroppedProc[NACT]; /* per-process -- an accepted strand's
                                         * beyond-reach overflow is excluded */
   unsigned long classifications;     /* PARTITIONED classifications this run */
+#ifdef W_SERVEWIRE
+  unsigned long wireStarved;         /* ticks the sequence took the whole
+                                      * budget and recovery got nothing */
+  unsigned long wireFreed;           /* ticks it did not -- the relief the
+                                      * self-funding claim rests on */
+  unsigned long wireRetired;         /* THE ORACLE: wants left unserved on a
+                                      * tick that had capacity to spare */
+#endif
+#ifdef W_SERVEPRIO
+  unsigned long grantsMade;          /* serve grants the order allowed */
+  unsigned char yieldDenied[NACT];   /* GROUND TRUTH the instrument can read
+                                      * and a deployment cannot: this
+                                      * process's serves were withheld by
+                                      * the discharge order, not lost */
+#endif
   unsigned long serveMsgs;
   unsigned long exchAccepts;
   unsigned long exchDelivers;
@@ -2758,6 +3014,11 @@ emitAcs(
 
     case BKR94ACS_ACT_ACAST_SEND:
     case BKR94ACS_ACT_BA_SEND:
+#ifdef W_SERVEPRIO
+      /* the sequence's own carrier put something on the wire this tick --
+       * the first half of what recovery yields to */
+      ++p->missionActs;
+#endif
       for (j = 0; j < NACT; ++j) {
         if (acts[i].skip && BRACHA87_SKIP_TST(acts[i].skip, j))
           continue;
@@ -3526,6 +3787,11 @@ emitExchAct(
   unsigned char tok;
   unsigned int d;
 
+#ifdef W_SERVEPRIO
+  /* the exchange is the live round's other carrier (Relation to a
+   * deployment), so it counts as mission beside the round instance */
+  ++p->missionActs;
+#endif
   switch (act) {
   case BRACHA87_INITIAL_ALL:
     type = BRACHA87_INITIAL;
@@ -4183,7 +4449,39 @@ procTick(
 #endif
     tot = (unsigned int)NACT * ROUNDS;
     cap = W_SERVECAP;
+#ifdef W_SERVEWIRE
+    /* THE ORDER ON A FINITE WIRE.  What the sequence spent this tick is
+     * gone; recovery is granted the remainder, which is nothing at volume
+     * and something whenever the sequence had only its tail to send. */
+    {
+      unsigned int left;
+
+      left = p->missionActs >= (unsigned int)WIREBUDGET
+           ? 0 : (unsigned int)WIREBUDGET - p->missionActs;
+      if (cap > left)
+        cap = left;
+      if (!left)
+        ++r->st.wireStarved;
+      else
+        ++r->st.wireFreed;
+    }
+#elif defined(W_SERVEPRIO)
+    /* THE ORDER AS A PRESSURE PROXY: any emission at all yields the tick. */
+    if (p->missionActs) {
+#ifdef W_SERVE_YIELD
+      cap = 0;                         /* the sequence first, without
+                                        * remainder -- the spec's order */
+#else
+      if (cap > 1)
+        cap = 1;                       /* a floor, kept only as the contrast
+                                        * that localizes YIELD's failures */
+#endif
+    }
+#endif
     granted = 0;
+#ifdef W_SERVEPRIO
+    memset(p->granted2, 0, sizeof (p->granted2));
+#endif
     for (k = 0; k < tot && granted < cap; ++k) {
       const unsigned char *wnt;
       unsigned char rd2;
@@ -4200,12 +4498,82 @@ procTick(
         continue;
       if (!(wnt = systemWant(p->sys, rd2)) || !SYSTEM_TST(wnt, jj))
         continue;
+#ifdef W_SERVE_NORESUME
+      if (p->serveDropped[jj][rd2])
+        continue;
+#endif
       legBirthServer(r, p, (unsigned char)jj, rd2);
+#ifdef W_SERVEPRIO
+      p->granted2[jj][rd2] = 1;
+      ++r->st.grantsMade;
+#endif
       ++granted;
 #ifndef W_SERVE_ROTDROP
       p->serveDuty = (d + 1) % tot;
 #endif
     }
+#ifdef W_SERVEPRIO
+    /* THE ORACLE FOR "DEFERRED, NEVER RETIRED", and it is a direct reading
+     * of the clause rather than a consequence of it.  The walk grants until
+     * it hits the cap or runs out of owed duties, so ENDING WITH CAPACITY TO
+     * SPARE means every want it could see was served.  A want still owed
+     * beside an unspent slot is therefore not a deferral -- nothing deferred
+     * it -- it is an obligation the caller has retired on its own account,
+     * which M1 forbids.  Structurally zero for a glue that only defers;
+     * W_SERVE_NORESUME is the glue that does not, and this is its red.
+     * Independent of whether the heal completes, so it scores the clause
+     * even in runs where the yield legitimately strands the returner. */
+    /* TWO READINGS, ONE WALK, and they are not the same condition.  A want
+     * left standing while the ORDER took the capacity (cap below the plain
+     * cap) is a DEFERRAL, and the ledger records whose -- ground truth the
+     * instrument can read and a deployment cannot.  A want left standing
+     * while capacity was SPARE (granted below cap) is a RETIREMENT, since
+     * nothing deferred it.  A zero cap satisfies the first and cannot
+     * satisfy the second, which is why the guards are separate. */
+    if (granted < cap || cap < (unsigned int)W_SERVECAP)
+      for (k = 0; k < tot; ++k) {
+        const unsigned char *wnt;
+        unsigned char rd2;
+        unsigned int jj;
+
+        jj = k / ROUNDS;
+        rd2 = (unsigned char)(k % ROUNDS);
+        if (jj == p->self || !p->closed[rd2] || !systemRetained(p->sys, rd2))
+          continue;
+        if (!(wnt = systemWant(p->sys, rd2)) || !SYSTEM_TST(wnt, jj))
+          continue;
+        if (p->granted2[jj][rd2])
+          continue;                    /* served this tick; the want clears
+                                        * when its owner evidences, not now */
+        if (cap < (unsigned int)W_SERVECAP)
+          r->st.yieldDenied[jj] = 1;
+#ifdef W_SERVEWIRE
+        if (granted < cap)
+          ++r->st.wireRetired;
+#endif
+      }
+#endif
+#ifdef W_SERVE_NORESUME
+    /* THE WITHDRAWAL: the yield made a RETIREMENT.  Every duty the wire had
+     * no slot for is DROPPED rather than deferred, so a serve withheld under
+     * pressure is never offered again.  That is M1's forbidden gate -- an
+     * obligation retired by silence -- and it is the one thing the discharge
+     * order is not allowed to do. */
+    if (cap < W_SERVECAP)
+      for (k = 0; k < tot; ++k) {
+        const unsigned char *wnt;
+        unsigned char rd2;
+        unsigned int jj;
+
+        jj = k / ROUNDS;
+        rd2 = (unsigned char)(k % ROUNDS);
+        if (jj == p->self || !p->closed[rd2] || !systemRetained(p->sys, rd2))
+          continue;
+        if (!(wnt = systemWant(p->sys, rd2)) || !SYSTEM_TST(wnt, jj))
+          continue;
+        p->serveDropped[jj][rd2] = 1;
+      }
+#endif
   }
 #endif
 
@@ -4244,6 +4612,9 @@ procTick(
       ++r->st.classifications;
     }
     p->activeThisTick = 0;
+#ifdef W_SERVEPRIO
+    p->missionActs = 0;
+#endif
   }
 }
 
@@ -4591,10 +4962,28 @@ runSeam(
           if (mm != i && r->p[i].indArrived[f - 1][mm]
            && !SYSTEM_TST(poss, mm))
             ++unbanked;
+      /* TWO LEGITIMATE DEFICITS, and the arm must tell them from a defect.
+       * EVIDENTIAL: the process HOLDS the round its duty is held on and
+       * only its evidence is missing -- the original ground, and it reads
+       * the duty class because R4 is what strands it.  CAPACITY: the
+       * serves this process was owed were WITHHELD BY THE DISCHARGE ORDER,
+       * and it takes NEITHER conjunct of the first -- a starved returner
+       * typically sits at duty MET, not HELD, because nothing about R4 is
+       * blocking it: it simply cannot COMPLETE a round the cohort has left
+       * behind, and the adoption that would close it is what the order
+       * withheld.  Requiring HELD here was the first cut and it accepted
+       * nothing.  system.md licenses the starvation -- the sequence goes first without
+       * remainder, a returner starved under pressure is already one of the
+       * t, and the sequence completes without it.  Both stay subject to
+       * the arrived-but-unbanked veto: evidence that REACHED this process
+       * and was dropped is a glue defect under either deficit, so
+       * M_SEAM_NOPEND keeps its red.  yieldDenied is all-zero in every
+       * build that compiles no order, so no other arm moves. */
       r->st.accepted[i] = (unsigned char)(r->p[i].partitioned
                           && !BYZSELF(r, i)
-                          && systemDuty(r->p[i].sys) == SYSTEM_DUTY_HELD
-                          && f > 0 && r->p[i].closed[f - 1]
+                          && ((systemDuty(r->p[i].sys) == SYSTEM_DUTY_HELD
+                               && f > 0 && r->p[i].closed[f - 1])
+                              || YIELDSTARVED(r, i))
                           && !unbanked);
     }
     if (r->st.classified[i])
@@ -4606,10 +4995,11 @@ runSeam(
   if (r->st.numClassified)
     for (i = 0; i < NACT; ++i)
       fprintf(stderr, "  CLASS p%u frontier %3u duty %u closed[f-1] %u"
-                      " classified %u accepted %u\n",
+                      " yieldDenied %u classified %u accepted %u\n",
               i, (unsigned int)r->st.clFrontier[i], systemDuty(r->p[i].sys),
               r->st.clFrontier[i] > 0
                 ? (unsigned int)r->p[i].closed[r->st.clFrontier[i] - 1] : 0u,
+              (unsigned int)YIELDSTARVED(r, i),
               (unsigned int)r->st.classified[i], (unsigned int)r->st.accepted[i]);
 
   /* a stall is the interesting outcome: say exactly where every
@@ -4677,6 +5067,10 @@ runSeam(
 
 /* sweep-level coverage: see the MIXED arm in assertRun */
 static unsigned long ByzFabTotal = 0;
+#ifdef W_SERVEPRIO
+static unsigned long GrantsTotal  = 0;   /* serve grants the order allowed,
+                                          * summed over the whole sweep */
+#endif
 
 #if defined(SCHED_ENUM) && TVAL == 0
 /* the t=0 serve-floor arm, taken tree-wide instead of per-leaf: see the
@@ -4829,6 +5223,18 @@ assertRun(
     CHECK(s->tolUnearned > 0,
           "W_A6_PIN1: the pin was consumed -- an unearned tolerance advanced");
 #endif
+#ifdef W_SERVEWIRE
+  /* NON-VACUITY, BOTH DIRECTIONS.  A run where the wire never bound proves
+   * nothing about a yield, and a run where it never freed cannot exhibit the
+   * relief the self-funding claim rests on -- so both tick classes must have
+   * occurred before any verdict below is worth reading. */
+  CHECK(s->wireStarved > 0,
+        "wire: the sequence took the whole budget on some tick");
+  CHECK(s->wireFreed > 0,
+        "wire: the sequence left slots on some tick -- the relief exists");
+  CHECK(s->wireRetired == 0,
+        "wire: spare capacity never leaves a want unserved -- a yield defers");
+#endif
 #if defined(W_A5_NOINFER) || defined(W_R2C_SILENT) || defined(W_REACH_WSHRINK)
   /* Each of these withdrawals PREDICTS the liveness loss, so quiescence is
    * the prediction inverted and is banked as coverage instead of asserted.
@@ -4887,7 +5293,17 @@ assertRun(
      * funds the tail lets the cohort roll the window off the round the
      * straggler is being served, so the adoption arm is the arm's own
      * prediction inverted and is not asserted there.  The serve arm
-     * holds regardless: want evidence is born whether or not it lands. */
+     * holds regardless: want evidence is born whether or not it lands --
+     * EXCEPT under a discharge order that granted nothing all run, where
+     * a serve is exactly what the spec says must not exist.  There the
+     * arm INVERTS rather than lapsing: assert the yield really held, so
+     * the regime is checked instead of excused. */
+#ifdef W_SERVEPRIO
+    if (!s->grantsMade)
+      CHECK(s->serveMsgs == 0,
+            "B: an order that granted nothing bore no serve -- the yield held");
+    else
+#endif
     CHECK(s->serveMsgs > 0, "B: serves were born from want evidence");
   }
 
@@ -5068,6 +5484,9 @@ assertRun(
        * granularity the seed-dependent mutant reds are recorded at.
        * Reaching it is not the failure: t forgers reach at most t. */
       ByzFabTotal += s->byzFabServed;
+#ifdef W_SERVEPRIO
+      GrantsTotal += s->grantsMade;
+#endif
       /* L2's caller half: witnesses count only for an assertion
        * byte-identical to the standing candidate, so t forgers reach at
        * most t and no correct process ever closes on the variant. */
@@ -5401,7 +5820,15 @@ main(
 #endif                               /* SCHED_ENUM */
 
 #if SWEEP_BYZ == 1 || SWEEP_BYZ == 2
+  /* A COVERAGE arm, and it has a subject only where serves flow: a
+   * fabricated composition reaches a witness path by riding one.  Under a
+   * discharge order that granted nothing all run there is no carrier and
+   * the arm has nothing to observe -- it lapses HONESTLY, named here
+   * rather than silently passing on an empty set. */
   CurTest = "BYZ MIXED coverage";
+#ifdef W_SERVEPRIO
+  if (GrantsTotal)
+#endif
   CHECK(ByzFabTotal > 0,
         "BYZ MIXED: fabricated compositions reached correct witness paths");
 #endif

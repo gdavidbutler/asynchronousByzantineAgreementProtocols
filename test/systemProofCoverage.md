@@ -38,7 +38,7 @@ record carries:
   md N     `system.md`, line N
   ctr X    `test/test_system.c`, section X (A-J); ctr N = line N
   inv N    `test/test_system_invariant.c`, line N (header runs to 176)
-  seam N   `test/test_system_seam.c`, line N (header runs to 1552)
+  seam N   `test/test_system_seam.c`, line N (header runs to 1885)
   mm N     `test/machineMutants.sh`, line N (header runs to 88)
 
 Reproduction tokens:
@@ -53,7 +53,7 @@ Reproduction tokens:
   glue  `make test_system_seam CPPFLAGS=-D<mutant>`
   enum  `make seam-enum`
 
-## 1. The state invariant I1-I11 (md 656-922)
+## 1. The state invariant I1-I11 (md 705-971)
 
 | conjunct | arm | status | evidence | repro |
 | --- | --- | --- | --- | --- |
@@ -73,7 +73,7 @@ Reproduction tokens:
 Notes.
 
 - I1's COUNT arm is not a proof obligation at all: the allocation
-  enforces it (md 668-670).  What IS an obligation -- distinctness and
+  enforces it (md 717-719).  What IS an obligation -- distinctness and
   strictly-behind-within-255 -- rests on the frontier+1 lookahead
   release, and the falsifier cannot reach that guard at any feasible
   horizon (an entry 255 rounds behind the completing frontier; inv
@@ -97,7 +97,7 @@ Notes.
   transitions per run, asserted in-program with `-DEXPECTSTATES`
   (inv 82-84, 159).
 
-## 2. L1 BOUNDED HOLD (md 926-1113)
+## 2. L1 BOUNDED HOLD (md 975-1162)
 
 | premise | arm | status | evidence | repro |
 | --- | --- | --- | --- | --- |
@@ -107,12 +107,15 @@ Notes.
 | A4 delivery | W_A4_PARTITION | GREEN | 4048/0, seam 746 | prem |
 | A5 O1 inference | W_A5_NOINFER | GREEN | 641/0, seam 815 | prem |
 | A9 for R4's floor | W_A9_SYBIL | RED | D-arm x5, s841 | prem |
-| SERVE floor | W_SERVE_CAP0 | RED | 211, seam 945 | prem |
-| SERVE rotation | W_SERVE_ROTDROP | ABSORBED | 14049/0, s981 | prem |
-| rotation control | W_SERVE_ROTOK | GREEN | 14049/0, s1033 | prem |
-| REACH proviso | W_REACH_WSHRINK | SIZING | 14073/0, s1077 | prem |
+| SERVE floor | W_SERVE_CAP0 | RED | 211, seam 947 | prem |
+| SERVE rotation | W_SERVE_ROTDROP | ABSORBED | 14049/0, s983 | prem |
+| rotation control | W_SERVE_ROTOK | GREEN | 14049/0, s1035 | prem |
+| discharge order | W_SERVE_YIELD | GREEN | 72758/0 | prem |
+| self-funding relief | W_SERVE_WIRE | GREEN | 80463/0 | prem |
+| deferred not retired | W_SERVE_NORESUME | RED | 80 at 16 | prem |
+| REACH proviso | W_REACH_WSHRINK | SIZING | 14073/0, s1225 | prem |
 | M1 retirement | M_LEG_LOCALRETIRE | RED | seam 253, 334 | glue |
-| R2c continuation | W_R2C_SILENT | GREEN | 12999/0, s1044 | prem |
+| R2c continuation | W_R2C_SILENT | GREEN | 12999/0, s1192 | prem |
 | A2, more than t | none built | UNCOVERED | out of model | -- |
 
 Notes.
@@ -128,6 +131,68 @@ Notes.
   ~10000 ticks at one T_p per rung, pinned open ~6000 with
   `tolUnearned > 0` asserting the pin was consumed (seam 791-813).
   Those three numbers ARE L1's tolerance half measured.
+
+- W_SERVE_YIELD builds the order SERVE states -- the sequence first,
+  without remainder -- and is GREEN at 72758/0 with serves ZERO at
+  every seed and scenario: the returner is starved for the whole run,
+  the sequence completes without it, and that IS the arm passing.
+  It reported 417 failures first, and all of them were the INSTRUMENT
+  disagreeing with the spec.  THE GROUND-TRUTH ARM KNEW ONE LEGITIMATE
+  DEFICIT AND NOW KNOWS TWO: the EVIDENTIAL one (the process holds the
+  round its duty is held on, only the evidence is missing -- it reads
+  the duty class because R4 is what strands it) and the CAPACITY one
+  (the serves it was owed were withheld by the order).  The second
+  takes NEITHER conjunct of the first: a starved returner sits at duty
+  MET, not HELD, because nothing about R4 blocks it -- it cannot
+  COMPLETE a round the cohort has left behind, and the adoption that
+  would close it is what the order withheld.  Requiring HELD there was
+  the first cut and it accepted nothing.
+  THE VETO IS UNCHANGED and that is what keeps this from being a
+  weakening: arrived-but-unbanked still REJECTS under either deficit,
+  so M_SEAM_NOPEND keeps its red (11, re-verified), and the ledger is
+  all-zero in every build compiling no order, so the three config
+  baselines and all sixteen other premise arms re-run byte-identical.
+  Two arms INVERTED rather than lapsing -- B's serves-born arm asserts
+  serveMsgs == 0 where the order granted nothing all run, and the
+  BYZ-MIXED coverage arm lapses NAMED on the sweep-level grant total
+  rather than passing on an empty set.
+  W_SERVE_YIELDFLOOR (80225/0) is kept only as the contrast that
+  localized the original 417 to the yield; it corresponds to no
+  clause, since the spec reserves no share.
+- THE FALSIFIABLE CONTENT MOVED WITH THE RULING AND IS NOW BUILT, as a
+  pair over a wire made a QUANTITY (WIREBUDGET slots per process per
+  tick; mission never dropped but spending them, the serve walk taking
+  the remainder).  W_SERVE_WIRE is the SELF-FUNDING claim measured:
+  80463/0 at 16 seeds with both tick classes asserted to occur --
+  `wireStarved > 0` and `wireFreed > 0`, non-vacuity in both
+  directions -- and the heal completing on slots the sequence left
+  because it was holding under R4 or had only its retry tail to send.
+  Nothing reserves those slots; a stalled sequence IS the bandwidth.
+  W_SERVE_NORESUME withdraws the other half -- a duty the wire had no
+  slot for is DROPPED rather than deferred -- and reds 80 at 16 seeds,
+  16 at each of the five scenarios, ALL of them the designated oracle
+  ("spare capacity never leaves a want unserved") with the heal
+  checks, the safety arms and the posture arm silent at every seed.
+- THE ORACLE IS THE CLAUSE, NOT ITS CONSEQUENCE, and the record keeps
+  why so it is not re-attempted: a heal-completion oracle cannot score
+  this pair.  Measured at budget 20 before the direct oracle existed,
+  the heal checks fired 12 times in the control and 12 in the
+  withdrawal -- indistinguishable, because a legitimately starved
+  returner reds the every-process quantifiers exactly as a retired
+  duty does.  That is the same instrument limitation the discharge-
+  order rows above record, and it is why the clause needed reading
+  directly: the walk grants until the cap or until nothing is owed, so
+  a slot left unspent beside a standing want is not a deferral.
+- The budget is MEASURED, not derived: 4 and 8 never free the wire
+  (104 and 97 failures), 128 never binds it (20 -- the starved-tick
+  assertion), 32 is where both classes occur and the control is clean.
+- One bound on what this instrument can show, from the Fable review
+  (2026-08-01): counting only the LIVE frontier round's carriers as
+  the yielded-to class, the same floorless arm runs 80225/0 -- the
+  yield never bites, because a process holding under R4 runs no
+  instance and its carriers are quiet.  That is R4's hold seen as the
+  wire freeing, and it is why the broad class is the one worth
+  instrumenting.
 - The corollary is measured by the tick contrast between the two
   Byzantine arms: WITHHOLD ~57 ticks against SILENT ~10000, one T_p
   per rung (seam 596-599).
@@ -140,7 +205,7 @@ Notes.
   that really closed the prior round (seam 865-868).
 - W_SERVE_CAP0's 211 decompose as B 16+16+3, C 128, P 16, F
   structural 16, hold-overflow 16, with D both halves, E, F's unsafe
-  arm and H silent at every seed (seam 953-979).  Withdrawing the
+  arm and H silent at every seed (seam 955-981).  Withdrawing the
   floor costs the heal and costs nothing else.
 - The rotation ABSORPTION and its reason: O1's linkage bounds a
   flooding solicitor to ONE duty at a server (it proves possession of
@@ -149,22 +214,22 @@ Notes.
   correct wanting process still completes on its own account under
   BPR.  Falsifying the clause needs t liars filling the cap AND one
   correct wanting process that cannot complete on its own, which
-  costs t+1 faults and is out of model at every t (seam 995-1031).
+  costs t+1 faults and is out of model at every t (seam 997-1033).
 - W_REACH_WSHRINK is a SIZING report, not an L1 red: with w = 1 and
   the window made to BIND by a withholder at n=7 t=2, the heal still
   completes inside the single rung the round is retained for -- 14
-  evictions, zero stalls or strands (seam 1077-1117).  Read with the
+  evictions, zero stalls or strands (seam 1225-1265).  Read with the
   A6 pins it is the same fact from the other side.
 
-## 3. L2 ADOPTION AGREEMENT (md 1115-1226)
+## 3. L2 ADOPTION AGREEMENT (md 1164-1275)
 
 | premise | arm | status | evidence | repro |
 | --- | --- | --- | --- | --- |
 | A10 fold binding | M_INJ_CANDIDATE | RED | 227, seam 122 | glue |
 | I5 witness ground | MM_I5_* + inv I5 | RED | paths 82, 81 82 | mut |
 | A3 server asserts | BYZ_MIXED/EQUIVOC | GREEN | seam 601-608 | cfg |
-| C6 byte-match | W_L2_NOBYTEMATCH | RED | 4, seam 1119 | prem |
-| C6 re-arm | W_L2_NOREARM | RED | 2, seam 1155 | prem |
+| C6 byte-match | W_L2_NOBYTEMATCH | RED | 4, seam 1267 | prem |
+| C6 re-arm | W_L2_NOREARM | RED | 20 at 16 x 8% | prem |
 | C6 void ADOPT | M_SEAM_NOVOID | RED | 10, seam 658 | glue |
 | identity half | M_SEAM_UNBOUND | RED | 391, seam 319 | glue |
 | A9 for L2 | none reachable | UNCOVERED | seam 870-884 | -- |
@@ -178,7 +243,8 @@ Notes.
   STRUCTURALLY so, since the fabrication reaches a witness path only
   at an even-indexed wanting process); NOREARM keeps stale witnesses
   across a candidate switch and latches a new candidate prematurely
-  (2 failures, BYZ-MIXED seed 5); NOVOID keeps a stale adopt debt
+  (BYZ-MIXED; see the RELOCATION note below -- the seed moved); NOVOID
+  keeps a stale adopt debt
   alive across the switch (10 failures at seeds 1, 4, 12, 14, 16).
   NOVOID does NOT fire at 0% loss and CANNOT fire on an honest
   schedule -- honest servers all serve one composition -- so it is
@@ -198,8 +264,38 @@ Notes.
   smallest deployment the spec admits: the n=2 t=0 config point
   (2156/0) and contract section J's three t=0 commutation scenarios
   over pre-state 2 (seam 680-698; ctr J, pre-state 2).
+- W_L2_NOREARM RELOCATED, and the record corrects a wrong conclusion of
+  its own.  The arm was first reported DARK at HEAD on a 16- and then a
+  32-seed sample, and the row was set UNCOVERED.  THAT WAS WRONG: the
+  arm reds at 64 seeds -- 2 failures, BYZ-MIXED seed 40, the E plus
+  fabrication pair exactly as recorded.  Its single seed had moved past
+  every sample drawn, which a 2-failure red at one seed can do without
+  anything about the clause changing.
+  THE ATTRIBUTION STANDS: the step-2 and round-turn relocation bridged
+  in the DELIVER arm splits one emitAcs into per-source batches and
+  shifts the scheduler RNG, the same effect that re-froze the default
+  sweep from 42781 to 42804.  The pre-bridge build reds at 16 seeds
+  (31528/2, built from HEAD~1 against its own objects); the post-bridge
+  build needs 64.  Exposed, not caused -- and the deferral its record
+  named ("mutant kill matrix not re-run") is what this was holding.
+  THE REPRODUCTION MOVED TO LOSS, because a 64-seed run is not a matrix
+  step: at 16 seeds and 8% loss the same designated red fires ten times
+  over (20 failures, all of them the E plus fabrication pair), and the
+  CLEAN build is 0 failures at that rate -- 8% and 12% both, with 20%
+  outside the envelope where the clean build itself reds.  The loss is
+  the reproduction, not the cause.  `make seam-premises` now runs the
+  arm that way.
+- A COVERAGE HAZARD THE ABOVE EXPOSES, recorded for the next reader:
+  the matrix runs its arms at 8 seeds, so any arm whose red is one or
+  two failures at a single seed can leave the sample silently whenever
+  the schedule shifts, and will report GREEN while its clause has no
+  countermodel.  W_L2_NOREARM is the one that did.  Every other
+  falsifying arm in the matrix reds at 8 seeds with counts well clear
+  of a single-seed accident (NOBYTEMATCH 2, I10 8, NOCLOSEVOID 66,
+  SYBIL 180, CAP0 106, NORESUME 41), so none is presently at risk --
+  but a count of 2 is the warning sign, not a comfort.
 
-## 4. L3 SUPERSESSION (md 1227-1264)
+## 4. L3 SUPERSESSION (md 1277-1313)
 
 | premise | arm | status | evidence | repro |
 | --- | --- | --- | --- | --- |
@@ -208,7 +304,7 @@ Notes.
 | once-per-round | ctr J second close | UNCOVERED | no mutant | chk |
 | wrap-crossing pre-state | none | UNCOVERED | J bases 0/4/0 | -- |
 | reset voids ADOPT (caller) | M_SEAM_NOVOID | RED | 10, seam 658 | glue |
-| close voids ADOPT (caller) | W_L2_NOCLOSEVOID | RED | 53, seam 1559 | prem |
+| close voids ADOPT (caller) | W_L2_NOCLOSEVOID | RED | 53, seam 1726 | prem |
 
 Notes.
 
@@ -233,15 +329,15 @@ Notes.
   a witness book, so the commutation claim across a wrap-crossing
   pre-state is not covered anywhere.
 
-## 5. L4 PRESENTATION (md 1265-1301)
+## 5. L4 PRESENTATION (md 1315-1351)
 
 | premise | arm | status | evidence | repro |
 | --- | --- | --- | --- | --- |
-| launch answers exclusive | md 760-763, ctr C | UNCOVERED | no mutant | chk |
+| launch answers exclusive | md 809-812, ctr C | UNCOVERED | no mutant | chk |
 | MAINTAIN outranks ADMIT | ctr H | UNCOVERED | no mutant | chk |
 | one launch act per opp. | ctr C | UNCOVERED | no mutant | chk |
 | value rides a JOIN | ctr C join arms | UNCOVERED | no mutant | chk |
-| caller: staging | none | UNCOVERED | seam 3766 | -- |
+| caller: staging | none | UNCOVERED | no seam site | -- |
 | caller: byte-identical | none | UNCOVERED | -- | -- |
 | caller: retire on subset | none | UNCOVERED | -- | -- |
 | honoring the answer | M_SEAM_FREE | RED | seam 313-318 | glue |
@@ -249,7 +345,7 @@ Notes.
 Notes.
 
 - The machine half rests on the tables' compile-time exclusivity and
-  exhaustiveness (the dtc discipline, md 760-763) and is exercised by
+  exhaustiveness (the dtc discipline, md 809-812) and is exercised by
   contract sections C and H -- the full precedence chain in one call
   ("owed work before maintenance before chosen work"), MAINTAIN
   outranking a pending value without consuming it, and "live: no
@@ -268,14 +364,14 @@ Notes.
   fires D's machine-consistency arm at every seed while correctly NOT
   tripping D's ground-truth arm (seam 313-318).
 
-## 6. L5 RELEASE SAFETY (md 1303-1368)
+## 6. L5 RELEASE SAFETY (md 1353-1418)
 
 | premise | arm | status | evidence | repro |
 | --- | --- | --- | --- | --- |
 | I8 release at all-n | MM_I8_EARLY | RED | ctr C x1 D x1 | mut |
 | A9 attribution | W_A9_SYBIL | RED | 464, seam 841 | prem |
 | A8 truthful evidence | BYZ_FORGE_POSSESS | GREEN | seam 588-593 | cfg |
-| I2 nothing owed | ctr D, inv I2 | UNCOVERED | seam 4649 | chk |
+| I2 nothing owed | ctr D, inv I2 | UNCOVERED | seam 5310 | chk |
 | R2b resume | none | UNCOVERED | no arm | -- |
 | O2 content carve-out | seam I, BYZ_CONTENT | RED | M_EXCH_* | glue |
 | eviction exception | seam F structural | GREEN | 3 instances | prem |
@@ -296,10 +392,10 @@ Notes.
   give, so a release may fire one bit ahead of the truth but never
   ahead of the correct cohort.  The register's own note records that
   A8's withdrawal must NOT red and that A9 carries the weight
-  (seam 1221-1224).
+  (seam 1388-1391).
 - The I2 direction is deliberately NOT asserted at the seam -- the
   machine maintains it by construction, so asserting it there is
-  unfalsifiable; it belongs to the contract suite (seam 4649-4652).
+  unfalsifiable; it belongs to the contract suite (seam 5310-5313).
   It carries no matched red for the same reason I2 has none above.
 - R2b (resume, never re-execute) binds ACS instance state the caller
   owns.  No instrument interrupts and resumes an instance, so nothing
@@ -317,12 +413,12 @@ Notes.
   that eviction is the only release path left (seam 610-616, 760-764,
   967-970).
 
-## 7. L6 SEQUENCE IDENTITY (md 1370-1430)
+## 7. L6 SEQUENCE IDENTITY (md 1420-1480)
 
 | premise | arm | status | evidence | repro |
 | --- | --- | --- | --- | --- |
 | L2 downstream | seam E everywhere | RED | see L2 rows | cfg |
-| I10 caller half | W_I10_WRONGARTIFACT | RED | 16, seam 1175 | prem |
+| I10 caller half | W_I10_WRONGARTIFACT | RED | 16, seam 1342 | prem |
 | A1 ACS agreement | BYZ_EQUIVOCATE_VALUE | GREEN | seam 606-608 | cfg |
 | A7 close speaks round | M_SEAM_STALE | RED | seam 323, ctr C | glue |
 | A11 common base | none | UNCOVERED | seam Genesis | -- |
@@ -344,13 +440,13 @@ Notes.
   every seed -- the machine cannot catch it by construction, since it
   never sees a composition.  Its reachability was measured, not
   assumed: a coverage counter asserts the state where a standing
-  candidate differs was reached (seam 1175-1203).
+  candidate differs was reached (seam 1342-1370).
 - A11 is supplied BY CONSTRUCTION: the seam folds every first round
   over one shared `Genesis` constant, and no arm withdraws it or
   seeds divergent bases.  The induction base of L6 is therefore
   untested.
 
-## 8. L7 WRAP AND TWO-GRAIN SOUNDNESS (md 1432-1465)
+## 8. L7 WRAP AND TWO-GRAIN SOUNDNESS (md 1482-1515)
 
 | premise | arm | status | evidence | repro |
 | --- | --- | --- | --- | --- |
@@ -394,7 +490,7 @@ Notes.
 - Each `-DSCHED_*` build replaces the POP CHOICE and nothing else, and
   every policy draws exactly one RNG step per successful pop at the
   uniform policy's position, so the loss coin sequence a seed names is
-  policy-invariant (seam 1285-1300).  Zero failures under every policy
+  policy-invariant (seam 1452-1467).  Zero failures under every policy
   at every seed, zero stalls, every classification an accepted strand;
   the safety arms never move.
 - Two schedule measurements are FINDINGS and neither is a red.  LIFO
@@ -404,7 +500,7 @@ Notes.
   pays for it (2584 adoptions against 521).  KINDFLIP produces one
   LAGGARD accepted strand the uniform policy never reaches, because
   the possession indication rides the ACS tails that carrier-priority
-  inversion defers (seam 1315-1360).
+  inversion defers (seam 1482-1527).
 - The enumeration's honest scope, in its own terms: the full tree is
   on the order of 20^400, so every honest form of the mode is a
   BOUNDED-DEPTH one -- what is exhaustive is the PREFIX (depth 6 at
@@ -414,14 +510,14 @@ Notes.
   n-t = n, verified), or any divergence beginning after the enumerated
   prefix.  It is a DEEP BOUND at a TINY shape complementing the seeded
   sweeps' shallow bound at three shapes; NEITHER SUBSUMES THE OTHER
-  (seam 1438-1510).
+  (seam 1605-1677).
 - The loss envelope: safety is green at every swept level and liveness
   degrades by CLASSIFICATION alone, monotone in the loss.  The first
   accepted strand outside the STARVE positive control appears at 12%;
   the highest fully-green level is 15%.  At 20% the 7 failures are
   posture x4 and C x3 at STARVE seeds 9 and 13, with D both halves, E,
   F's unsafe arm and H silent -- an S-against-loss-rate SIZING
-  boundary, not a safety one (seam 1372-1418).
+  boundary, not a safety one (seam 1539-1585).
 - The n=2 t=0 point carries two arms of its own: TOLERANCE is
   asserted NEVER READ (and never is), and the serve floor of ONE is
   the entire heal capacity, exercised by ordinary loss (7-13 serves a
@@ -431,11 +527,11 @@ Notes.
 ## 10. Caller obligations C1-C12
 
 C1-C6 are the Mechanization-status caller list in the order it states
-them (md 1507-1541); the composed seam cites C1 and C6 by those
+them (md 1534-1572); the composed seam cites C1 and C6 by those
 numbers.  C7-C11 were caller halves the spec consumed but did not
 enumerate; on 2026-07-25 the architect landed C7 (I10's caller half,
-md 1543-1551) and C11 (the possession-evidence return leg plus the
-O1-inference translation, md 1552-1564) in that list, appended after
+md 1574-1582) and C11 (the possession-evidence return leg plus the
+O1-inference translation, md 1583-1595) in that list, appended after
 C6 so the cited order of C1-C6 is unmoved.  C8-C10 remain reference
 labels for obligations stated elsewhere in the spec (A9's second
 clause, A6's honest gates, the sequential-entry premise).  The same
@@ -454,7 +550,7 @@ beside L6.
 C12 was landed 2026-07-30 by the same pattern and for the same
 reason -- a half the proofs consume and the spec had not enumerated
 as an obligation: evidence is presented for the round its IDENTITY
-proves, never for the round its byte names (md 1565-1586).  It was
+proves, never for the round its byte names (md 1596-1617).  It was
 found by the layer's first caller, whose ingress table banked
 possession indications on the byte; the Model already states the
 fact (an act is OF a round by its identity) and A9 already pinned
@@ -465,19 +561,23 @@ hold (comment-only -- no dispatch input changed).
 
 | obligation | arm | status | evidence | repro |
 | --- | --- | --- | --- | --- |
-| C1 serve cap floor | W_SERVE_CAP0 | RED | 211, seam 945 | prem |
+| C1 serve cap floor | W_SERVE_CAP0 | RED | 211, seam 947 | prem |
 | C1 serve rotation | W_SERVE_ROTDROP | ABSORBED | 14049/0 | prem |
+
+| C1 discharge order | W_SERVE_YIELD | GREEN | 72758/0 | prem |
+| C1 self-funding | W_SERVE_WIRE | GREEN | 80463/0 | prem |
+| C1 yield never retires | W_SERVE_NORESUME | RED | 80 at 16 | prem |
 | C2 byte budget | none | UNCOVERED | no evict call | -- |
-| C3 PRESENT staging | none | UNCOVERED | seam 3766 | -- |
+| C3 PRESENT staging | none | UNCOVERED | no seam site | -- |
 | C4 have-grain currency | M_EXCH_NOASSEMBLE | RED | seam I arm | glue |
 | C5 R2b resume | none | UNCOVERED | no arm | -- |
-| C6 byte-identical count | W_L2_NOBYTEMATCH | RED | 4, seam 1119 | prem |
-| C6 re-arm on switch | W_L2_NOREARM | RED | 2, seam 1155 | prem |
+| C6 byte-identical count | W_L2_NOBYTEMATCH | RED | 4, seam 1267 | prem |
+| C6 re-arm on switch | W_L2_NOREARM | RED | 20 at 16 x 8% | prem |
 | C6 reset voids ADOPT | M_SEAM_NOVOID | RED | 10, seam 658 | glue |
-| C6 close voids ADOPT | W_L2_NOCLOSEVOID | RED | 53, seam 1559 | prem |
+| C6 close voids ADOPT | W_L2_NOCLOSEVOID | RED | 53, seam 1726 | prem |
 | C6 identity of round | M_SEAM_UNBOUND | RED | 391, seam 319 | glue |
 | C6 fold ground | M_INJ_CANDIDATE | RED | 227, seam 122 | glue |
-| C7 I10 caller half | W_I10_WRONGARTIFACT | RED | 16, seam 1175 | prem |
+| C7 I10 caller half | W_I10_WRONGARTIFACT | RED | 16, seam 1342 | prem |
 | C8 A9 sender argument | W_A9_SYBIL | RED | 464, seam 841 | prem |
 | C9 A6 honest gates | W_A6_PIN0 / PIN1 | GREEN | 12643, 16095 | prem |
 | C10 sequential entry | none | UNCOVERED | out of model | -- |
@@ -535,7 +635,7 @@ fired would be a coverage report and not an honest one.
   UNCOVERED rather than claiming an observation.
 - SEQUENTIAL ENTRY (C10).  Out of model: the mechanization is
   sequential -- ten entry points, one at a time, no interleaving
-  inside the machine (md 605-607) -- and every instrument calls the
+  inside the machine (md 654-656) -- and every instrument calls the
   entry points one at a time, so the instrument's own construction is
   the discharge and cannot also be its test.
 - THE L3 WRAP-CROSSING PRE-STATE.  Section J's three pre-states are
@@ -554,7 +654,7 @@ fired would be a coverage report and not an honest one.
   instance -- neither of which is a fault and neither of which this
   instrument can manufacture.  Inside the fault budget an unhealable
   correct wanting process costs a fault, so the countermodel needs
-  t+1 and is out of model at every t (seam 1011-1031, 1256-1262).
+  t+1 and is out of model at every t (seam 1013-1033, 1330-1336).
 - THE HOLD-UNVERIFIED RULE -- DEMOTED 2026-07-26.  The Model no
   longer states a hold: ahead-of-reach traffic is not evidence and
   re-arrives on its sender's retry cadence; a caller MAY hold it as
@@ -576,21 +676,21 @@ fired would be a coverage report and not an honest one.
 Recorded in the instrument headers, carried here as pointers only.
 
 LANDED 2026-07-25 (architect): F1 (the return leg and inference
-translation, now C11 in the caller list, md 1529-1541), F2 (the
-completion analog of the void clause, md 1506-1513 -- no arm yet,
+translation, now C11 in the caller list, md 1583-1595), F2 (the
+completion analog of the void clause, md 1560-1567 -- no arm yet,
 see the C6 rows), F3 (causal well-foundedness, now a Model
 paragraph the L2 proof cites), and F6 (I10's caller half, now C7 in
-the caller list, md 1520-1528).  The pointers below remain open.
+the caller list, md 1574-1582).  The pointers below remain open.
 
 - The SERVE rotation clause's load-bearing frame is the floor's two
   non-fault grounds, which no instrument inside the fault budget can
-  reach (seam 1256-1262).
+  reach (seam 1423-1429).
 - REACH's binding quantity is heal-time against rung-time, not w
-  alone (seam 1264-1266).
+  alone (seam 1431-1433).
 - S against the loss rate is a budget coupling the spec does not
-  price -- the w x T_p family's third face (seam 1543-1546).
+  price -- the w x T_p family's third face (seam 1710-1713).
 - R4's reserved t is consumed by adversarial ORDERING as well as by
-  faults (seam 1543-1546).
+  faults (seam 1710-1713).
 
 ## Discrepancy found while assembling this register
 

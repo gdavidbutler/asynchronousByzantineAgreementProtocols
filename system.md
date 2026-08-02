@@ -96,6 +96,11 @@ R4  FAULT BUDGET.  t is reserved for faults.
       During the hold, post-decide tails and serves keep running
       (R2c):
       the hold is funded catch-up time for the tail, not idleness.
+      Outside the hold the order reverses: an advancing frontier has
+      its own traffic to send, and serving yields to it without
+      remainder (SERVE's discharge).  The hold is therefore not
+      merely time the tail may use -- it is when the wire is free
+      for it at all.
       A round no longer retained reads as duty met -- duty is
       bounded by retention (RETAIN); an evicted round is already
       out-of-band territory.
@@ -431,6 +436,37 @@ SERVE (DERIVED -- O2, O3, O4; bounds derived below)
              toward the wanting process's t+1, O2).
   discharge: recompute the wanting process's serving form from the
              floor base forward (O4) and send, paced by the tick.
+             The tick is shared with the sequence's own traffic and
+             the wire is finite, so the pacing carries an ORDER
+             (DERIVED -- R1): the sequence goes first, without
+             remainder.  Under sustained pressure a wanting process's
+             serves are not slowed but IGNORED, and no share is
+             reserved against that.
+             This is not a retirement and M1 is untouched: the duty
+             stays born, the want stays recorded, and the discharge
+             fires whenever the wire frees.  Only the rate is
+             yielded, and a deferred serve is owed exactly as long as
+             a served one.
+             Nor does it spend the fault budget on an honest process,
+             which R4 forbids.  R4 governs CREATING a partition -- the
+             layer may not shed a correct process for being slow, and
+             participant tolerance is how it keeps that promise.  A
+             wanting process is already partitioned; the network
+             spent that budget before this clause applies, and what
+             is ordered here is RECOVERY from a partition the layer
+             did not cause.  The system completes its sequence with
+             up to t of its processes partitioned (A2), so a serve
+             deferred indefinitely costs the sequence nothing it was
+             not already promised without.
+             The order is self-funding, and that is the whole of the
+             argument for needing no floor: pressure exists only
+             while the sequence is progressing, and a sequence that
+             cannot progress has nothing to send.  R4's hold is one
+             instance -- a holding process runs no instance, so its
+             carriers are quiet.  Another process falling out is the
+             other, and it is the useful one: the wire frees exactly
+             when the recovery it funds has become the sequence's own
+             way forward.
              Some content serves have exactly one correct
              discharger (a member's own content may exist nowhere
              else); if it fails, that member is out of band FOR
@@ -1513,8 +1549,13 @@ last being eviction-class for L5 and I8.  The adopt rule lives as a
 C guard on the bkr94acs BPR-gate precedent -- an independent rule set
 whose inputs appear in no other rule (its statement is in
 system.dtc's witness-event section).  Deliberately CALLER-SIDE, per
-"Relation to a deployment": the serve walk's concurrency cap and
-rotation (pacing mechanics), the cross-kind byte budget (artifact
+"Relation to a deployment": the serve walk's concurrency cap,
+rotation, and the discharge order (pacing mechanics -- SERVE's
+discharge and R4's hold state the order; how a deployment meters
+its wire is its own, and what it owes is only that the yield never
+retires: a serve withheld for a whole run is still owed, its want
+still recorded, and it discharges when the pressure lifts), the
+cross-kind byte budget (artifact
 sizes are application domain; systemEvict actuates), PRESENT's byte
 staging and subset-witness retirement (the machine sees the
 valuePending/maintenanceDue inputs), the have grain's currency (the
