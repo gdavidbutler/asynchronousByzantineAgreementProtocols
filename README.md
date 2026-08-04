@@ -216,7 +216,7 @@ The `8` is not a transferable number, and the demo is deliberately narrow about 
 ```bash
 ./example_system 4 1 3 6              # 4 processes, t=1, retention window 3, 6 messages each
 ./example_system -s 42 -l 10 4 1 3 6  # seeded shuffle, 10% loss
-./example_system -s 42 -L 2:3 4 1 3 6 # cut process 2 from round 3's traffic -- it must heal by adoption
+./example_system -s 42 -L 2:3 4 1 3 6 # cut process 2 from round 3's traffic (recovery legs excepted) -- it heals by adoption plus replayed content
 ./example_system -B 3:5 7 2 3 6       # process 3 forges possession and serves fabricated compositions
 ```
 
@@ -407,7 +407,7 @@ The white-box / black-box pairing surfaces a different class of bug at each laye
 
 The black-box suites stay strict about scope: only `*.h`, paper-extract `.txt`, and the matching black-box-style sibling are read while writing tests. When a test fails, the contract sources alone determine whether to tighten the code or rewrite the comment.
 
-The system layer carries additional instruments beyond `make check`, deliberately standalone (they are falsifiers, and a validation artifact stands aside from what it validates): an exhaustive reachable-state falsifier for the state invariant; a composed-seam falsifier that drives real `bkr94acs` instances through the composition glue under seeded shuffle, loss, partition, Byzantine, and premise-withdrawal arms -- every check paired with a mutant that proves it can fire; and a machine-mutant tier that applies anchored mutations to a scratch copy of `system.c` and asserts each designated test catches it. `test/systemProofCoverage.md` is the register: every premise the `system.md` proofs consume, mapped to the arm that tests it and an honest status, including what remains uncovered and why.
+The system layer carries additional instruments beyond `make check`, deliberately standalone (they are falsifiers, and a validation artifact stands aside from what it validates): an exhaustive reachable-state falsifier for the state invariant; a composed-seam falsifier that drives real `bkr94acs` instances through the composition glue under seeded shuffle, loss, partition, Byzantine, and premise-withdrawal arms -- every check paired with a mutant that proves it can fire; and two mutant tiers that apply anchored mutations to scratch copies and assert the designated check catches each -- one over `system.c` (the machine), one over `example/system.c` (the caller half of exactly-once presentation, the one harness that stages application values). `test/systemProofCoverage.md` is the register: every premise the `system.md` proofs consume, mapped to the arm that tests it and an honest status, including what remains uncovered and why.
 
 ## Correctness Audit
 

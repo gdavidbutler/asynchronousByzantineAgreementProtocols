@@ -40,6 +40,7 @@ record carries:
   inv N    `test/test_system_invariant.c`, line N (header runs to 176)
   seam N   `test/test_system_seam.c`, line N (header runs to 1885)
   mm N     `test/machineMutants.sh`, line N (header runs to 88)
+  r1m N    `test/r1Mutants.sh`, line N (inventory at 33-79)
 
 Reproduction tokens:
 
@@ -52,6 +53,7 @@ Reproduction tokens:
   loss  `make seam-loss`
   glue  `make test_system_seam CPPFLAGS=-D<mutant>`
   enum  `make seam-enum`
+  r1    `make r1-mutants`       (the R1 caller-half tier)
 
 ## 1. The state invariant I1-I11 (md 705-971)
 
@@ -337,9 +339,9 @@ Notes.
 | MAINTAIN outranks ADMIT | ctr H | UNCOVERED | no mutant | chk |
 | one launch act per opp. | ctr C | UNCOVERED | no mutant | chk |
 | value rides a JOIN | ctr C join arms | UNCOVERED | no mutant | chk |
-| caller: staging | none | UNCOVERED | no seam site | -- |
-| caller: byte-identical | none | UNCOVERED | -- | -- |
-| caller: retire on subset | none | UNCOVERED | -- | -- |
+| caller: staging | M_R1_EARLY | RED | r1m 69 | r1 |
+| caller: byte-identical | M_R1_BYTES | RED | r1m 50 | r1 |
+| caller: retire on subset | M_R1_RETX, M_R1_NORETIRE | RED | r1m 35, 61 | r1 |
 | honoring the answer | M_SEAM_FREE | RED | seam 313-318 | glue |
 
 Notes.
@@ -352,13 +354,30 @@ Notes.
   second launch".  Those are GREEN WITNESSES: no mutant in the
   machine-mutant tier targets the launch rules, so the machine half
   carries no matched red.
-- The CALLER half is not modeled anywhere.  The composed seam passes
+- The CALLER half was UNCOVERED here until 2026-08-04, and the note
+  recording that stands as history: the composed seam passes
   `valuePending` as a constant of the round index and `maintenanceDue`
-  as 0 (seam source, the launch site), stages no application value,
-  and keeps no exactly-once ledger -- so PRESENT's staging, its
-  byte-identical re-presentation, and its retire-on-witnessing are
-  untested, and R1 (the conjunction of the two halves) is untested end
-  to end.  The row is UNCOVERED, not stretched.
+  as 0, stages no application value, and keeps no exactly-once ledger
+  -- those facts are unchanged, and the seam is still not the vehicle.
+  The vehicle is `example/system.c` (built 2026-07-26 onward): it
+  stages accepted values, re-presents them byte-identically at the
+  same signing offset, retires only on witnessing the value in an
+  agreed subset, and its exactly-once verdict quantifies every staged
+  value over every correct process's sequence -- R1's end-to-end
+  oracle.  `test/r1Mutants.sh` (make r1-mutants) is its matched-red
+  tier: four anchored mutations of a scratch copy, one per caller
+  clause, each killed by that verdict against the CLEAN machine
+  objects.  The sharpest is M_R1_BYTES: the drifted presentation
+  stays internally consistent at every gate below (bank, digest,
+  exchange, sequence identity all green) and ONLY the comparison
+  against the staged originals reds -- the "oracle must compare GLUE
+  artifacts" precedent, measured at the R1 seam.  M_R1_RETX also
+  measured a reachability fact: exclusion of a RIDING value is a
+  length property (full subsets at every short-run shape tried; the
+  wrap-length n=7 run staggers as ordinary operation), which is why
+  its config is 7 2 3 300.  R1 (the conjunction of the two halves) is
+  now covered end to end: machine half by contract sections C and H,
+  caller half by the tier's four reds.
 - M_SEAM_FREE is a caller red for a different claim -- the glue
   launching on its own account, ignoring the machine's answer -- and
   fires D's machine-consistency arm at every seed while correctly NOT
@@ -568,7 +587,7 @@ hold (comment-only -- no dispatch input changed).
 | C1 self-funding | W_SERVE_WIRE | GREEN | 80463/0 | prem |
 | C1 yield never retires | W_SERVE_NORESUME | RED | 80 at 16 | prem |
 | C2 byte budget | none | UNCOVERED | no evict call | -- |
-| C3 PRESENT staging | none | UNCOVERED | no seam site | -- |
+| C3 PRESENT staging | M_R1_* tier | RED | r1m 33-79 | r1 |
 | C4 have-grain currency | M_EXCH_NOASSEMBLE | RED | seam I arm | glue |
 | C5 R2b resume | none | UNCOVERED | no arm | -- |
 | C6 byte-identical count | W_L2_NOBYTEMATCH | RED | 4, seam 1267 | prem |
@@ -665,11 +684,14 @@ fired would be a coverage report and not an honest one.
   that is now the whole story rather than a residue (seam 289-300;
   the seam header's "Model-load-bearing" remark predates the
   demotion and stands as a dated record).
-- L4's CALLER HALF AND R1.  Not permanently uncoverable in principle,
-  but uncovered today by every instrument in the tree: no harness
-  stages an accepted value, re-presents it byte-identically, or
-  retires it on witnessing it in an agreed subset, so exactly-once
-  presentation -- the conjunction L4 names -- has no oracle here.
+- L4's CALLER HALF AND R1 -- CLOSED 2026-08-04, kept here as the
+  dated record because this section once named it.  "Not permanently
+  uncoverable in principle, but uncovered today" was exactly right:
+  the missing harness was one that stages a value, and
+  `example/system.c` became it.  Its exactly-once verdict is R1's
+  end-to-end oracle and `test/r1Mutants.sh` gives it four matched
+  reds (see the L4 table and notes above).  This row no longer
+  belongs to the uncoverable set.
 
 ## Spec observations queued to the architect
 
