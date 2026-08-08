@@ -339,8 +339,8 @@
  *
  * Usage:
  *   ./example_system [-v] [-s seed] [-l loss] [-L proc:round]
- *                    [-B proc:mode] [-m every] [-T Tp] [-S sweeps]
- *                    n t w msgs
+ *                    [-M proc] [-B proc:mode] [-m every] [-T Tp]
+ *                    [-S sweeps] n t w msgs
  *
  * Examples -- the notable runs from building this file.  Add -v to any
  * of them to trace launches, closes and adoptions, and -s to move the
@@ -842,6 +842,7 @@ static unsigned int Sp;
 static unsigned int MaintEvery;
 static int LagProc = -1;
 static int LagRound = -1;
+static int MuteProc = -1;
 static int ByzProc = -1;
 static unsigned int ByzMode;
 static unsigned int ByzAsserts;   /* fabrications actually served */
@@ -1366,6 +1367,17 @@ pushWire(
      && LagProc >= 0
      && (int)w->to == LagProc
      && posOf(&Proc[w->from], w->sysRound) == (long)LagRound)
+      return;
+    /*
+     * The mute: process M's outbound is never delivered -- every round,
+     * every kind, recovery legs included.  Unlike -L this is a FAULT
+     * demonstration, not a heal demonstration: the muted process is the
+     * permanently silent process the fault budget t exists to price, so
+     * nothing it sends is spared.  It still hears everything (its
+     * inbound is a network path like any other), and its self-addressed
+     * traffic is above this gate with the rest.
+     */
+    if (MuteProc >= 0 && (int)w->from == MuteProc)
       return;
   }
   /*
@@ -3310,6 +3322,9 @@ main(
         goto usage;
       LagRound = atoi(c + 1);
       ++arg;
+    } else if (argv[arg][1] == 'M' && argv[arg][2] == '\0') {
+      if (++arg >= argc) goto usage;
+      MuteProc = atoi(argv[arg++]);
     } else if (argv[arg][1] == 'B' && argv[arg][2] == '\0') {
       char *c;
 
@@ -3377,6 +3392,23 @@ main(
   if (LagProc >= 0 && ((unsigned int)LagProc >= N || LagRound < 0)) {
     fprintf(stderr, "-L proc:round out of range\n");
     return (1);
+  }
+  if (MuteProc >= 0) {
+    if ((unsigned int)MuteProc >= N) {
+      fprintf(stderr, "-M proc out of range\n");
+      return (1);
+    }
+    if (!T) {
+      fprintf(stderr, "-M needs t >= 1 (a silent process is a fault)\n");
+      return (1);
+    }
+    /* Same budget arithmetic as -B with -L: each is a fault. */
+    if ((MuteProc == LagProc || MuteProc == ByzProc)
+     || ((LagProc >= 0 || ByzProc >= 0) && T < 2)) {
+      fprintf(stderr, "-M with -L or -B is two faults: needs t >= 2 and"
+                      " distinct processes\n");
+      return (1);
+    }
   }
   if (ByzProc >= 0) {
     if ((unsigned int)ByzProc >= N) {
@@ -3502,6 +3534,8 @@ main(
     printf(", maintenance every %u", MaintEvery);
   if (LagProc >= 0)
     printf(", cut process %d at round %d", LagProc, LagRound);
+  if (MuteProc >= 0)
+    printf(", mute process %d", MuteProc);
   printf(") ---\n\n");
 
   /*----------------------------------------------------------------------*/
@@ -3869,7 +3903,8 @@ main(
      */
     done = 1;
     for (i = 0; i < N; ++i)
-      if ((int)i != ByzProc && Proc[i].msgHead < Proc[i].msgCnt)
+      if ((int)i != ByzProc && (int)i != MuteProc
+       && Proc[i].msgHead < Proc[i].msgCnt)
         done = 0;
     for (i = 0; i < N; ++i)
       fresh |= Proc[i].active;
@@ -4185,8 +4220,8 @@ cleanup:
 usage:
   fprintf(stderr,
     "usage: example_system [-v] [-s seed] [-l loss] [-L proc:round]\n"
-    "                      [-B proc:mode] [-m every] [-T Tp] [-S sweeps]\n"
-    "                      n t w msgs\n"
+    "                      [-M proc] [-B proc:mode] [-m every] [-T Tp]\n"
+    "                      [-S sweeps] n t w msgs\n"
     "  n            total processes (2-%d)\n"
     "  t            max Byzantine faults (n >= 3t + 1)\n"
     "  w            retained window in rounds (1-%d)\n"
@@ -4201,6 +4236,10 @@ usage:
     "  -L proc:rnd  cut proc off from all round-rnd traffic except\n"
     "               recovery legs -- it must heal whole by recovery:\n"
     "               composition by adoption, content by replay\n");
+  fprintf(stderr,
+    "  -M proc      mute proc for the whole run (needs t >= 1): its\n"
+    "               outbound is never delivered, every round, every kind\n"
+    "               -- the permanently silent fault; it still hears\n");
   fprintf(stderr,
     "  -B proc:mode Byzantine process (needs t >= 1); mode is a mask of\n"
     "               1 forge possession, 2 forge want, 4 fake candidate,\n"

@@ -473,6 +473,20 @@ seam-enum: test_system_seam_ENUM1 test_system_seam_ENUM2
 machine-mutants:
 	sh test/machineMutants.sh
 
+# test/r1Mutants.sh is the same currency one layer UP: R1's caller half
+# (stage, re-present byte-identically, retire only on witnessing) lives
+# in example/system.c -- the one harness in the tree that stages a
+# value at all -- and its exactly-once verdict is R1's end-to-end
+# oracle.  The tier applies four anchored mutations to a SCRATCH COPY
+# of example/system.c, each withdrawing one clause of the caller half,
+# links each against the CLEAN machine objects (the machine is not
+# under test), and asserts the verdict reds.  example/system.c is never
+# written -- checksummed before and after.  Runnable standalone
+# (sh test/r1Mutants.sh) and idempotent; artifacts land in r1Mutants.d/,
+# which clean removes.  The inventory is in the script's header.
+r1-mutants:
+	sh test/r1Mutants.sh
+
 check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_system
 	./test_bracha87
 	./test_bkr94acs
@@ -489,6 +503,7 @@ clean:
 	rm -f test_system_seam_W_SERVE_CAP0 test_system_seam_W_SERVE_ROTDROP test_system_seam_W_SERVE_ROTOK test_system_seam_W_R2C_SILENT test_system_seam_W_REACH_WSHRINK test_system_seam_W_L2_NOBYTEMATCH test_system_seam_W_L2_NOREARM test_system_seam_W_I10_WRONGARTIFACT test_system_seam_W_L2_NOCLOSEVOID
 	rm -f test_system_seam_SCHED_LIFO test_system_seam_SCHED_FIFO test_system_seam_SCHED_STARVE1 test_system_seam_SCHED_KINDFLIP test_system_seam_ENUM1 test_system_seam_ENUM2
 	rm -rf machineMutants.d
+	rm -rf r1Mutants.d
 
 # the .psu are dtc's intermediate output, left behind by `make rules`;
 # nothing reads them afterward, and removing them regenerates nothing
