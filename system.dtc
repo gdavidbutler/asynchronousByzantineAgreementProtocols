@@ -10,16 +10,33 @@
 # lacks.
 #
 # Every rule here is DERIVED -- forced by the requirements (R1-R4;
-# R4 = participant tolerance) and implementer obligations (O1-O5)
-# recorded in system.md, which cites the derivation at each rule.  The R4 advance rule is
-# ENCODED below: the join, maintain, and admit tables all gate on
-# "possession of the prior round" and "tolerance elapsed".  The O2
+# R4 = participant tolerance for PACE, evidenced retention for
+# ABSENCE) and implementer obligations (O1-O6) recorded in
+# system.md, which cites the derivation at each rule.  The R4
+# ADVANCE rule -- its pace half -- is ENCODED below: the join,
+# maintain, and admit tables all gate on "possession of the prior
+# round" and "tolerance elapsed".  R4's absence half is NOT a
+# dispatch rule: what it governs is how deep a deployment retains
+# and what a withdrawal owes, neither of which is a per-event
+# decision (see the retention event below).  The O2
 # two-grain artifact rides the SERVE act (.want and .have); the O5
 # maintenance birth and precedence are the maintain table; the O3
 # adopt rule is documented in the witness-event section at the end
 # and lives as a C guard in systemWitness -- an independent rule
 # set deliberately kept out of this dispatch.  Deliberately
-# CALLER-SIDE (system.md "Mechanization status"): the serve walk's
+# CALLER-SIDE (system.md "Mechanization status"): the RETAINED
+# ROUNDS THEMSELVES -- the rounds this process holds and the
+# possession, still-owed, and held-members records it keeps per
+# held round live in caller storage, reached through the four
+# retention operations (records / retain / release / after) under
+# the retention requirements stated there; every rule below still
+# DECIDES, and what it decides about is asked of the caller.  Two
+# inputs here are that seam read as facts: "R is the oldest
+# retained round" is what the caller's order answers, and
+# "recovery reach exhausted" is a retain refused -- which is the
+# reach binding and never the caller dropping a round on its own,
+# since a departure the machine did not direct is announced by no
+# RELEASE below.  Also caller-side: the serve walk's
 # concurrency cap and rotation, the cross-kind byte budget,
 # PRESENT's byte staging and subset-witness retirement, and the
 # R2b resume constraint.  Identifier and predicate translation,
@@ -34,9 +51,10 @@
 # from one merged dispatch:
 #
 #   act received      - an act for round R, verified within chain
-#                       reach (O1), arrives.  R is the round the
-#                       act's IDENTITY proves, never the round its
-#                       byte names (C12: reach is bounded on both
+#                       reach (O1), arrives.  R is the position the
+#                       act's IDENTITY proves, resolved by the
+#                       caller, never a round some bounded wire name
+#                       suggests (C12: reach is bounded on both
 #                       sides).  Traffic beyond reach AHEAD is not
 #                       evidence: its sender still owes it, so it
 #                       re-arrives on that sender's own retry
@@ -45,7 +63,9 @@
 #                       in the calculus requires the hold, and an
 #                       unbounded hold of ahead traffic would be
 #                       the remote inflation lever the Byzantine
-#                       notes' retention-budget claim excludes.
+#                       notes' retention SIZE claim excludes (that
+#                       note admits a DURATION lever separately:
+#                       withholding evidence pins the floor).
 #                       Traffic beyond reach BEHIND is
 #                       unverifiable for good -- reach never
 #                       extends backward -- and its sender is
@@ -66,7 +86,11 @@
 #                       "maintain the next round",
 #                       "admit the next round".
 #   retention event   - a possession record changed for retained
-#                       round R, or the retention budget is pressed.
+#                       round R, or the recovery reach (O6) is
+#                       exhausted -- which this machine learns by
+#                       asking the caller's store to hold a round
+#                       and being refused, never by measuring a
+#                       depth.
 #                       Applies: "release R".
 #   witness event     - a served assertion for the frontier round,
 #                       validated by the caller against its
@@ -95,7 +119,12 @@
 #                                   dispatch (beyond chain reach --
 #                                   Model), so "R not yet reached"
 #                                   is entered only by the frontier
-#                                   round awaiting its join
+#                                   round awaiting its join.
+#                                   RETAINED is what the caller's
+#                                   store answers (it holds R);
+#                                   the other three are this
+#                                   machine's own frontier and
+#                                   live flag
 #   "sender has evidenced possession of R"     { yes, no }
 #   "own instance live"                        { yes, no }
 #   "participation owed to any round"          { yes, no }
@@ -119,8 +148,29 @@
 #                                   forces an identity-maintenance
 #                                   round (caller fact, self-local)
 #   "all n processes have evidenced possession of R"   { yes, no }
-#   "retention budget exceeded"                { yes, no }
+#                                 - the possession record of a
+#                                   RETAINED round, so the round's
+#                                   records are the caller's and
+#                                   this machine's writes; release
+#                                   requires every bit, no
+#                                   count-threshold shortcut
+#   "recovery reach exhausted"                 { yes, no }
+#                                 - the store declined to hold
+#                                   another round (O6's declared
+#                                   reach binding).  It is never
+#                                   the caller dropping a round on
+#                                   its own: a departure this
+#                                   dispatch did not decide is
+#                                   announced by no release below,
+#                                   which is why the retention
+#                                   requirements forbid it
 #   "R is the oldest retained round"           { yes, no }
+#                                 - the earliest in the round
+#                                   order, which the caller's store
+#                                   answers; the two eviction sites
+#                                   pin it yes because the round
+#                                   they take IS the one the store
+#                                   named oldest
 #
 # Outputs:
 #   "deliver the act to the live instance"     { yes, no }
@@ -197,7 +247,7 @@ no,"R COMPLETE and released"
 # the tick alone (M1 -- local state never defers discharge).  The
 # join IS gated on the R4 advance rule -- tolerance governs joins
 # exactly as admissions, else a process that launches the next
-# round immediately voids every honest hold; bounded deferral
+# round immediately voids every correct hold; bounded deferral
 # preserves R2a's eventual participation.
 @"join the oldest owed round","own instance live","participation owed to any round","possession of the prior round","tolerance elapsed"
 no,yes,,,
@@ -236,9 +286,9 @@ no,no,no,yes,yes,"short of n-t",
 # prior round's duty is discharged: all n possess it (or it left
 # retention), or n-t possess it and T_p sweeps of tolerance have
 # funded the tail's catch-up.  Admitting while prior results sit
-# undelivered, or while the tail's funded window still runs,
+# undelivered, or while the tail's funded catch-up still runs,
 # is the defect class this gate exists to prevent: intake
-# outrunning discharge until an honest process sheds from the
+# outrunning discharge until a correct process sheds from the
 # sequence and the fault budget is spent on load.
 @"admit the next round","own instance live","participation owed to any round","identity maintenance due","application value pending","own backlog drained","possession of the prior round","tolerance elapsed"
 no,yes,,,,,,
@@ -259,7 +309,7 @@ no,no,no,no,yes,yes,"short of n-t",
 # assertion the caller validated against its candidate composition
 # accumulates one distinct-server witness (the record marks only
 # its sender; self is not a server of its own adoption).  At t+1
-# distinct servers at least one is honest, so the composition is
+# distinct servers at least one is correct, so the composition is
 # acceptable: signal adoption exactly once:
 #
 #   adopt the frontier round  iff  post-record distinct witnesses
@@ -282,20 +332,62 @@ no,no,no,no,yes,yes,"short of n-t",
 # C early-output in systemWitness.
 
 # ================================================================
+# Cursor event at a received act -- not in this dispatch
+# ================================================================
+#
+# CURSOR WANT (DERIVED -- system.md Model, want: the cursor birth).
+# An act standing at its sender's authored high-water (the caller's
+# cursor-evidence input -- the caller owns the authorship order,
+# O5) locates the sender's cursor at the act's round: the sender
+# has authored nothing later, so it lacks everything after.  For
+# EACH retained round after the cursor:
+#
+#   record want owed to the sender  iff  the act carries cursor
+#   evidence AND the sender has not evidenced possession of that
+#   round.
+#
+# Discharged by the serve walk like any want; retired per process
+# on possession evidence; an act below the high-water is carrier
+# traffic and births nothing.  Kept OUT of the merged dispatch on
+# the same precedent as the adopt rule: the cursor-evidence input
+# and the per-entry order test appear in no other rule, and the
+# rule quantifies over the retained set (a walk, not a single
+# classification), which the dispatch's single-round shape cannot
+# express without duplicating its DAG per entry.  Implemented as
+# the C walk in systemReceived.
+
+# ================================================================
 # Retention event for round R
 # ================================================================
 
 # RELEASE (DERIVED -- system.md RETAIN/O4: release advances the
-# derivation floor and the retention floor together).  A retained round releases when provably no
-# correct process can still need it -- all n have evidenced
-# possession (with at most t forgeries, reaching n requires every
-# correct process's true indication; no count-threshold shortcut)
-# -- or when the retention budget forces eviction, oldest retained
-# round first.  Eviction under budget is the one place bounded
-# memory overrides M1; the evicted round becomes out-of-band
-# territory, which is the accept-loss boundary, not a protocol
-# stop.
-@"release R","all n processes have evidenced possession of R","retention budget exceeded","R is the oldest retained round"
+# derivation floor and the retention floor together).  A retained
+# round releases when provably no correct process can still need
+# it -- all n have evidenced possession (with at most t forgeries,
+# reaching n requires every correct process's true indication; no
+# count-threshold shortcut).  That is the rule.
+#
+# The second arm is not a second rule.  When the deployment's
+# RECOVERY REACH (O6) is exhausted the oldest retained round is
+# dropped anyway -- a WITHDRAWAL in system.md's terms: this
+# process ceasing to hold, never a claim that the round is no
+# longer needed.  It is the one place bounded memory overrides M1,
+# it spends fault budget on whoever still lacks the round (R4's
+# absence dimension), and the round becomes out-of-band territory
+# -- the accept-loss boundary, not a protocol stop.  One output
+# serves both because the machine's ACT is the same; which of the
+# two occurred is the spec's to say, not this table's.  Reach
+# exhaustion reaches this table as a fact, never as a measurement:
+# the caller's store refused to hold another round.
+#
+# NOT IN THIS TABLE, and not an omission: R4 requires a withdrawal
+# to name the processes it leaves unserved (the complement of the
+# possession record).  That is not a decision, so it would not
+# live here in any case; where it IS discharged is the caller's
+# own release operation, which the machine calls while the round's
+# possession record still exists (system.md "Mechanization
+# status").
+@"release R","all n processes have evidenced possession of R","recovery reach exhausted","R is the oldest retained round"
 yes,yes,,
 yes,no,yes,yes
 no,no,yes,no

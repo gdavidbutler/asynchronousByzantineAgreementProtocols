@@ -213,7 +213,7 @@
  * the Model), kept apart in this file: POSITION, the unbounded monotone
  * calculus R, keys every record and the agreed sequence; BYTE, the
  * wire/API unsigned char, ROUTES and only routes, sound within the
- * window; IDENTITY, the chain anchor, PROVES.  At the byte's reuse
+ * reach; IDENTITY, the chain anchor, PROVES.  At the byte's reuse
  * routing alone would read a wire from the previous incarnation as
  * frontier traffic -- a stalled process a whole round space behind
  * would inject its stale round into the live one wearing the same
@@ -340,7 +340,7 @@
  * Usage:
  *   ./example_system [-v] [-s seed] [-l loss] [-L proc:round]
  *                    [-M proc] [-B proc:mode] [-m every] [-T Tp]
- *                    [-S sweeps] n t w msgs
+ *                    [-S sweeps] n t r msgs
  *
  * Examples -- the notable runs from building this file.  Add -v to any
  * of them to trace launches, closes and adoptions, and -s to move the
@@ -440,7 +440,64 @@
 #include <stdlib.h>
 #include <string.h>
 #include "system.h"
+#include "systemStore.h"
 #include "bkr94acs.h"
+
+/*--------------------------------------------------------------------------*/
+/*  The machine's round names -- the ordinal instantiation                  */
+/*                                                                          */
+/*  The machine takes rounds as opaque rs-byte NAMES under one caller       */
+/*  comparator (system.h, the operations on a round).  This deployment's   */
+/*  name is its resolved POSITION's ordinal bytes; ordCmp is the header's   */
+/*  reference displacement comparator, and every close mints ordinal        */
+/*  succession.  rn()/rv() convert at the machine boundary, so the rest     */
+/*  of the file keeps speaking positions.                                   */
+/*--------------------------------------------------------------------------*/
+
+#define SYS_RS ((unsigned int)sizeof (unsigned long))
+
+static int
+ordCmp(
+  void *ctx
+ ,const unsigned char *a
+ ,const unsigned char *b
+){
+  unsigned long av;
+  unsigned long bv;
+  unsigned long d;
+
+  (void)ctx;
+  memcpy(&av, a, sizeof (av));
+  memcpy(&bv, b, sizeof (bv));
+  if (!(d = bv - av))
+    return (0);
+  return (d <= ((unsigned long)-1 >> 1) ? -1 : 1);
+}
+
+static unsigned char RnPool[16][sizeof (unsigned long)];
+static unsigned int RnI;
+
+static const unsigned char *
+rn(
+  unsigned long v
+){
+  unsigned char *p;
+
+  p = RnPool[RnI];
+  RnI = (RnI + 1) % (sizeof (RnPool) / sizeof (RnPool[0]));
+  memcpy(p, &v, sizeof (v));
+  return (p);
+}
+
+static unsigned long
+rv(
+  const unsigned char *p
+){
+  unsigned long v;
+
+  memcpy(&v, p, sizeof (v));
+  return (v);
+}
 
 /*--------------------------------------------------------------------------*/
 /*  Constants                                                               */
@@ -454,7 +511,7 @@
  * RSPACE is that byte space; the POSITION space (below) is unbounded.
  */
 #define RSPACE      256
-#define MAX_WINDOW   16   /* retained-window cap (w), NOT a round cap */
+#define MAX_REACH    16   /* recovery-reach cap in rounds, NOT a round cap */
 #define MAX_STAGED 10000  /* application messages staged per process */
 #define VLEN         16   /* contributed value bytes (vLen encoding VLEN-1) */
 #define MAX_PHASES    8
@@ -552,7 +609,7 @@ struct wire {
   /*
    * The IDENTITY plane: the chain anchor of the round BELOW this wire's
    * round.  A byte ROUTES; an identity PROVES (system.md, the three
-   * round names): sysRound is sound only within the window, and at the
+   * round names): sysRound is sound only within the reach, and at the
    * byte's reuse a wire from the previous incarnation reads as frontier
    * traffic on the byte alone.  Ingress therefore refuses any at-or-
    * behind wire whose asserted lineage does not match the receiver's
@@ -671,7 +728,7 @@ struct exch {
 /*  THE THREE ROUND NAMES (system.md, the Model): POSITION is the calculus  */
 /*  R -- unbounded, monotone, what these slots and the agreed sequence are  */
 /*  keyed by.  BYTE is the wire/API unsigned char -- ROUTING ONLY, sound    */
-/*  within the window, and it is the slot INDEX (pos & 0xFF), so at most    */
+/*  within the reach, and it is the slot INDEX (pos & 0xFF), so at most     */
 /*  one incarnation of a byte is ever live.  IDENTITY is the chain anchor   */
 /*  -- what PROVES, carried on every wire and checked at ingress.  The      */
 /*  launch that reuses a byte reclaims the previous incarnation's slot      */
@@ -723,6 +780,11 @@ struct rslot {
 
 struct proc {
   struct system *sys;
+  struct systemStore *store;          /* the rounds this process RETAINS and
+                                       * the records the machine keeps in
+                                       * them: caller storage, reached through
+                                       * the four retention operations, sized
+                                       * to the declared reach */
   struct rslot *slot;                 /* RSPACE slots, index = pos & 0xFF */
   struct exch *exch;                  /* RSPACE * n, index = byte * n + m */
   struct wire *hold;                  /* beyond-reach traffic, re-fed later */
@@ -790,7 +852,9 @@ struct proc {
   unsigned int msgCnt;
   unsigned int retryCursor;
   unsigned char self;
-  unsigned char serveCursor;
+  unsigned char serveCursor[SYS_RS + 1]; /* systemCursorSz(SYS_RS): the
+                                          * round NAME last served, plus its
+                                          * in-use byte */
   unsigned char adoptPending;
   unsigned char candValid;
   unsigned char tolElapsed;
@@ -834,7 +898,7 @@ static unsigned int Qcount;
 static unsigned int Rng;
 static unsigned int N;
 static unsigned int T;
-static unsigned int Wr;          /* retained window, actual rounds */
+static unsigned int R;          /* the recovery reach, in rounds */
 static unsigned int Verbose;
 static unsigned int DropPct;
 static unsigned int Tp;
@@ -1139,7 +1203,7 @@ aheadBy(
 /*
  * BYTE -> POSITION, the routing half of the split: map a wire's round
  * byte into the receiver's own position space around its frontier --
- * 0..127 ahead of it, 1..128 behind it.  Sound within the window and
+ * 0..127 ahead of it, 1..128 behind it.  Sound within the reach and
  * ONLY there: at the byte's reuse a wire from the previous incarnation
  * maps to the live position, which is exactly what the identity check
  * at ingress exists to refuse.  Returns -1 for a byte that maps before
@@ -1288,11 +1352,10 @@ maskKeyAt(
  * anchor into the row -- the fold overwrites the old base, which is
  * the demo's wipe.  The walk stops at the first round still retained
  * (its serving form is still owed) and never crosses the frontier.
- * The lag between a prune and this advance is bounded by the window
+ * The lag between a prune and this advance is bounded by the REACH
  * itself -- eviction is oldest-first, so no released round waits more
- * than the window's span -- while slots outlive the window by the
- * whole byte space, so the anchors the fold needs are always still
- * held.
+ * than the reach spans -- while slots outlive the reach by the whole
+ * byte space, so the anchors the fold needs are always still held.
  */
 static void
 maskAdvance(
@@ -1302,7 +1365,7 @@ maskAdvance(
   unsigned int j;
 
   while (p->maskFloor < p->fpos
-   && !systemRetained(p->sys, (unsigned char)(p->maskFloor % RSPACE))
+   && !systemRetained(p->sys, rn(p->maskFloor))
    && (s = slotOf(p, p->maskFloor)) && s->closed) {
     for (j = 0; j < N; ++j)
       mixTag(p->maskKey[j], p->maskKey[j], s->comp, ANCHOR);
@@ -1721,7 +1784,7 @@ legAccept(
 ){
   struct systemAct sa[SYSTEM_MAX_ACTS];
   const unsigned char *v;
-  unsigned char f;
+  unsigned long f;
   unsigned int n;
 
   lg->selfAcc = 1;
@@ -1731,7 +1794,7 @@ legAccept(
   p->active = 1;
 
   if (p->self == lg->served) {
-    f = systemFrontier(p->sys);
+    f = rv(systemFrontier(p->sys));
     if (lg->pos == p->fpos) {
       struct rslot *sf;
       unsigned char expect[ANCHOR];
@@ -1864,7 +1927,7 @@ legAccept(
 
             if (!SYSTEM_TST(p->candSrv[i], n))
               continue;
-            wn = systemWitness(p->sys, f, (unsigned char)n, sa);
+            wn = systemWitness(p->sys, rn(f), (unsigned char)n, sa);
             applySysActs(p, sa, wn, 0);
           }
         }
@@ -1873,8 +1936,7 @@ legAccept(
   }
 
 possession:
-  n = systemPossessed(p->sys, (unsigned char)(lg->pos % RSPACE),
-                      lg->server, sa);
+  n = systemPossessed(p->sys, rn(lg->pos), lg->server, sa);
   applySysActs(p, sa, n, 0);
 }
 
@@ -1969,7 +2031,6 @@ recordBank(
                                  * plane) and the digest alone vouches */
 ){
   struct rslot *s;
-  unsigned char round;
 
   if (member >= MAX_PROCESSES || !(s = slotOf(p, pos)) || s->has[member])
     return (0);
@@ -2015,11 +2076,10 @@ recordBank(
     mixTag(s->ctag[member], BankKey[member], bytes, VLEN);
   s->has[member] = 1;
   p->active = 1;
-  round = (unsigned char)(pos % RSPACE);
   if (!s->told[member]
    && s->closed && s->comp[ANCHOR + member]
-   && systemRetained(p->sys, round)) {
-    systemAssembled(p->sys, round, member);
+   && systemRetained(p->sys, rn(pos))) {
+    systemAssembled(p->sys, rn(pos), member);
     s->told[member] = 1;
   }
   return (1);
@@ -2243,7 +2303,7 @@ backlogDrained(
     for (k = 0; k < N; ++k) {
       if (!s->comp[ANCHOR + k] || s->has[k])
         continue;
-      if (systemRetained(p->sys, (unsigned char)j))
+      if (systemRetained(p->sys, rn(s->pos)))
         return (0);                /* still assembling, still in reach */
       if ((ex = exchFind(p, s->pos, (unsigned char)k))
        && !ex->retired)
@@ -2266,19 +2326,19 @@ applySysActs(
 ){
   struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
   struct rslot *s;
+  unsigned long rd;
   unsigned int i;
   unsigned int j;
   unsigned int n;
-  unsigned char rd;
 
   for (i = 0; i < nacts; ++i) {
-    rd = sa[i].round;
+    rd = rv(sa[i].round);
     /*
-     * A machine act's round is a BYTE, and it always names the current
-     * incarnation: the machine speaks only of live and retained rounds,
-     * all strictly inside the window.
+     * A machine act's round is a POSITION; the slot is that position's
+     * incarnation of its slot index, verified per act below (the
+     * machine speaks only of live and retained rounds).
      */
-    s = p->slot + rd;
+    s = p->slot + rd % RSPACE;
 
     switch (sa[i].act) {
 
@@ -2289,7 +2349,7 @@ applySysActs(
        * router IS the machine).  A deployment that routes by its own
        * demux discharges delivery there instead and ignores this act.
        */
-      if (!w || w->kind != WK_ACS || !s->inUse || !s->acs)
+      if (!w || w->kind != WK_ACS || !s->inUse || s->pos != rd || !s->acs)
         break;
       if (w->cls == BKR94ACS_CLS_ACAST) {
         n = bkr94acsAcastInput(s->acs, w->process, w->type, w->from,
@@ -2349,7 +2409,7 @@ applySysActs(
        * distinct wanting processes, so a leg to a dead process holds a
        * slot until its round is released.
        */
-      if (!s->inUse || !s->closed)
+      if (!s->inUse || s->pos != rd || !s->closed)
         break;
       {
         unsigned int cap;
@@ -2376,7 +2436,7 @@ applySysActs(
       break;
 
     case SYSTEM_ACT_RELEASE:
-      if (!s->inUse)
+      if (!s->inUse || s->pos != rd)
         break;
       /*
        * Nothing is harvested from the instance: its A-Cast values are
@@ -2441,7 +2501,7 @@ applySysActs(
         for (j = 0; j < N; ++j) {
           struct exch *ex;
 
-          ex = p->exch + rd * N + j;
+          ex = p->exch + (rd % RSPACE) * N + j;
           if (ex->inUse) {
             if (!ex->retired) {
               ++AbandonedExch;
@@ -2596,15 +2656,15 @@ sysClose(
 ){
   struct systemAct sa[SYSTEM_MAX_ACTS];
   unsigned char have[(MAX_PROCESSES + 7) / 8];
-  unsigned char before;
-  unsigned char round;
+  unsigned long before;
+  unsigned long round;
   unsigned int n;
   unsigned int j;
 
   if (!s || !s->inUse || s->pos != p->fpos)
     return;
-  round = (unsigned char)(s->pos % RSPACE);
-  before = systemFrontier(p->sys);
+  round = s->pos;
+  before = rv(systemFrontier(p->sys));
 
   /*
    * A member holds its OWN bank by authorship -- it wrote it.  Every
@@ -2642,8 +2702,8 @@ sysClose(
     if (comp[ANCHOR + j] && s->has[j])
       have[j >> 3] |= (unsigned char)(1 << (j & 7));
 
-  n = systemComplete(p->sys, round, have, sa);
-  if (systemFrontier(p->sys) == before)
+  n = systemComplete(p->sys, rn(round), rn(round + 1), have, sa);
+  if (rv(systemFrontier(p->sys)) == before)
     return;                        /* refused: not the frontier, or no
                                     * live instance -- the machine's own
                                     * supersession guard */
@@ -2728,9 +2788,9 @@ sysClose(
       if (j == p->self || !p->pendF[j])
         continue;
       p->pendF[j] = 0;
-      if (!systemRetained(p->sys, round))
+      if (!systemRetained(p->sys, rn(round)))
         break;                     /* released underneath us */
-      pn = systemPossessed(p->sys, round, (unsigned char)j, pa);
+      pn = systemPossessed(p->sys, rn(round), (unsigned char)j, pa);
       applySysActs(p, pa, pn, 0);
     }
 }
@@ -2863,19 +2923,36 @@ deliverWire(
      * leave us walking freed storage.  DELIVER cannot misfire here
      * because its handler routes only WK_ACS wires.
      */
-    n = systemReceived(p->sys, w->sysRound, w->from, w->possesses, sa);
+    /*
+     * Cursor evidence (system.md Model, want): this caller owns the
+     * authorship order -- the offset floor above IS the authored
+     * high-water record -- so an AUTHORED wire riding the sender's
+     * newest authored offset locates its cursor here.  A retry of an
+     * older duty re-presents at its original offset, falls below the
+     * high-water, and asserts nothing (the refuted stale-retry
+     * inference, excluded by construction).
+     */
+    n = systemReceived(p->sys, rn((unsigned long)pos), w->from, w->possesses,
+                       (w->kind == WK_EXCH ? w->from == w->bankOf
+                                           : w->from == w->legServer)
+                       && p->authSeen[w->from]
+                       && w->sigOff == p->authOff[w->from] ? 1 : 0,
+                       sa);
     applySysActs(p, sa, n, w);
     for (i = 0; i < RSPACE; ++i) {
-      if (aheadBy((unsigned char)i, w->sysRound) < 128)
+      struct rslot *rs;
+
+      rs = p->slot + i;
+      if (!rs->inUse || rs->pos >= (unsigned long)pos)
+        continue;                  /* not strictly behind the wire */
+      if (!systemRetained(p->sys, rn(rs->pos)))
         continue;
-      if (!systemRetained(p->sys, (unsigned char)i))
-        continue;
-      n = systemPossessed(p->sys, (unsigned char)i, w->from, sa);
+      n = systemPossessed(p->sys, rn(rs->pos), w->from, sa);
       applySysActs(p, sa, n, 0);
     }
     if (w->possesses && w->from < MAX_PROCESSES) {
-      if (systemRetained(p->sys, w->sysRound)) {
-        n = systemPossessed(p->sys, w->sysRound, w->from, sa);
+      if (systemRetained(p->sys, rn((unsigned long)pos))) {
+        n = systemPossessed(p->sys, rn((unsigned long)pos), w->from, sa);
         applySysActs(p, sa, n, 0);
       } else if ((unsigned long)pos == p->fpos) {
         if (p->pendPos != p->fpos) {
@@ -3031,7 +3108,7 @@ deliverWire(
       if (w->to != w->legServed)
         return;
       if ((ls = slotOf(p, (unsigned long)pos)) && ls->closed
-       && !systemRetained(p->sys, w->sysRound))
+       && !systemRetained(p->sys, rn((unsigned long)pos)))
         return;
       if (!(lg = legAlloc(p, w->legServer, w->legServed, (unsigned long)pos,
                           pa, p->sigOff)))
@@ -3101,7 +3178,12 @@ deliverWire(
     return;
   }
 
-  n = systemReceived(p->sys, w->sysRound, w->from, w->possesses, sa);
+  /* Every ACS wire of a sender's round is authored (the offset floor
+   * above), so cursor evidence is simply the high-water test. */
+  n = systemReceived(p->sys, rn((unsigned long)pos), w->from, w->possesses,
+                     p->authSeen[w->from]
+                     && w->sigOff == p->authOff[w->from] ? 1 : 0,
+                     sa);
   applySysActs(p, sa, n, w);
 
   /*
@@ -3123,9 +3205,9 @@ deliverWire(
    * the next incarnation of the byte.
    */
   if (w->possesses && w->from < MAX_PROCESSES) {
-    if (systemRetained(p->sys, w->sysRound)) {
+    if (systemRetained(p->sys, rn((unsigned long)pos))) {
       /* the round became retained while these acts were applied */
-      n = systemPossessed(p->sys, w->sysRound, w->from, sa);
+      n = systemPossessed(p->sys, rn((unsigned long)pos), w->from, sa);
       applySysActs(p, sa, n, 0);
     } else if ((unsigned long)pos == p->fpos) {
       if (p->pendPos != p->fpos) {
@@ -3143,11 +3225,14 @@ deliverWire(
    * never arrives -- walk EVERY retained round behind this wire's.
    */
   for (i = 0; i < RSPACE; ++i) {
-    if (aheadBy((unsigned char)i, w->sysRound) < 128)
+    struct rslot *rs;
+
+    rs = p->slot + i;
+    if (!rs->inUse || rs->pos >= (unsigned long)pos)
       continue;                    /* not strictly behind the wire */
-    if (!systemRetained(p->sys, (unsigned char)i))
+    if (!systemRetained(p->sys, rn(rs->pos)))
       continue;
-    n = systemPossessed(p->sys, (unsigned char)i, w->from, sa);
+    n = systemPossessed(p->sys, rn(rs->pos), w->from, sa);
     applySysActs(p, sa, n, 0);
   }
 
@@ -3341,7 +3426,7 @@ main(
   if (argc - arg < 4) goto usage;
   N = (unsigned int)atoi(argv[arg++]);
   T = (unsigned int)atoi(argv[arg++]);
-  Wr = (unsigned int)atoi(argv[arg++]);
+  R = (unsigned int)atoi(argv[arg++]);
   msgs = (unsigned int)atoi(argv[arg++]);
 
   if (N < 2 || N > MAX_PROCESSES) {
@@ -3352,8 +3437,8 @@ main(
     fprintf(stderr, "need n >= 3t + 1 (n=%u, t=%u)\n", N, T);
     return (1);
   }
-  if (Wr < 1 || Wr > MAX_WINDOW) {
-    fprintf(stderr, "w must be 1..%d\n", MAX_WINDOW);
+  if (R < 1 || R > MAX_REACH) {
+    fprintf(stderr, "reach must be 1..%d\n", MAX_REACH);
     return (1);
   }
   if (msgs < 1 || msgs > MAX_STAGED) {
@@ -3469,7 +3554,7 @@ main(
   AcsSz = bkr94acsSz(N - 1, VLEN - 1, MAX_PHASES);
   LegSz = bracha87Fig1Sz(1, COMPLEN - 1);
   ExchSz = bracha87Fig1Sz(N - 1, VLEN - 1);
-  sysSz = systemSz(N - 1, Wr - 1);
+  sysSz = systemSz(N - 1, SYS_RS);
 
   if (!(Queue = calloc(QCAP, sizeof (*Queue)))) {
     fprintf(stderr, "queue allocation failed\n");
@@ -3482,6 +3567,7 @@ main(
     p = &Proc[i];
     p->self = (unsigned char)i;
     if (!(p->sys = calloc(1, sysSz))
+     || !(p->store = calloc(1, systemStoreSz(N - 1, SYS_RS, R)))
      || !(p->slot = calloc(RSPACE, sizeof (*p->slot)))
      || !(p->exch = calloc(RSPACE * N, sizeof (*p->exch)))
      || !(p->hold = calloc(HOLDCAP, sizeof (*p->hold)))
@@ -3490,8 +3576,19 @@ main(
       exitCode = 1;
       goto cleanup;
     }
+    /*
+     * The retained rounds and their records are THIS FILE's now
+     * (system.h, the retention operations), answered by the reference
+     * store: -w is the deployment's declared reach, and the store
+     * refusing at it is how the reach binds.  systemInit hands ONE ctx
+     * to the comparator and to all four operations, so the store IS
+     * the ctx and systemStoreCmp forwards to ordCmp.
+     */
+    systemStoreInit(p->store, (unsigned char)(N - 1), SYS_RS, R, ordCmp, 0);
     systemInit(p->sys, (unsigned char)(N - 1), (unsigned char)T,
-               (unsigned char)(Wr - 1), (unsigned char)i);
+               (unsigned char)i, SYS_RS, rn(0), systemStoreCmp,
+               systemStoreRecords, systemStoreRetain, systemStoreRelease,
+               systemStoreAfter, p->store);
     /*
      * Stage this process's application messages: the layer has ACCEPTED
      * them, so from here each is an obligation, not a preference (R1).
@@ -3528,8 +3625,8 @@ main(
   }
 
   printf("--- system layer over BKR94 ACS "
-         "(n=%u, t=%u, w=%u, msgs/process=%u, loss=%u%%, seed=%u"
-         ", Tp=%u, S=%u", N, T, Wr, msgs, DropPct, origSeed, Tp, Sp);
+         "(n=%u, t=%u, r=%u, msgs/process=%u, loss=%u%%, seed=%u"
+         ", Tp=%u, S=%u", N, T, R, msgs, DropPct, origSeed, Tp, Sp);
   if (MaintEvery)
     printf(", maintenance every %u", MaintEvery);
   if (LagProc >= 0)
@@ -3663,11 +3760,11 @@ main(
           unsigned char cand[COMPLEN];
           unsigned char wit[(MAX_PROCESSES + 7) / 8];
           const unsigned char *wp;
-          unsigned char adRound;
+          unsigned long adRound;
           unsigned long adPos;
 
           adPos = p->fpos;
-          adRound = systemFrontier(p->sys);
+          adRound = rv(systemFrontier(p->sys));
           memcpy(cand, p->cand, COMPLEN);
           /*
            * Snapshot the witness book BEFORE the close -- the close is
@@ -3695,11 +3792,11 @@ main(
             printf("process %u: ADOPT round %lu from served evidence\n",
                    (unsigned)p->self, adPos);
           sysClose(p, slotOf(p, adPos), cand);
-          if (systemRetained(p->sys, adRound))
+          if (systemRetained(p->sys, rn(adRound)))
             for (j = 0; j < N; ++j) {
               if (j == p->self || !SYSTEM_TST(wit, j))
                 continue;
-              n = systemPossessed(p->sys, adRound, (unsigned char)j, sa);
+              n = systemPossessed(p->sys, rn(adRound), (unsigned char)j, sa);
               applySysActs(p, sa, n, 0);
             }
         }
@@ -3815,7 +3912,7 @@ main(
       }
 
       /* The serve walk -- one owed round per tick, cursor is ours. */
-      n = systemServe(p->sys, &p->serveCursor, sa);
+      n = systemServe(p->sys, p->serveCursor, sa);
       applySysActs(p, sa, n, 0);
 
       /*
@@ -3828,13 +3925,13 @@ main(
        * picks that up.
        */
 
-      /* Retention never exceeds the window -- bounded memory, one column. */
+      /* Retention never exceeds the reach -- bounded memory, one column. */
       {
         unsigned int ret;
 
         ret = 0;
         for (j = 0; j < RSPACE; ++j)
-          if (systemRetained(p->sys, (unsigned char)j))
+          if (p->slot[j].inUse && systemRetained(p->sys, rn(p->slot[j].pos)))
             ++ret;
         if (ret > p->maxRetained)
           p->maxRetained = ret;
@@ -3866,7 +3963,7 @@ main(
         if (!p->partitioned && Verbose)
           printf("process %u: self-classified PARTITIONED at round %u"
                  " (barren sweeps exhausted)\n",
-                 (unsigned)p->self, (unsigned)systemFrontier(p->sys));
+                 (unsigned)p->self, (unsigned)rv(systemFrontier(p->sys)));
         p->partitioned = 1;
         p->barren = 0;             /* re-arm: the budget meters each
                                     * lapse, it does not latch */
@@ -4100,10 +4197,10 @@ main(
 
     boundOk = 1;
     for (i = 0; i < N; ++i)
-      if (Proc[i].maxRetained > Wr)
+      if (Proc[i].maxRetained > R)
         boundOk = 0;
-    printf("retention bounded by w (%u):                  %s\n",
-           Wr, boundOk ? "ok" : "FAIL");
+    printf("retention bounded by the reach (%u):          %s\n",
+           R, boundOk ? "ok" : "FAIL");
     if (!boundOk)
       exitCode = 1;
   }
@@ -4212,6 +4309,7 @@ cleanup:
     free(Proc[i].seq);
     free(Proc[i].seqHole);
     free(Proc[i].sys);
+    free(Proc[i].store);
   }
   free(Queue);
 
@@ -4221,14 +4319,17 @@ usage:
   fprintf(stderr,
     "usage: example_system [-v] [-s seed] [-l loss] [-L proc:round]\n"
     "                      [-M proc] [-B proc:mode] [-m every] [-T Tp]\n"
-    "                      [-S sweeps] n t w msgs\n"
+    "                      [-S sweeps] n t r msgs\n"
     "  n            total processes (2-%d)\n"
     "  t            max Byzantine faults (n >= 3t + 1)\n"
-    "  w            retained window in rounds (1-%d)\n"
+    "  r            recovery reach in rounds retained (1-%d)\n",
+    MAX_PROCESSES, MAX_REACH);
+  fprintf(stderr,
     "  msgs         application messages staged per process (1-%d);\n"
-    "               past %d the round byte wraps and the reuse guard\n"
-    "               is exercised\n",
-    MAX_PROCESSES, MAX_WINDOW, MAX_STAGED, RSPACE);
+    "               past %d the wire's routing byte reuses and the\n"
+    "               slot-reuse guard is exercised (positions never\n"
+    "               wrap; the identity is the name)\n",
+    MAX_STAGED, RSPACE);
   fprintf(stderr,
     "  -v           verbose: trace launches, closes, adoptions\n"
     "  -s seed      delivery-order / loss seed\n"

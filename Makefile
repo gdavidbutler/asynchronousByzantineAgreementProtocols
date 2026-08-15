@@ -13,6 +13,9 @@ bkr94acs.o: bkr94acs.c bkr94acs.h bracha87.h bkr94acsRules.c
 system.o: system.c system.h systemRules.c
 	$(CC) $(CFLAGS) -c -o $@ system.c
 
+systemStore.o: systemStore.c systemStore.h
+	$(CC) $(CFLAGS) -c -o $@ systemStore.c
+
 # The *Rules.c dispatch snippets are TRACKED SOURCE, not build output.
 #
 # Each one is generated: dtc co-compiles a .dtc rule table with its
@@ -67,8 +70,8 @@ example_bracha87Fig1: example/bracha87Fig1.c bracha87.o bracha87.h
 example_bkr94acs: example/bkr94acs.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) -I. -o $@ example/bkr94acs.c bkr94acs.o bracha87.o
 
-example_system: example/system.c system.o bkr94acs.o bracha87.o system.h bkr94acs.h bracha87.h
-	$(CC) $(CFLAGS) -I. -o $@ example/system.c system.o bkr94acs.o bracha87.o
+example_system: example/system.c system.o systemStore.o bkr94acs.o bracha87.o system.h systemStore.h bkr94acs.h bracha87.h
+	$(CC) $(CFLAGS) -I. -o $@ example/system.c system.o systemStore.o bkr94acs.o bracha87.o
 
 test_bracha87: test/test_bracha87.c bracha87.o bracha87.h
 	$(CC) $(CFLAGS) -I. -o $@ test/test_bracha87.c bracha87.o
@@ -85,33 +88,51 @@ test_bracha87_blackbox: test/test_bracha87_blackbox.c bracha87.o bracha87.h
 test_bkr94acs_blackbox: test/test_bkr94acs_blackbox.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) -I. -o $@ test/test_bkr94acs_blackbox.c bkr94acs.o bracha87.o
 
-test_system: test/test_system.c system.o system.h
-	$(CC) $(CFLAGS) -I. -o $@ test/test_system.c system.o
+# The store's own contract suite.  system.o rides the link line for
+# systemRecordsSz alone -- the suite never calls the machine; it plays
+# the machine's part, since the machine is the records' sole writer.
+test_systemStore: test/test_systemStore.c systemStore.o system.o systemStore.h system.h
+	$(CC) $(CFLAGS) -I. -o $@ test/test_systemStore.c systemStore.o system.o
+
+test_system: test/test_system.c system.o systemStore.o system.h systemStore.h
+	$(CC) $(CFLAGS) -I. -o $@ test/test_system.c system.o systemStore.o
+
+# spec-direct correspondence -- the machine against a SECOND reading of
+# system.md, written from the specification and system.h alone.  Every
+# other instrument derives its oracle through system.dtc and system.c,
+# so a reading error there is invisible to all of them; this one is the
+# test_predicates pattern at this layer.  NOT part of check yet.
+fidelity: test_system_fidelity
+	./test_system_fidelity
+
+test_system_fidelity: test/test_system_fidelity.c system.o systemStore.o system.h systemStore.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I. -o $@ test/test_system_fidelity.c \
+	  system.o systemStore.o
 
 # invariant falsifier -- exploratory, NOT part of check (see the header
 # comment: a clean run is evidence a conjunct is worth proving, never a
-# substitute for the proof).  Override EN/ET/EW/HORIZON/MAXSTATES/TBLBITS
+# substitute for the proof).  Override EN/ET/ER/HORIZON/MAXSTATES/TBLBITS
 # on the command line for other configurations.
-test_system_invariant: test/test_system_invariant.c system.o system.h
-	$(CC) $(CFLAGS) -I. -o $@ test/test_system_invariant.c system.o
+test_system_invariant: test/test_system_invariant.c system.o systemStore.o system.h systemStore.h
+	$(CC) $(CFLAGS) -I. -o $@ test/test_system_invariant.c system.o systemStore.o
 
 # L7 second half -- the twin drive proves the held-members grain gates
 # nothing, instead of assuming it the way the default enumeration does.
 # Twin A is driven exactly as the default build, so EXPECTSTATES asserts
 # that twin A's reachable set is unperturbed.  Exploratory, NOT part of
 # check; slower than the default build by the second drive.
-test_system_invariant_hrtwin: test/test_system_invariant.c system.o system.h
-	$(CC) $(CFLAGS) -DHRTWIN -DEXPECTSTATES=621094 $(CPPFLAGS) -I. -o $@ \
-	  test/test_system_invariant.c system.o
+test_system_invariant_hrtwin: test/test_system_invariant.c system.o systemStore.o system.h systemStore.h
+	$(CC) $(CFLAGS) -DHRTWIN -DEXPECTSTATES=187550 $(CPPFLAGS) -I. -o $@ \
+	  test/test_system_invariant.c system.o systemStore.o
 
 # composed-seam falsifier -- exercises the glue between one bkr94acs
 # instance per round and one struct system per process.  Exploratory,
 # NOT part of check (see the header comment).  Build a glue mutant with
 # e.g. CPPFLAGS=-DM_SEAM_DROP; each mutant must fire its check.
-test_system_seam: test/test_system_seam.c system.o bkr94acs.o bracha87.o \
+test_system_seam: test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o \
                   system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I. -o $@ test/test_system_seam.c \
-	  system.o bkr94acs.o bracha87.o
+	  system.o systemStore.o bkr94acs.o bracha87.o
 
 # THE CONFIG SWEEP.  Every shape constant in the seam is -D overridable
 # and everything else derives from it, so one source drives three
@@ -119,7 +140,7 @@ test_system_seam: test/test_system_seam.c system.o bkr94acs.o bracha87.o \
 # decision (SWEEP_LAGGARD / SWEEP_STARVE / SWEEP_BYZ) -- a fault a
 # configuration has no budget for is not run there.
 #
-#   default  n=4 t=1 w=3  PLAIN + LAGGARD + STARVE + six Byzantine arms
+#   default  n=4 t=1 reach 3  PLAIN + LAGGARD + STARVE + six Byzantine arms
 #   t0       n=2 t=0      PLAIN only (the spec's smallest deployment;
 #                         at n-t = n a manufactured fault wedges the
 #                         round everywhere instead of making one process
@@ -128,15 +149,15 @@ test_system_seam: test/test_system_seam.c system.o bkr94acs.o bracha87.o \
 #   big      n=7 t=2      PLAIN + LAGGARD + FORGE + MIXED +
 #                         WITHHOLD-with-a-laggard, the composed arm two
 #                         faults inside t finally admits
-test_system_seam_t0: test/test_system_seam.c system.o bkr94acs.o bracha87.o \
+test_system_seam_t0: test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o \
                      system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=1 -DTVAL=0 -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_big: test/test_system_seam.c system.o bkr94acs.o bracha87.o \
+test_system_seam_big: test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o \
                       system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 -DQCAP=262144u -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
 seam-configs: test_system_seam test_system_seam_t0 test_system_seam_big
 	./test_system_seam_t0 16
@@ -164,30 +185,30 @@ seam-configs: test_system_seam test_system_seam_t0 test_system_seam_big
 #   W_A9_SYBIL      FALSIFYING.  A9 (ingress attribution) withdrawn for
 #                   the evidence this layer records.  464 FAILURES at 16
 #                   seeds -- L5's release safety and R4's floor.
-test_system_seam_W_A4_PARTITION: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_A4_PARTITION: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                  bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_A4_PARTITION -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_A6_PIN0: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_A6_PIN0: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                             bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_A6_PIN0 -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_A6_PIN1: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_A6_PIN1: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                             bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_A6_PIN1 -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_A5_NOINFER: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_A5_NOINFER: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_A5_NOINFER -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_A9_SYBIL: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_A9_SYBIL: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                              bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_A9_SYBIL -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
 # TRANCHE 2 (2026-07-25).  Same discipline, and three of the eight carry a
 # configuration beside their -D because the premise IS a configuration or the
@@ -222,73 +243,73 @@ test_system_seam_W_A9_SYBIL: test/test_system_seam.c system.o bkr94acs.o \
 #   W_I10_WRONGARTIFACT FALSIFYING.  I10's caller half withdrawn (the close
 #                   stores the standing candidate, not what it consumed).
 #                   16 FAILURES at 16 seeds, every machine conjunct clean.
-test_system_seam_W_SERVE_CAP0: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_SERVE_CAP0: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_SERVE_CAP0 -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_SERVE_ROTDROP: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_SERVE_ROTDROP: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                   bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 -DQCAP=262144u \
 	  -DW_SERVE_ROTDROP -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_SERVE_ROTOK: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_SERVE_ROTOK: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                 bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 -DQCAP=262144u \
 	  -DW_SERVE_ROTOK -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_SERVE_YIELD: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_SERVE_YIELD: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                 bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 \
 	  -DW_SERVE_YIELD -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_SERVE_YIELDFLOOR: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_SERVE_YIELDFLOOR: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                  bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 \
 	  -DW_SERVE_YIELDFLOOR -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_SERVE_WIRE: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_SERVE_WIRE: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 \
 	  -DW_SERVE_WIRE -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_SERVE_NORESUME: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_SERVE_NORESUME: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                    bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 \
 	  -DW_SERVE_NORESUME -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_R2C_SILENT: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_R2C_SILENT: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_R2C_SILENT -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_REACH_WSHRINK: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_REACH_WSHRINK: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                   bracha87.o system.h bkr94acs.h bracha87.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 -DQCAP=262144u -DWENC=0 \
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=6 -DTVAL=2 -DQCAP=262144u -DREACH=1 \
 	  -DW_REACH_WSHRINK -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_L2_NOBYTEMATCH: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_L2_NOBYTEMATCH: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                    bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_L2_NOBYTEMATCH -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_L2_NOREARM: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_L2_NOREARM: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_L2_NOREARM -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_W_I10_WRONGARTIFACT: test/test_system_seam.c system.o \
+test_system_seam_W_I10_WRONGARTIFACT: test/test_system_seam.c system.o systemStore.o \
                                       bkr94acs.o bracha87.o system.h \
                                       bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_I10_WRONGARTIFACT -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
 # TRANCHE 4 (2026-07-25).  C6's COMPLETION-VOID clause, the register's one
 # C6 clause without a matched red.
@@ -300,10 +321,10 @@ test_system_seam_W_I10_WRONGARTIFACT: test/test_system_seam.c system.o \
 #                   M_SEAM_NOVOID (the RESET analog, untouched here) and from
 #                   W_L2_NOREARM.  PLAIN + LAGGARD + the six Byzantine arms;
 #                   see the source header for the counts.
-test_system_seam_W_L2_NOCLOSEVOID: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_W_L2_NOCLOSEVOID: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                    bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DW_L2_NOCLOSEVOID -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
 seam-premises: test_system_seam_W_A4_PARTITION test_system_seam_W_A6_PIN0 \
                test_system_seam_W_A6_PIN1 test_system_seam_W_A5_NOINFER \
@@ -375,25 +396,25 @@ seam-premises: test_system_seam_W_A4_PARTITION test_system_seam_W_A6_PIN0 \
 #
 # ZERO failures, ZERO stalls, and every classification an ACCEPTED strand
 # under all four; the safety arms never move.
-test_system_seam_SCHED_LIFO: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_SCHED_LIFO: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                              bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DSCHED_LIFO -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_SCHED_FIFO: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_SCHED_FIFO: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                              bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DSCHED_FIFO -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_SCHED_STARVE1: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_SCHED_STARVE1: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                 bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DSCHED_STARVE1 -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_SCHED_KINDFLIP: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_SCHED_KINDFLIP: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                                  bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DSCHED_KINDFLIP -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
 seam-sched: test_system_seam_SCHED_LIFO test_system_seam_SCHED_FIFO \
             test_system_seam_SCHED_STARVE1 test_system_seam_SCHED_KINDFLIP
@@ -434,17 +455,17 @@ seam-loss: test_system_seam
 #
 #   ENUM1  ROUNDS=1 depth 6   29487680 leaves, 0 failures, ~23m
 #   ENUM2  ROUNDS=2 depth 5    1593008 leaves, 0 failures, ~2m
-test_system_seam_ENUM1: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_ENUM1: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                         bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=1 -DTVAL=0 -DROUNDS=1 \
 	  -DSCHED_ENUM -DENUMDEPTH=6 -DENUMLEAVES=29487680 -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
-test_system_seam_ENUM2: test/test_system_seam.c system.o bkr94acs.o \
+test_system_seam_ENUM2: test/test_system_seam.c system.o systemStore.o bkr94acs.o \
                         bracha87.o system.h bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DNENC=1 -DTVAL=0 -DROUNDS=2 \
 	  -DSCHED_ENUM -DENUMDEPTH=5 -DENUMLEAVES=1593008 -I. -o $@ \
-	  test/test_system_seam.c system.o bkr94acs.o bracha87.o
+	  test/test_system_seam.c system.o systemStore.o bkr94acs.o bracha87.o
 
 seam-enum: test_system_seam_ENUM1 test_system_seam_ENUM2
 	./test_system_seam_ENUM2 1
@@ -470,8 +491,65 @@ seam-enum: test_system_seam_ENUM1 test_system_seam_ENUM2
 # logs land in machineMutants.d/, which clean removes.  The inventory
 # and the expected oracle per mutant are in the script's header; the
 # results are recorded in test_system_invariant.c's header.
-machine-mutants:
+machine-mutants: systemStore.o
 	sh test/machineMutants.sh
+
+# test/storeMutants.sh is the same currency one seam OVER: the retained
+# rounds and their records are the CALLER's, and THE RETENTION
+# REQUIREMENTS (system.h; register C13-C20) are what that storage must
+# meet.  Every one of those rows was a green control -- a correct store
+# discharging its term -- and nothing had shown a BROKEN store getting
+# caught.  The tier applies one anchored mutation per term to a SCRATCH
+# COPY of systemStore.c, rebuilds all four instruments against it with
+# the CLEAN machine, and asserts the designated oracle fires; two arms
+# mutate the falsifier instead, because succession (C20) is a round
+# operation the store never sees.  systemStore.c and the driver are
+# never written -- both checksummed before and after.  Runnable
+# standalone (sh test/storeMutants.sh) and idempotent; artifacts land
+# in storeMutants.d/, which clean removes.  The inventory and the
+# designated oracle per arm are in the script's header.
+store-mutants: system.o systemStore.o bkr94acs.o bracha87.o
+	sh test/storeMutants.sh
+
+# test/seamMutants.sh runs the seam's own 22 glue mutants as a MATRIX.
+# They existed one hand-built binary at a time (the `glue` repro token
+# below), which is why "22 of 22 fire" sat through three landings
+# without being re-run -- each of those re-verified the three config
+# baselines byte-exact and left the matrix alone.  The 2026-08-14
+# validation read re-ran it by hand, found all 22 still firing, and
+# this target is that read's remedy.  ONE thing is asserted per mutant:
+# that its DESIGNATED check fires.  Totals are recorded and never
+# asserted -- they move with any RNG-stream shift, and a target that
+# red on every unrelated landing would teach the reader to ignore it.
+# A CLEAN control runs first (42804/0).  16 minutes at 16 seeds, over
+# half of it in three arms whose broken glue stalls the run (M_SEAM_WANT
+# 343s, M_EXCH_EARLYRETIRE 165s, M_INJ_CANDIDATE 118s).  Artifacts in
+# seamMutants.d/.
+seam-mutants: system.o systemStore.o bkr94acs.o bracha87.o
+	sh test/seamMutants.sh
+
+# test/fidelityMutants.sh gives the SPEC-DIRECT correspondence its teeth
+# back, on both sides at once.  test_system_fidelity.c runs green at
+# pinned counts, and a green correspondence is worth what its teeth are
+# worth -- which nothing in the tree could re-run: its builder probed
+# five one-off mutations of the reference and the probe went with him.
+# The tier applies five anchored mutations to a SCRATCH COPY of the
+# driver (built against the CLEAN machine objects -- a correspondence
+# that cannot red on a broken reference cannot be trusted to red on a
+# broken machine) and then the nine anchored mutations of
+# machineMutants.sh, carried over verbatim, to a SCRATCH COPY of
+# system.c with the CLEAN driver linked against it.  The reference arms
+# are asserted; the machine arms are MEASURED -- an arm that does not
+# red is recorded with its structural reason and fails nothing.  A
+# CLEAN pairing runs last through the same build and link arrangement.
+# Neither target is ever written -- both checksummed before and after.
+# The DEFAULT (non-DEEP) driver build is what the tier runs; the -DDEEP
+# arm exists and is not tiered, on cost.  Runnable standalone (sh
+# test/fidelityMutants.sh) and idempotent; artifacts land in
+# fidelityMutants.d/, which clean removes.  The inventory is in the
+# script's header and the measured channel table at its foot.
+fidelity-mutants: system.o systemStore.o
+	sh test/fidelityMutants.sh
 
 # test/r1Mutants.sh is the same currency one layer UP: R1's caller half
 # (stage, re-present byte-identically, retire only on witnessing) lives
@@ -487,23 +565,27 @@ machine-mutants:
 r1-mutants:
 	sh test/r1Mutants.sh
 
-check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_system
+check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_systemStore test_system
 	./test_bracha87
 	./test_bkr94acs
 	./test_predicates
 	./test_bracha87_blackbox
 	./test_bkr94acs_blackbox
+	./test_systemStore
 	./test_system
 
 clean:
-	rm -f bracha87.o bkr94acs.o system.o
+	rm -f bracha87.o bkr94acs.o system.o systemStore.o
 	rm -f example_bracha87Fig1 example_bkr94acs example_system
-	rm -f test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_system test_system_invariant test_system_invariant_hrtwin test_system_seam test_system_seam_t0 test_system_seam_big
+	rm -f test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_systemStore test_system test_system_invariant test_system_invariant_hrtwin test_system_seam test_system_seam_t0 test_system_seam_big test_system_fidelity
 	rm -f test_system_seam_W_A4_PARTITION test_system_seam_W_A6_PIN0 test_system_seam_W_A6_PIN1 test_system_seam_W_A5_NOINFER test_system_seam_W_A9_SYBIL
 	rm -f test_system_seam_W_SERVE_CAP0 test_system_seam_W_SERVE_ROTDROP test_system_seam_W_SERVE_ROTOK test_system_seam_W_R2C_SILENT test_system_seam_W_REACH_WSHRINK test_system_seam_W_L2_NOBYTEMATCH test_system_seam_W_L2_NOREARM test_system_seam_W_I10_WRONGARTIFACT test_system_seam_W_L2_NOCLOSEVOID
 	rm -f test_system_seam_SCHED_LIFO test_system_seam_SCHED_FIFO test_system_seam_SCHED_STARVE1 test_system_seam_SCHED_KINDFLIP test_system_seam_ENUM1 test_system_seam_ENUM2
 	rm -rf machineMutants.d
+	rm -rf storeMutants.d
+	rm -rf seamMutants.d
 	rm -rf r1Mutants.d
+	rm -rf fidelityMutants.d
 
 # the .psu are dtc's intermediate output, left behind by `make rules`;
 # nothing reads them afterward, and removing them regenerates nothing

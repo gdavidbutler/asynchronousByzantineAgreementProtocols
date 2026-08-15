@@ -67,6 +67,8 @@ test_bracha87_blackbox
 test_bkr94acs
 test_bkr94acs_blackbox
 test_system
+test_systemStore
+test_system_fidelity
 test_system_invariant
 test_system_invariant_hrtwin
 test_system_seam

@@ -21,7 +21,7 @@
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L17;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L19:;
   if (instanceLive == 0)
     goto L20;
@@ -183,7 +183,7 @@ L68:;
   /* "R is the oldest retained round" = yes */
   goto L70;
 L17:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L19;
 L14:;
   /* "maintain the next round" = no */
@@ -192,7 +192,7 @@ L14:;
 L73:;
   if (budgetExceeded == 0)
     goto L74;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L76:;
   if (instanceLive == 0)
     goto L77;
@@ -211,7 +211,7 @@ L80:;
   /* "identity maintenance due" = no */
   goto L67;
 L74:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L76;
 L11:;
   /* "all n processes have evidenced possession of R" = no */
@@ -220,7 +220,7 @@ L11:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L86;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L89;
 L90:;
@@ -282,8 +282,8 @@ L104:;
   doRelease = 1;
   goto L70;
 L86:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L19;
 L83:;
@@ -293,7 +293,7 @@ L83:;
 L106:;
   if (budgetExceeded == 0)
     goto L107;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L110;
 L111:;
@@ -311,8 +311,8 @@ L113:;
   /* "identity maintenance due" = no */
   goto L103;
 L107:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L76;
 L8:;
@@ -329,7 +329,7 @@ L8:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L122;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L124:;
   if (instanceLive == 0)
     goto L125;
@@ -483,7 +483,7 @@ L173:;
   /* "R is the oldest retained round" = yes */
   goto L175;
 L122:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L124;
 L119:;
   /* "maintain the next round" = no */
@@ -492,7 +492,7 @@ L119:;
 L178:;
   if (budgetExceeded == 0)
     goto L179;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L181:;
   if (instanceLive == 0)
     goto L182;
@@ -511,7 +511,7 @@ L185:;
   /* "identity maintenance due" = no */
   goto L172;
 L179:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L181;
 L116:;
   /* "all n processes have evidenced possession of R" = no */
@@ -520,7 +520,7 @@ L116:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L191;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L194;
 L195:;
@@ -582,8 +582,8 @@ L209:;
   doRelease = 1;
   goto L175;
 L191:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L124;
 L188:;
@@ -593,7 +593,7 @@ L188:;
 L211:;
   if (budgetExceeded == 0)
     goto L212;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L215;
 L216:;
@@ -611,8 +611,8 @@ L218:;
   /* "identity maintenance due" = no */
   goto L208;
 L212:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L181;
 L5:;
@@ -630,7 +630,7 @@ L5:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L230;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L232:;
   if (instanceLive == 0)
     goto L233;
@@ -687,7 +687,7 @@ L248:;
   /* "R is the oldest retained round" = yes */
   goto L250;
 L230:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L232;
 L227:;
   /* "maintain the next round" = no */
@@ -696,7 +696,7 @@ L227:;
 L252:;
   if (budgetExceeded == 0)
     goto L253;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L255:;
   if (instanceLive == 0)
     goto L256;
@@ -711,7 +711,7 @@ L258:;
   /* "identity maintenance due" = no */
   goto L247;
 L253:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L255;
 L224:;
   /* "all n processes have evidenced possession of R" = no */
@@ -720,7 +720,7 @@ L224:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L264;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L267;
   goto L90;
@@ -758,8 +758,8 @@ L275:;
   doRelease = 1;
   goto L250;
 L264:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L232;
 L261:;
@@ -769,7 +769,7 @@ L261:;
 L277:;
   if (budgetExceeded == 0)
     goto L278;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L281;
   goto L111;
@@ -783,8 +783,8 @@ L283:;
   /* "identity maintenance due" = no */
   goto L274;
 L278:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L255;
 L221:;
@@ -801,7 +801,7 @@ L221:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L292;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L294:;
   if (instanceLive == 0)
     goto L295;
@@ -858,7 +858,7 @@ L310:;
   /* "R is the oldest retained round" = yes */
   goto L312;
 L292:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L294;
 L289:;
   /* "maintain the next round" = no */
@@ -867,7 +867,7 @@ L289:;
 L314:;
   if (budgetExceeded == 0)
     goto L315;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L317:;
   if (instanceLive == 0)
     goto L318;
@@ -882,7 +882,7 @@ L320:;
   /* "identity maintenance due" = no */
   goto L309;
 L315:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L317;
 L286:;
   /* "all n processes have evidenced possession of R" = no */
@@ -891,7 +891,7 @@ L286:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L326;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L329;
   goto L195;
@@ -929,8 +929,8 @@ L337:;
   doRelease = 1;
   goto L312;
 L326:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L294;
 L323:;
@@ -940,7 +940,7 @@ L323:;
 L339:;
   if (budgetExceeded == 0)
     goto L340;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L343;
   goto L216;
@@ -954,8 +954,8 @@ L345:;
   /* "identity maintenance due" = no */
   goto L336;
 L340:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L317;
 L2:;
@@ -976,7 +976,7 @@ L2:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L360;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L362:;
   if (instanceLive == 0)
     goto L363;
@@ -1037,7 +1037,7 @@ L369:;
   /* "R is the oldest retained round" = yes */
   goto L371;
 L360:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L362;
 L357:;
   /* "admit the next round" = no */
@@ -1053,7 +1053,7 @@ L354:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L384;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L387;
 L388:;
@@ -1089,8 +1089,8 @@ L393:;
   doRelease = 1;
   goto L371;
 L384:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L362;
 L381:;
@@ -1114,7 +1114,7 @@ L351:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L402;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L404:;
   if (instanceLive == 0)
     goto L405;
@@ -1175,7 +1175,7 @@ L411:;
   /* "R is the oldest retained round" = yes */
   goto L413;
 L402:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L404;
 L399:;
   /* "admit the next round" = no */
@@ -1191,7 +1191,7 @@ L396:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L426;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L429;
 L430:;
@@ -1227,8 +1227,8 @@ L435:;
   doRelease = 1;
   goto L413;
 L426:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L404;
 L423:;
@@ -1253,7 +1253,7 @@ L348:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L447;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L449:;
   if (instanceLive == 0)
     goto L450;
@@ -1293,7 +1293,7 @@ L455:;
   /* "R is the oldest retained round" = yes */
   goto L457;
 L447:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L449;
 L444:;
   /* "admit the next round" = no */
@@ -1309,7 +1309,7 @@ L441:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L466;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L469;
   goto L388;
@@ -1337,8 +1337,8 @@ L474:;
   doRelease = 1;
   goto L457;
 L466:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L449;
 L463:;
@@ -1362,7 +1362,7 @@ L438:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L483;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
 L485:;
   if (instanceLive == 0)
     goto L486;
@@ -1402,7 +1402,7 @@ L491:;
   /* "R is the oldest retained round" = yes */
   goto L493;
 L483:;
-  /* "retention budget exceeded" = no */
+  /* "recovery reach exhausted" = no */
   goto L485;
 L480:;
   /* "admit the next round" = no */
@@ -1418,7 +1418,7 @@ L477:;
   /* "own backlog drained" = yes */
   if (budgetExceeded == 0)
     goto L502;
-  /* "retention budget exceeded" = yes */
+  /* "recovery reach exhausted" = yes */
   if (instanceLive == 0)
     goto L505;
   goto L430;
@@ -1446,8 +1446,8 @@ L510:;
   doRelease = 1;
   goto L493;
 L502:;
+  /* "recovery reach exhausted" = no */
   /* "release R" = no */
-  /* "retention budget exceeded" = no */
   doRelease = 0;
   goto L485;
 L499:;

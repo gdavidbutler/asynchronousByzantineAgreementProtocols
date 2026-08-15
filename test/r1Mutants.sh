@@ -191,7 +191,8 @@ prep() {
 compile() {
   d=$Work/$1
   $CC $CFLAGS -I"$Root" -o "$d/example_system" "$d/system.c" \
-    "$Work/system.o" "$Work/bkr94acs.o" "$Work/bracha87.o" \
+    "$Work/system.o" "$Work/systemStore.o" "$Work/bkr94acs.o" \
+    "$Work/bracha87.o" \
     > "$d/build.log" 2>&1
   if [ $? -ne 0 ]; then
     echo "FATAL: $1 did not compile -- see $d/build.log" >&2
@@ -205,7 +206,7 @@ compile() {
 # ------------------------------------------------------------------
 # the clean machine objects, built once from the tree's own sources
 # ------------------------------------------------------------------
-for f in system bkr94acs bracha87; do
+for f in system systemStore bkr94acs bracha87; do
   $CC $CFLAGS -I"$Root" -c -o "$Work/$f.o" "$Root/$f.c" \
     > "$Work/$f.build.log" 2>&1
   if [ $? -ne 0 ]; then

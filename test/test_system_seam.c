@@ -145,11 +145,12 @@
  * all-accepted quiescence -- after which no traffic for the round
  * exists at all and every possession record freezes below n-t.
  *
- * Configuration: n=4, t=1, retained window 3, twelve rounds by default,
- * and every shape constant is -D overridable so one source drives the
- * three-point config sweep (2026-07-25, below).  Scenarios per seed --
- * which ones a configuration runs is decided at compile time by its own
- * fault budget (SWEEP_LAGGARD / SWEEP_STARVE / SWEEP_BYZ):
+ * Configuration: n=4, t=1, a reach of 3 retained rounds, twelve rounds
+ * by default, and every shape constant is -D overridable so one source
+ * drives the three-point config sweep (2026-07-25, below).  Scenarios
+ * per seed -- which ones a configuration runs is decided at compile
+ * time by its own fault budget (SWEEP_LAGGARD / SWEEP_STARVE /
+ * SWEEP_BYZ):
  *
  *   PLAIN    every process delivers; loss drives BPR retries, which
  *            are the tails.
@@ -298,6 +299,16 @@
  *                    scenario gave it teeth (16 failures at 4 seeds),
  *                    because a permanently held process accumulates
  *                    beyond-reach traffic that the discard then loses.
+ *                    THE TEETH ARE FIRING RATE, NOT GRADE (line-by-line
+ *                    read, 2026-08-14): measured at 16 seeds the arm
+ *                    reds 162 times and STARVE contributes 18 of them,
+ *                    but every one is still one of the two counters
+ *                    this entry opens by naming -- 144 overflow, 18
+ *                    held-consumption, no posture arm and no behavioral
+ *                    arm anywhere.  A scenario that makes a tripwire
+ *                    fire oftener has not made it a property.  The
+ *                    entry's first sentence is the status; read the
+ *                    upgrade as a count.
  *   M_SEAM_NOPEND    P (a classification that is NOT an accepted
  *                    strand), C's every-process quantifier, F and the
  *                    hold-overflow counter -- 11 failures at LAGGARD
@@ -309,13 +320,27 @@
  *                    REJECTED rather than excused.  SEED-DEPENDENT --
  *                    0 at 4 seeds, fires by 16; and STARVE cannot catch
  *                    it, because there the indications never arrive.
- *   M_SEAM_FREE      D's machine-consistency arm at every seed (the
- *                    trio-advances shape).  It does NOT trip the
- *                    ground-truth arm, correctly: with n-t processes
- *                    having really closed the prior round the advance
- *                    is permitted by R4 -- what the mutant bypasses is
- *                    the tolerance BUDGET, which only the signal sees.
- *                    The two D arms catch different things; keep both.
+ *   M_SEAM_FREE      ITS OWN TRIPWIRE, and NEITHER D ARM (corrected by
+ *                    the line-by-line read, 2026-08-14).  This entry
+ *                    used to read "D's machine-consistency arm at every
+ *                    seed", and the log agreed -- because the mutant
+ *                    incremented the very counter that arm asserts on.
+ *                    Two write sites fed one counter, one of them the
+ *                    mutation's, so a self-report was indistinguishable
+ *                    from D catching a machine/glue disagreement.  The
+ *                    mutant's site now has a counter and a check of its
+ *                    own ("tripwire: the glue launched without the
+ *                    machine's answer", compiled only under this
+ *                    mutant, so no baseline moves), and the honest
+ *                    picture is what was always true underneath: 144
+ *                    firings of the self-report, both D arms silent.
+ *                    It does NOT trip the ground-truth arm, correctly:
+ *                    with n-t processes having really closed the prior
+ *                    round the advance is permitted by R4 -- what the
+ *                    mutant bypasses is the tolerance BUDGET, which
+ *                    only the signal sees.  The two D arms catch
+ *                    different things; keep both, and keep this mutant
+ *                    for what it is.
  *   M_SEAM_UNBOUND   E and C.  Needs seeds: 3 firings of E in 32 runs
  *                    (16 seeds x 2 scenarios), none at 2 seeds.  A
  *                    stale round's composition is adopted as the
@@ -372,7 +397,7 @@
  * longer the lone weak kill -- STARVE gave it teeth.  The one class
  * that now fires NOWHERE is M_EXCH_NOASSEMBLE: it needs content to
  * land post-close while its round is still retained, and removing the
- * strand compressed exactly that window (verified 0 at 24 seeds and at
+ * strand compressed exactly that opening (verified 0 at 24 seeds and at
  * 0% and 15% loss; 25% loss is outside the instrument's envelope --
  * the CLEAN build fails there too, on rounds that never close).
  * DORMANT, RECORDED AS SUCH: it is a real red with no live case, and
@@ -644,7 +669,7 @@
  * THE CLASSIFICATION, corrected at the Fable verification pass
  * (2026-07-25, same day): NOT a spec countermodel -- A GLUE DEFECT THE
  * SPEC ALREADY FORBIDS.  The build report read L2's caller half as
- * covering only the COUNTING discipline and called the debt window
+ * covering only the COUNTING discipline and called the debt span
  * uncovered; system.md's Mechanization-status seam pin (C6) in fact
  * pins exactly this: the caller "treats a reset as voiding any
  * unconsumed ADOPT".  The first-cut glue re-armed the book on the
@@ -663,7 +688,7 @@
  * proof-testing charter's currency.  M_SEAM_NOVOID reinstates the
  * omission and is C6's MATCHED RED: 10 failures at 16 seeds, the
  * BYZ-MIXED E + fabrication arms, seeds 1, 4, 12, 14, 16 exactly.
- * It does NOT fire at 0% loss (the window needs a want, which needs a
+ * It does NOT fire at 0% loss (the opening needs a want, which needs a
  * straggler, which needs loss) and CANNOT fire on an honest schedule
  * (honest servers all serve one composition -- A1, L6 -- so only a
  * live equivocating server puts two candidates in flight for one
@@ -714,6 +739,58 @@
  * baseline's own failures (10 at 16 seeds, 4 at 4 seeds -- THE FINDING).
  * M_SEAM_WANT's kill now shows as quiescence rather than C at 4 seeds,
  * the scope having widened; it is a kill either way.
+ *
+ * RE-VERIFIED 2026-08-14 (the wider validation read), AND THE READ'S
+ * FINDING IS ABOUT THIS PARAGRAPH RATHER THAN ABOUT THE MUTANTS.  The
+ * inventory above was measured 2026-07-25 and then sat through THREE
+ * landings -- the step-2 and round-turn relocation, the round
+ * abstraction, the retention seam -- without being re-run once.  Each
+ * of those re-verified the three CONFIG baselines byte-exact and left
+ * the arm matrix alone, because a glue mutant's only repro was one
+ * hand-built binary.  That is how a true claim goes stale without
+ * anything being wrong: nothing could have said so.  `make
+ * seam-mutants` (test/seamMutants.sh) exists as of that read -- the
+ * matrix is a target, asserting per mutant that its DESIGNATED check
+ * fires and recording totals without asserting them, since totals move
+ * with any RNG-stream shift.
+ *
+ * WHAT THE RE-RUN MEASURED: all 22 fire, clean control 42804/0, 16
+ * minutes at 16 seeds.  THREE PROFILE DRIFTS, none a lost arm:
+ *   M_SEAM_UNBOUND   E fires 45 times.  The "3 firings of E in 32
+ *                    runs" above is not contradicted -- it predates
+ *                    STARVE and the six Byzantine scenarios, so the
+ *                    denominator is 144 runs now, not 32.
+ *   M_EXCH_NOASSEMBLE now fires at PLAIN as well as at BYZ-MIXED, so
+ *                    the DORMANT record above is doubly closed.
+ *   M_EXCH_MISCLASS  reds at PLAIN and nowhere else, where the note
+ *                    below says it needs a healing-laggard seed.
+ *                    Scenario relocation by RNG stream is this
+ *                    instrument's oldest known behaviour (the strand
+ *                    has relocated three times); the ARM is the claim
+ *                    and the arm holds.
+ * Several mutants also cut the run short of 42804 checks (DROP 4828,
+ * STALE 12287): a broken glue stalls and the checks after the stall
+ * never run, so a shortfall against the clean total is the stall, not
+ * an arm gone silent.
+ *
+ * THE PREMISE MATRIX BELOW WAS RE-RUN IN THE SAME READ, all 18 arms at
+ * 16 seeds.  Every control still green, every falsifying arm still red
+ * through its designated oracle, eleven arms EXACT.  Seven totals
+ * moved and are re-cited in the register:
+ *   W_A6_PIN0 12643 -> 12667/0        W_A6_PIN1 16095 -> 16094/0
+ *   W_A9_SYBIL 464 -> 362             W_SERVE_CAP0 211 -> 212
+ *   W_R2C_SILENT 12999 -> 12608/0     W_I10_WRONGARTIFACT 16 -> 14
+ *   W_L2_NOREARM 20 -> 18             W_L2_NOCLOSEVOID 53 -> 111
+ * A moved total can hide a moved CLAIM, and here it does not.  Both
+ * places this header states a DECOMPOSITION rather than a total, the
+ * decomposition held: W_A9_SYBIL's D ground-truth arm is 5 firings,
+ * exactly as recorded, with the 102-failure drop entirely in C and F;
+ * and W_SERVE_CAP0's 212 decomposes as the recorded B 16+16, C 128,
+ * P 16, F structural 16, hold-overflow 16 -- with B's beyond-reach arm
+ * at 4 rather than 3 -- and D, E, F's unsafe arm and H silent at every
+ * seed, as recorded.  The lesson the read draws is the one the M_*
+ * paragraph above draws: state the decomposition, not the total.  A
+ * total is a number that moves; a decomposition is the claim.
  *
  * ------------------------------------------------------------------
  * 2026-07-25 (stage 2): THE PREMISE-WITHDRAWAL MATRIX.
@@ -774,7 +851,7 @@
  *   THE PINS' RESULT, and it corrected the brief.  PLAIN and LAGGARD
  *   ABSORB EITHER PIN OUTRIGHT -- measured, at 16 seeds, both directions.
  *   The reason is one fact: the serve/adopt heal restores ALL-N
- *   possession before the window rolls off the round being served, so MET
+ *   possession before the reach rolls off the round being served, so MET
  *   carries every advance and the tolerance escape is never the only
  *   route.  PIN0 was briefed to wedge a LAGGARD run at the cut round; it
  *   does not (110 ticks, converged).  PIN1 was briefed to SHED the
@@ -783,9 +860,9 @@
  *   That is not the pins failing to read the input -- it is the w x T_p
  *   SIZING OBLIGATION system.md states ("w and T_p are not independent")
  *   observed from the other side: at w = 3, T_p = 400, n = 4 the heal
- *   always wins the race against the window, so R4's tolerance clause is
+ *   always wins the race against the reach, so R4's tolerance clause is
  *   SLACK for every fault these two scenarios manufacture.  Shedding a
- *   correct straggler needs the window sized UNDER the heal, which is the
+ *   correct straggler needs the reach sized UNDER the heal, which is the
  *   sizing obligation violated, not the gate misread.
  *
  *   THE ONE SHARP SCENARIO IS THE MUTE ARM, and it is why both pins run
@@ -889,7 +966,7 @@
  * unevidenced process, A5 for liveness outright, A9 for L5's release
  * safety and R4's floor.  Two results correct the brief and are recorded
  * as findings, not smoothed over: the A6 pins are ABSORBED by PLAIN and
- * LAGGARD (the heal outruns the window at this sizing), and A9's L2 half
+ * LAGGARD (the heal outruns the reach at this sizing), and A9's L2 half
  * is out of reach at t = 1.
  *
  * NOTHING ABOVE MOVED.  Every W_* construct is compiled out without its
@@ -1223,7 +1300,7 @@
  *                   two effects; the thin reading isolates the carrier.
  *
  *   W_REACH_WSHRINK the REACH proviso withdrawn BY CONFIGURATION: the
- *   CONTROL, and    window shrunk to its floor (WENC 0, w = 1, so one
+ *   CONTROL, and    reach shrunk to its floor (REACH 1, so one
  *   a SIZING        retained round) with the LAGGARD scenario.  THIS
  *   report          ARM'S OUTCOME IS THE ONE MOST LIKELY TO BE MISREAD
  *                   AS A BUG: a straggler that cannot be served because
@@ -1232,24 +1309,24 @@
  *                   obligation violated by configuration -- NOT an L1
  *                   red.  L1's own REACH proviso prices it.
  *                   BUILDING IT TOOK A CORRECTION.  At n = 4, t = 1,
- *                   w = 1 with no other fault the window NEVER BINDS:
+ *                   a reach of 1 with no other fault NEVER BINDS:
  *                   all-n release outruns it, so rounds leave by the
  *                   all-n path and eviction almost never fires (3 of 16
  *                   LAGGARD seeds at T_p = 400, and 0 of 4 at T_p = 25
  *                   and T_p = 6, where the heal is faster still).  A
- *                   window that never binds says nothing about REACH.
+ *                   reach that never binds says nothing about REACH.
  *                   The arm therefore runs the COMPOSED scenario -- a
  *                   WITHHOLDER beside the laggard, at n = 7, t = 2 --
  *                   because a withholder makes all-n possession
  *                   unreachable, which forces every close to evict and
- *                   makes the window the binding retention constraint.
+ *                   makes the reach the binding retention constraint.
  *                   RESULT 14073/0 at 16 seeds, 14 evictions, and ZERO
  *                   stalls or strands.  THE PREDICTION DID NOT HOLD:
- *                   even with the window at its floor and binding, the
+ *                   even with the reach at its floor and binding, the
  *                   serve/adopt heal completes within the single rung
  *                   the round is retained for.  The straggler is never
- *                   more than w rungs behind, because being served IS
- *                   what keeps it within one.  The eviction is asserted
+ *                   more than REACH rungs behind, because being served
+ *                   IS what keeps it within one.  The eviction is asserted
  *                   as coverage (the arm would be vacuous without it);
  *                   the strand is REPORTED, not required, because
  *                   asserting it would be asserting the prediction
@@ -1257,8 +1334,9 @@
  *                   pins -- which were absorbed for the same reason --
  *                   the two arms measure the same fact from opposite
  *                   sides: AT THIS SIZING THE HEAL WINS EVERY RACE
- *                   AGAINST THE WINDOW, and the REACH proviso is slack
- *                   at w = 1.  What would cross it is a heal made SLOW
+ *                   AGAINST THE REACH, and the REACH proviso is slack
+ *                   at REACH = 1.  What would cross it is a heal made
+ *                   SLOW
  *                   (loss high enough that a leg handshake outlasts a
  *                   rung), which is outside this instrument's envelope:
  *                   the CLEAN build fails at 25% loss on rounds that
@@ -1378,7 +1456,7 @@
  * fault budget, because O1's linkage bounds a solicitor to one duty and
  * because a merely-displaced correct wanter still completes on its own;
  * and the REACH proviso is slack at w = 1, because the heal wins the
- * race against the window at this sizing -- the same measurement the A6
+ * race against the reach at this sizing -- the same measurement the A6
  * pins took from the other side.
  *
  * THE REGISTER, mapped and NOT built (each of these is already covered
@@ -1426,7 +1504,7 @@
  * solicitor-max-1 measurement confirms it, and the honest disposition --
  * the rotation clause's load-bearing frame is the floor's two non-fault
  * grounds (stale-cursor re-offer, EXHAUSTED) this instrument cannot
- * reach -- is fairly stated.  WSHRINK's window was made to bind by the
+ * reach -- is fairly stated.  WSHRINK's reach was made to bind by the
  * withholder before the slack was measured, so the absorption is a
  * measurement, not vacuity.  Three spec observations queued to the
  * architect (rotation-clause frame; F6 confirmed by the machine-clean
@@ -1891,6 +1969,55 @@
 #include "bracha87.h"
 #include "bkr94acs.h"
 #include "system.h"
+#include "systemStore.h"
+
+/* ordinal-instantiation adapter: the machine takes rs-byte names; the
+ * seam's bookkeeping stays in ordinals */
+
+#define RS ((unsigned int)sizeof (unsigned long))
+
+static int
+ordCmp(
+  void *ctx
+ ,const unsigned char *a
+ ,const unsigned char *b
+){
+  unsigned long av;
+  unsigned long bv;
+  unsigned long d;
+
+  (void)ctx;
+  memcpy(&av, a, sizeof (av));
+  memcpy(&bv, b, sizeof (bv));
+  if (!(d = bv - av))
+    return (0);
+  return (d <= ((unsigned long)-1 >> 1) ? -1 : 1);
+}
+
+static unsigned char RnPool[16][sizeof (unsigned long)];
+static unsigned int RnI;
+
+static const unsigned char *
+rn(
+  unsigned long v
+){
+  unsigned char *p;
+
+  p = RnPool[RnI];
+  RnI = (RnI + 1) % (sizeof (RnPool) / sizeof (RnPool[0]));
+  memcpy(p, &v, sizeof (v));
+  return (p);
+}
+
+static unsigned long
+rv(
+  const unsigned char *p
+){
+  unsigned long v;
+
+  memcpy(&v, p, sizeof (v));
+  return (v);
+}
 
 /* ------------------------------------------------------------------ */
 /*  test plumbing                                                     */
@@ -1923,8 +2050,8 @@ static const char *CurTest = "<none>";
 #ifndef TVAL
 #define TVAL      1
 #endif
-#ifndef WENC
-#define WENC      2                 /* window encoding: actual 3 rounds */
+#ifndef REACH
+#define REACH     3                 /* the recovery reach: rounds retained */
 #endif
 #define VLENENC   1                 /* A-Cast value encoding: actual 2 bytes */
 #define VLENACT   (VLENENC + 1)
@@ -2069,7 +2196,7 @@ static const char *CurTest = "<none>";
                                      * absorb either pin outright (measured --
                                      * see the header): the serve/adopt heal
                                      * restores ALL-N possession before the
-                                     * window rolls, so MET carries every
+                                     * reach rolls, so MET carries every
                                      * advance and the tolerance escape is
                                      * never the only route.  A process that
                                      * emits nothing is never evidenced by
@@ -2121,14 +2248,14 @@ static const char *CurTest = "<none>";
 #define SWEEP_STARVE  0
 #undef  SWEEP_BYZ
 #define SWEEP_BYZ     5             /* the composed WITHHOLD + LAGGARD arm, and
-                                     * the composition is what makes the window
+                                     * the composition is what makes the reach
                                      * BIND: with a withholder present all-n
                                      * possession is unreachable, so no round
                                      * ever releases by the all-n path and every
                                      * close must evict.  Measured first without
                                      * it -- see the header: at w = 1 and no
                                      * withholder the all-n release outruns the
-                                     * window at every T_p tried, so the window
+                                     * reach at every T_p tried, so the reach
                                      * is not the binding retention constraint
                                      * and the arm would have gone vacuous.
                                      * Two faults, so n = 7, t = 2 */
@@ -2240,8 +2367,8 @@ static const char *CurTest = "<none>";
 #endif
 #endif
 
-#if defined(W_REACH_WSHRINK) && WENC != 0
-#error "W_REACH_WSHRINK withdraws the REACH proviso BY CONFIGURATION: build it with -DWENC=0 (w = 1)"
+#if defined(W_REACH_WSHRINK) && REACH != 1
+#error "W_REACH_WSHRINK withdraws the REACH proviso BY CONFIGURATION: build it with -DREACH=1"
 #endif
 
 /* THE ARM'S OWN VICTIM.  Where an arm PREDICTS that one process is lost --
@@ -2696,6 +2823,11 @@ struct exch {
 
 struct proc {
   struct system *sys;
+  struct systemStore *store;         /* this seat's retention store: the
+                                      * retained rounds and their records
+                                      * are the CALLER's (system.h, the
+                                      * retention operations), so the glue
+                                      * under test supplies them */
   struct bkr94acs *acs[ROUNDS];      /* one per launched round, freed on release */
   struct leg legs[LEGCAP];           /* recovery legs, freed on retire */
   struct exch exchs[EXCHCAP];        /* exchange instances, freed on round release */
@@ -2714,7 +2846,10 @@ struct proc {
   unsigned char adoptPending;        /* ADOPT output, close still owed */
   unsigned char tolElapsed;          /* this tick's R4 escape input */
   unsigned char self;
-  unsigned char serveCursor;
+  unsigned char serveCursor[sizeof (unsigned long) + 1];
+                                     /* systemCursorSz(RS): a round NAME plus
+                                      * its in-use byte, so the rotation is
+                                      * positioned in the round order itself */
   unsigned char tolFrontier;
   unsigned char retryCursor;         /* which round's instance retries this tick */
   unsigned char partitioned;         /* glue-level classification (the three states):
@@ -2794,6 +2929,11 @@ struct stats {
   unsigned long blockedTicks;
   unsigned long launchWhileBlocked;
   unsigned long launchUnderShed;
+#ifdef M_SEAM_FREE
+  unsigned long launchRogue;         /* M_SEAM_FREE's OWN self-report, kept
+                                      * apart from D's arms so the log says
+                                      * which one caught the mutant */
+#endif
   unsigned long closeNoAdvance;
   unsigned long releaseUnsafe;
   unsigned long compMismatch;
@@ -3159,10 +3299,11 @@ sysClose(
  ,const unsigned char *comp
 ){
   struct systemAct sa[SYSTEM_MAX_ACTS];
-  unsigned char before, arg;
-  unsigned int n, live;
+  unsigned char saName[SYSTEM_MAX_ACTS][sizeof (unsigned long)];
+  unsigned long before, arg;
+  unsigned int n, live, sni;
 
-  before = systemFrontier(p->sys);
+  before = rv(systemFrontier(p->sys));
 #ifdef M_SEAM_STALE
   /* the superseded round: after a relaunch the glue closes with the
    * round the stale instance was running, not the frontier */
@@ -3183,14 +3324,24 @@ sysClose(
         p->preHave[round][mm >> 3] |= (unsigned char)(1 << (mm & 7));
   }
   live = systemLive(p->sys);
-  n = systemComplete(p->sys, arg, round < ROUNDS ? p->preHave[round] : 0, sa);
-  if (systemFrontier(p->sys) == before) {
+  n = systemComplete(p->sys, rn(arg), rn(arg + 1),
+                     round < ROUNDS ? p->preHave[round] : 0, sa);
+  if (rv(systemFrontier(p->sys)) == before) {
     /* a close refused with an instance live is the round argument
      * being rejected -- the property H is about.  With nothing live
      * the call is documented inert and says nothing. */
     if (live)
       ++r->st.closeNoAdvance;
     return;
+  }
+  /* consume the borrows NOW: an act's round name lives in machine
+   * storage only until the next call into the library (system.h),
+   * and the pendF re-present below calls back in before these acts
+   * are applied -- under the old ordinal API the round was a copied
+   * value and this ordering was harmless */
+  for (sni = 0; sni < n && sni < SYSTEM_MAX_ACTS; ++sni) {
+    memcpy(saName[sni], sa[sni].round, RS);
+    sa[sni].round = saName[sni];
   }
 #ifndef W_L2_NOCLOSEVOID
   p->adoptPending = 0;
@@ -3273,9 +3424,9 @@ sysClose(
       if (pj == p->self || !p->pendInd[round][pj])
         continue;
       p->pendInd[round][pj] = 0;
-      if (!systemRetained(p->sys, round))
+      if (!systemRetained(p->sys, rn(round)))
         break;                     /* released underneath us */
-      pn = systemPossessed(p->sys, round, (unsigned char)pj, pa);
+      pn = systemPossessed(p->sys, rn(round), (unsigned char)pj, pa);
       applySysActs(r, p, pa, pn, 0, 0);
     }
   }
@@ -3293,7 +3444,7 @@ sysClose(
 #endif
   p->tolCount = 0;
   /* a release out of the completion path is eviction-class -- the
-   * window's oldest, or the round-space wrap boundary -- never the
+   * retained set's oldest, or the round-space wrap boundary -- never the
    * all-n release that release safety speaks about */
   applySysActs(r, p, sa, n, 0, 1);
 }
@@ -3321,25 +3472,25 @@ applySysActs(
     case SYSTEM_ACT_DELIVER:
       if (!w || w->kind != WK_ACS)
         break;
-      if (sa[i].round != systemFrontier(p->sys))
+      if (rv(sa[i].round) != rv(systemFrontier(p->sys)))
         ++r->st.tailsDelivered;
-      if (!p->acs[sa[i].round])
+      if (!p->acs[rv(sa[i].round)])
         break;
       if (w->cls == BKR94ACS_CLS_ACAST) {
-        m = bkr94acsAcastInput(p->acs[sa[i].round], w->process, w->type,
+        m = bkr94acsAcastInput(p->acs[rv(sa[i].round)], w->process, w->type,
                                w->from, w->value, out);
         if (w->accepted)
-          bkr94acsAcastAccepted(p->acs[sa[i].round], w->process, w->from);
+          bkr94acsAcastAccepted(p->acs[rv(sa[i].round)], w->process, w->from);
       } else {
-        m = bkr94acsBaInput(p->acs[sa[i].round], w->process, w->baRound,
+        m = bkr94acsBaInput(p->acs[rv(sa[i].round)], w->process, w->baRound,
                             w->initiator, w->type, w->from, w->baValue, out);
         if (w->accepted)
-          bkr94acsBaAccepted(p->acs[sa[i].round], w->process, w->baRound,
+          bkr94acsBaAccepted(p->acs[rv(sa[i].round)], w->process, w->baRound,
                              w->initiator, w->from);
       }
       if (m)
         p->activeThisTick = 1;         /* a fresh cascade -- dedup returns 0 */
-      emitAcs(r, p, sa[i].round, out, m);
+      emitAcs(r, p, rv(sa[i].round), out, m);
       /* the sweep-side decisions at zero tolerance budget -- the eager
        * tempo, preserved so this instrument's records stay comparable;
        * a WAN-grade budget belongs on the sweep.  Turns first (only a
@@ -3353,23 +3504,23 @@ applySysActs(
         unsigned int j;
 
         for (j = 0; j < NACT; ++j)
-          while ((m = bkr94acsTurn(p->acs[sa[i].round], (unsigned char)j,
+          while ((m = bkr94acsTurn(p->acs[rv(sa[i].round)], (unsigned char)j,
                                    1, out)) > 0) {
             p->activeThisTick = 1;
-            emitAcs(r, p, sa[i].round, out, m);
+            emitAcs(r, p, rv(sa[i].round), out, m);
           }
       }
-      m = bkr94acsFanout(p->acs[sa[i].round], out);
+      m = bkr94acsFanout(p->acs[rv(sa[i].round)], out);
       if (m)
         p->activeThisTick = 1;
-      emitAcs(r, p, sa[i].round, out, m);
+      emitAcs(r, p, rv(sa[i].round), out, m);
       break;
 
     case SYSTEM_ACT_SERVE:
       /* each still-owed process gets a recovery leg -- a two-process Fig1
        * (this server the initiator, t = 0) whose INITIAL carries the
        * composition; BPR rides the instance */
-      if (sa[i].round >= ROUNDS || !p->closed[sa[i].round])
+      if (rv(sa[i].round) >= ROUNDS || !p->closed[rv(sa[i].round)])
         break;
 #ifdef W_SERVEWALK
       /* the bounded serve walk in procTick is the SOLE discharge under the
@@ -3382,28 +3533,28 @@ applySysActs(
         for (j = 0; j < NACT; ++j) {
           if (j == p->self || !sa[i].want || !SYSTEM_TST(sa[i].want, j))
             continue;
-          legBirthServer(r, p, (unsigned char)j, sa[i].round);
+          legBirthServer(r, p, (unsigned char)j, rv(sa[i].round));
         }
       }
 #endif
       break;
 
     case SYSTEM_ACT_RELEASE:
-      if (sa[i].round < ROUNDS) {
+      if (rv(sa[i].round) < ROUNDS) {
         if (structural) {
-          p->released[sa[i].round] = 2;
+          p->released[rv(sa[i].round)] = 2;
           ++r->st.releasesStructural;
         } else {
-          p->released[sa[i].round] = 1;
+          p->released[rv(sa[i].round)] = 1;
           ++r->st.releasesAllN;
-          if (r->st.closedGlobal[sa[i].round] < NCORRECT(r))
+          if (r->st.closedGlobal[rv(sa[i].round)] < NCORRECT(r))
             ++r->st.releaseUnsafe;
         }
-        if (p->acs[sa[i].round]) {
-          free(p->acs[sa[i].round]);
-          p->acs[sa[i].round] = 0;
+        if (p->acs[rv(sa[i].round)]) {
+          free(p->acs[rv(sa[i].round)]);
+          p->acs[rv(sa[i].round)] = 0;
         }
-        legReleaseRound(p, sa[i].round);
+        legReleaseRound(p, rv(sa[i].round));
       }
       break;
 
@@ -3426,11 +3577,11 @@ applySysActs(
        * the launch gated on: no advance may outrun SHEDFLOOR correct
        * processes having actually closed the prior round.  A liar's own
        * advance is not the cohort's, so it is not read at all. */
-      if (sa[i].round
+      if (rv(sa[i].round)
        && !BYZSELF(r, p->self)
-       && r->st.closedGlobal[sa[i].round - 1] < SHEDFLOOR(r))
+       && r->st.closedGlobal[rv(sa[i].round) - 1] < SHEDFLOOR(r))
         ++r->st.launchUnderShed;
-      launchRound(r, p, sa[i].round);
+      launchRound(r, p, rv(sa[i].round));
       break;
 
     default:
@@ -3566,7 +3717,7 @@ legAccept(
   unsigned char val[COMPLEN];
   unsigned char selfIdx;
   unsigned char srv;
-  unsigned char f;
+  unsigned long f;
   unsigned int n;
 
   selfIdx = (unsigned char)(p->self == lg->server ? 0 : 1);
@@ -3588,7 +3739,7 @@ legAccept(
    && r->st.compRefSet[lg->round]
    && memcmp(val, r->st.compRef[lg->round], COMPLEN))
     ++r->st.byzFabServed;
-  f = systemFrontier(p->sys);
+  f = rv(systemFrontier(p->sys));
   /* the SERVER of the served fact -- A9 again, on the O3 witness plane
    * this time: the distinct-server count L2 consumes is only as good as
    * the attribution that names each server. */
@@ -3614,7 +3765,7 @@ legAccept(
   if (lg->round != f)
     ++r->st.witnessUnbound;
   ++r->st.witnessFed;
-  n = systemWitness(p->sys, f, srv, sa);
+  n = systemWitness(p->sys, rn(f), srv, sa);
   applySysActs(r, p, sa, n, 0, 0);
 #else
   if (lg->round == f) {
@@ -3657,13 +3808,13 @@ legAccept(
     }
 #endif
     ++r->st.witnessFed;
-    n = systemWitness(p->sys, f, srv, sa);
+    n = systemWitness(p->sys, rn(f), srv, sa);
     applySysActs(r, p, sa, n, 0, 0);
   }
 #endif
   /* the served evidences its server's possession of the round; kept last
    * so a release it might provoke cannot free the leg under our feet */
-  n = systemPossessed(p->sys, lg->round, srv, sa);
+  n = systemPossessed(p->sys, rn(lg->round), srv, sa);
   applySysActs(r, p, sa, n, 0, 0);
 }
 
@@ -3872,7 +4023,7 @@ exchDeliver(
   /* post-close: an in-subset member's content is late assembly */
   if (!p->comp[ex->round][ANCHOR + ex->member])
     return;                                          /* not in the subset */
-  if (!systemRetained(p->sys, ex->round))
+  if (!systemRetained(p->sys, rn(ex->round)))
     return;   /* the round already released -- content assembly is now the
                * O2 out-of-band tail; ground truth holds it, the machine
                * cannot be told (no have grain for a released round) */
@@ -3881,7 +4032,7 @@ exchDeliver(
   /* post-close accepts NOT fed to systemAssembled -- WRONG: the machine
    * have grain goes stale while the content is really in hand */
 #else
-  systemAssembled(p->sys, ex->round, ex->member);
+  systemAssembled(p->sys, rn(ex->round), ex->member);
   p->haveTold[ex->round][ex->member] = 1;
 #endif
 }
@@ -3942,11 +4093,12 @@ deliverWire(
 ){
   struct systemAct sa[SYSTEM_MAX_ACTS];
   struct proc *p;
-  unsigned char f, ab, evFrom;
+  unsigned long f;
+  unsigned char ab, evFrom;
   unsigned int i, n, delivered;
 
   p = &r->p[w->to];
-  f = systemFrontier(p->sys);
+  f = rv(systemFrontier(p->sys));
   ab = aheadBy(w->sysRound, f);
   /* THE SENDER OF THE EVIDENCE.  A9 says the caller passes the act's TRUE
    * author here; without a withdrawal arm that is w->from and nothing
@@ -4131,13 +4283,13 @@ deliverWire(
   }
 #endif
 #if defined(M_SEAM_WANT)
-  n = systemReceived(p->sys, w->sysRound, evFrom, 0, sa);
+  n = systemReceived(p->sys, rn(w->sysRound), evFrom, 0, 0, sa);
 #elif defined(M_SEAM_OVERCLAIM)
   /* the opposite error to M_SEAM_WANT: possession claimed for a
    * sender that indicated none */
-  n = systemReceived(p->sys, w->sysRound, evFrom, 1, sa);
+  n = systemReceived(p->sys, rn(w->sysRound), evFrom, 1, 0, sa);
 #else
-  n = systemReceived(p->sys, w->sysRound, evFrom, w->possesses, sa);
+  n = systemReceived(p->sys, rn(w->sysRound), evFrom, w->possesses, 0, sa);
 #endif
   delivered = 0;
   for (i = 0; i < n; ++i)
@@ -4152,9 +4304,9 @@ deliverWire(
 #if !defined(M_SEAM_WANT) && !defined(W_A5_NOINFER)
   for (i = 0; i < ROUNDS; ++i) {
     if (aheadBy((unsigned char)i, w->sysRound) < 128
-     || !systemRetained(p->sys, (unsigned char)i))
+     || !systemRetained(p->sys, rn((unsigned char)i)))
       continue;
-    n = systemPossessed(p->sys, (unsigned char)i, evFrom, sa);
+    n = systemPossessed(p->sys, rn((unsigned char)i), evFrom, sa);
     applySysActs(r, p, sa, n, 0, 0);
   }
 #endif
@@ -4176,13 +4328,13 @@ deliverWire(
   if (w->possesses && w->sysRound < ROUNDS && evFrom < NACT) {
     p->indArrived[w->sysRound][evFrom] = 1;
 #ifndef M_SEAM_NOPEND
-    if (systemRetained(p->sys, w->sysRound)) {
+    if (systemRetained(p->sys, rn(w->sysRound))) {
       struct systemAct pa[SYSTEM_MAX_ACTS];
       unsigned int pn;
 
-      pn = systemPossessed(p->sys, w->sysRound, evFrom, pa);
+      pn = systemPossessed(p->sys, rn(w->sysRound), evFrom, pa);
       applySysActs(r, p, pa, pn, 0, 0);
-    } else if (w->sysRound == systemFrontier(p->sys))
+    } else if (w->sysRound == rv(systemFrontier(p->sys)))
       p->pendInd[w->sysRound][evFrom] = 1;
 #endif
   }
@@ -4211,7 +4363,7 @@ refeedHeld(
   memcpy(snap, p->hold, cnt * sizeof (snap[0]));
   p->held = 0;
   for (i = 0; i < cnt; ++i) {
-    ab = aheadBy(snap[i].sysRound, systemFrontier(p->sys));
+    ab = aheadBy(snap[i].sysRound, rv(systemFrontier(p->sys)));
     if ((ab && ab < 128) || (!ab && !systemLive(p->sys))) {
       holdWire(r, p, &snap[i]);
       continue;
@@ -4232,12 +4384,12 @@ procTick(
 ){
   struct systemAct sa[SYSTEM_MAX_ACTS];
   struct bkr94acsAct out[BKR94ACS_RETRY_MAX_ACTS];
-  unsigned char f;
+  unsigned long f;
   unsigned int duty, tolElapsed, blocked, n, i;
 
   refeedHeld(r, p);
 
-  f = systemFrontier(p->sys);
+  f = rv(systemFrontier(p->sys));
   if (p->tolFrontier != f) {
     p->tolFrontier = f;
     p->tolCount = 0;
@@ -4283,15 +4435,23 @@ procTick(
     }
     if (systemLive(p->sys)) {
       p->adoptPending = 0;
-      sysClose(r, p, systemFrontier(p->sys), p->cand);
+      sysClose(r, p, rv(systemFrontier(p->sys)), p->cand);
     }
   }
 
 #ifdef M_SEAM_FREE
-  /* the glue launches on its own account, ignoring the answer */
+  /* the glue launches on its own account, ignoring the answer.
+   * THE COUNTER IS THIS MUTANT'S OWN, and separating it from D's arm is
+   * the point (the 2026-08-14 line-by-line read): the arm at the launch
+   * site above counts the MACHINE answering while the glue's independent
+   * duty read says withhold, which is a machine/glue disagreement worth
+   * a check.  Feeding this mutant's rogue launches into that same
+   * counter made the kill read as D catching the defect, when what
+   * caught it was the defect reporting itself.  A deployment glue that
+   * launched on its own account and kept no counter passes both. */
   if (!n && f < ROUNDS && !systemLive(p->sys)) {
     if (blocked)
-      ++r->st.launchWhileBlocked;
+      ++r->st.launchRogue;
     launchRound(r, p, f);
   }
 #endif
@@ -4365,7 +4525,7 @@ procTick(
   }
 
   /* the serve walk: one step per tick */
-  n = systemServe(p->sys, &p->serveCursor, sa);
+  n = systemServe(p->sys, p->serveCursor, sa);
   applySysActs(r, p, sa, n, 0, 0);
 
 #ifdef W_SERVEFLOOD
@@ -4428,10 +4588,10 @@ procTick(
 
       c2 = ch = 0;
       for (kk = 0; kk < ROUNDS; ++kk)
-        if (systemRetained(p->sys, (unsigned char)kk)) {
+        if (systemRetained(p->sys, rn((unsigned char)kk))) {
           const unsigned char *w2;
 
-          if (!(w2 = systemWant(p->sys, (unsigned char)kk)))
+          if (!(w2 = systemWant(p->sys, rn((unsigned char)kk))))
             continue;
           for (jl = 0; jl < NACT; ++jl)
             if (SYSTEM_TST(w2, jl)) {
@@ -4494,9 +4654,9 @@ procTick(
 #endif
       jj = d / ROUNDS;
       rd2 = (unsigned char)(d % ROUNDS);
-      if (jj == p->self || !p->closed[rd2] || !systemRetained(p->sys, rd2))
+      if (jj == p->self || !p->closed[rd2] || !systemRetained(p->sys, rn(rd2)))
         continue;
-      if (!(wnt = systemWant(p->sys, rd2)) || !SYSTEM_TST(wnt, jj))
+      if (!(wnt = systemWant(p->sys, rn(rd2))) || !SYSTEM_TST(wnt, jj))
         continue;
 #ifdef W_SERVE_NORESUME
       if (p->serveDropped[jj][rd2])
@@ -4538,9 +4698,9 @@ procTick(
 
         jj = k / ROUNDS;
         rd2 = (unsigned char)(k % ROUNDS);
-        if (jj == p->self || !p->closed[rd2] || !systemRetained(p->sys, rd2))
+        if (jj == p->self || !p->closed[rd2] || !systemRetained(p->sys, rn(rd2)))
           continue;
-        if (!(wnt = systemWant(p->sys, rd2)) || !SYSTEM_TST(wnt, jj))
+        if (!(wnt = systemWant(p->sys, rn(rd2))) || !SYSTEM_TST(wnt, jj))
           continue;
         if (p->granted2[jj][rd2])
           continue;                    /* served this tick; the want clears
@@ -4567,9 +4727,9 @@ procTick(
 
         jj = k / ROUNDS;
         rd2 = (unsigned char)(k % ROUNDS);
-        if (jj == p->self || !p->closed[rd2] || !systemRetained(p->sys, rd2))
+        if (jj == p->self || !p->closed[rd2] || !systemRetained(p->sys, rn(rd2)))
           continue;
-        if (!(wnt = systemWant(p->sys, rd2)) || !SYSTEM_TST(wnt, jj))
+        if (!(wnt = systemWant(p->sys, rn(rd2))) || !SYSTEM_TST(wnt, jj))
           continue;
         p->serveDropped[jj][rd2] = 1;
       }
@@ -4589,16 +4749,16 @@ procTick(
    * (frontier at ROUNDS) is not stranded and is exempt.  A classified
    * process keeps stepping; the flag alters nothing below it. */
   {
-    unsigned char f;
+    unsigned long f;
     unsigned int mass, rd, j;
 
-    f = systemFrontier(p->sys);
+    f = rv(systemFrontier(p->sys));
     mass = 0;
     for (rd = 0; rd < ROUNDS; ++rd)
-      if (systemRetained(p->sys, (unsigned char)rd)) {
+      if (systemRetained(p->sys, rn((unsigned char)rd))) {
         const unsigned char *pos;
 
-        pos = systemPossess(p->sys, (unsigned char)rd);
+        pos = systemPossess(p->sys, rn((unsigned char)rd));
         for (j = 0; j < NACT; ++j)
           if (pos && SYSTEM_TST(pos, j))
             ++mass;
@@ -4637,7 +4797,7 @@ injectStep(
   struct proc *p;
   unsigned char to;
   unsigned char forged;
-  unsigned char f;
+  unsigned long f;
   unsigned char rret;
   unsigned int site;
   unsigned int rr;
@@ -4648,12 +4808,12 @@ injectStep(
   to = (unsigned char)(injNext() % NACT);
   forged = (unsigned char)(injNext() % NACT);
   p = &r->p[to];
-  f = systemFrontier(p->sys);
+  f = rv(systemFrontier(p->sys));
   /* a retained round at the target makes the forged item effective under
    * the red (an inert call would falsely look like an absorbing site) */
   rret = f ? (unsigned char)(f - 1) : 0;
   for (rr = 0; rr < ROUNDS; ++rr)
-    if (systemRetained(p->sys, (unsigned char)rr)) {
+    if (systemRetained(p->sys, rn((unsigned char)rr))) {
       rret = (unsigned char)rr;
       break;
     }
@@ -4668,7 +4828,7 @@ injectStep(
     ++r->st.injSite[INJ_ATTRIB];
 #ifdef M_INJ_ATTRIB
     /* gate disabled: a forged-sender act is attributed and recorded */
-    (void)systemReceived(p->sys, rret, forged, 0, sa);
+    (void)systemReceived(p->sys, rn(rret), forged, 0, 0, sa);
 #endif
     break;
 
@@ -4676,7 +4836,7 @@ injectStep(
     ++r->st.injSite[INJ_WITNESS];
 #ifdef M_INJ_WITNESS
     /* gate disabled: an invalid served assertion counts as a witness */
-    (void)systemWitness(p->sys, f, forged, sa);
+    (void)systemWitness(p->sys, rn(f), forged, sa);
 #endif
     break;
 
@@ -4695,7 +4855,7 @@ injectStep(
     ++r->st.injSite[INJ_LEG];
 #ifdef M_INJ_LEG
     /* gate disabled: a forged-initiator leg's witness is delivered */
-    (void)systemWitness(p->sys, f, forged, sa);
+    (void)systemWitness(p->sys, rn(f), forged, sa);
 #endif
     break;
 
@@ -4712,7 +4872,7 @@ injectStep(
     ++r->st.injSite[INJ_POSSESS];
 #ifdef M_INJ_POSSESS
     /* gate disabled: a forged possession indication is recorded */
-    (void)systemPossessed(p->sys, rret, forged, sa);
+    (void)systemPossessed(p->sys, rn(rret), forged, sa);
 #endif
     break;
 
@@ -4722,32 +4882,55 @@ injectStep(
 }
 
 /* the oracle's fingerprint: every byte the injector must not be able to
- * move.  (a) struct system bytes, (b) the glue-side per-round artifacts
- * the machine holds only as bitmaps (adopted/completed composition, the
- * standing candidate, content tokens), (c) frontier + classification.
- * Injection counters and other metrics are NOT hashed -- excluded by
- * construction. */
+ * move.  (a) the seat's MACHINE-OWNED bytes, (b) THE RETAINED ROUNDS AND
+ * THEIR RECORDS, which are caller storage now, (c) the glue-side
+ * per-round artifacts the machine holds only as bitmaps
+ * (adopted/completed composition, the standing candidate, content
+ * tokens), (d) frontier + classification.  Injection counters and other
+ * metrics are NOT hashed -- excluded by construction.
+ *
+ * (a) starts at the seat's 'rs' field, not at its first byte: the head
+ * of struct system is the caller's own closure -- the comparator, the
+ * four retention operations and the ctx -- and the ctx is a malloc
+ * address, which differs between the injector-off and injector-on runs
+ * of the same leaf for reasons that have nothing to do with the
+ * machine.  Hashing it would make every comparison fail.
+ * (b) is the reason this is not just a rename: the retained set is
+ * state the machine DIRECTS but no longer HOLDS, so an oracle over the
+ * seat alone would go blind to a gated item changing what is retained.
+ * systemStoreState hands back the live entries in the comparator's
+ * order, with no freed residue, so equal retained sets hash equal. */
 static unsigned long
 stateHash(
   struct run *r
 ){
   unsigned long h;
   unsigned long sz;
+  unsigned long slen;
   unsigned int i;
   unsigned int k;
 
   h = 2166136261UL;
-  sz = systemSz(NENC, WENC);
+  sz = systemSz(NENC, RS)
+   - ((const unsigned char *)&r->p[0].sys->rs
+      - (const unsigned char *)r->p[0].sys);
   for (i = 0; i < NACT; ++i) {
     struct proc *p;
     const unsigned char *b;
 
     p = &r->p[i];
-    b = (const unsigned char *)p->sys;
+    b = (const unsigned char *)&p->sys->rs;
     for (k = 0; k < sz; ++k) {
       h ^= b[k];
       h = (h * 16777619UL) & 0xFFFFFFFFUL;
     }
+    b = systemStoreState(p->store, &slen);
+    for (k = 0; k < slen; ++k) {
+      h ^= b[k];
+      h = (h * 16777619UL) & 0xFFFFFFFFUL;
+    }
+    h ^= slen;
+    h = (h * 16777619UL) & 0xFFFFFFFFUL;
     b = &p->comp[0][0];
     for (k = 0; k < ROUNDS * COMPLEN; ++k) {
       h ^= b[k];
@@ -4764,7 +4947,7 @@ stateHash(
     }
     h ^= p->candValid;
     h = (h * 16777619UL) & 0xFFFFFFFFUL;
-    h ^= systemFrontier(p->sys);
+    h ^= rv(systemFrontier(p->sys));
     h = (h * 16777619UL) & 0xFFFFFFFFUL;
     h ^= p->partitioned;
     h = (h * 16777619UL) & 0xFFFFFFFFUL;
@@ -4820,13 +5003,22 @@ runSeam(
                                       * the identical prefix */
 #endif
 
-  sz = systemSz(NENC, WENC);
+  sz = systemSz(NENC, RS);
   for (i = 0; i < NACT; ++i) {
-    if (!(r->p[i].sys = calloc(1, sz))) {
+    if (!(r->p[i].sys = calloc(1, sz))
+     || !(r->p[i].store = calloc(1, systemStoreSz(NENC, RS, REACH)))) {
       fprintf(stderr, "FATAL [%s]: out of memory\n", CurTest);
       abort();
     }
-    systemInit(r->p[i].sys, NENC, TVAL, WENC, (unsigned char)i);
+    /* the store IS the ctx systemInit hands to the comparator and to
+     * the four operations, and systemStoreCmp forwards to ordCmp
+     * (systemStore.h, the closure carries the comparator); REACH is
+     * where the deployment's reach binds, which is what makes the
+     * W_REACH_WSHRINK arm a CONFIGURATION withdrawal */
+    systemStoreInit(r->p[i].store, NENC, RS, REACH, ordCmp, 0);
+    systemInit(r->p[i].sys, NENC, TVAL, (unsigned char)i, RS, rn(0),
+               systemStoreCmp, systemStoreRecords, systemStoreRetain,
+               systemStoreRelease, systemStoreAfter, r->p[i].store);
     r->p[i].self = (unsigned char)i;
   }
 
@@ -4869,7 +5061,7 @@ runSeam(
         continue;
       if (r->p[i].partitioned)
         continue;
-      if (systemFrontier(r->p[i].sys) < ROUNDS) {
+      if (rv(systemFrontier(r->p[i].sys)) < ROUNDS) {
         done = 0;
         break;
       }
@@ -4894,9 +5086,9 @@ runSeam(
             }
         if (!done)
           break;
-        if (!systemRetained(r->p[i].sys, (unsigned char)rd))
+        if (!systemRetained(r->p[i].sys, rn((unsigned char)rd)))
           continue;
-        wnt = systemWant(r->p[i].sys, (unsigned char)rd);
+        wnt = systemWant(r->p[i].sys, rn((unsigned char)rd));
         for (j = 0; j < NACT; ++j)
           if (wnt && SYSTEM_TST(wnt, j) && !r->p[j].partitioned
            && !BYZSELF(r, j)) {
@@ -4925,14 +5117,14 @@ runSeam(
    * evidential.  A classified process that LACKS that round is a starved
    * heal, stays in the quantifiers, and its checks fire. */
   for (i = 0; i < NACT; ++i) {
-    unsigned char f;
+    unsigned long f;
     unsigned int rd;
 
     /* the liar's own posture is not the cohort's: it never counts as a
      * classification and never earns the strand exclusion */
     r->st.classified[i] = (unsigned char)(r->p[i].partitioned
                                        && !BYZSELF(r, i));
-    f = systemFrontier(r->p[i].sys);
+    f = rv(systemFrontier(r->p[i].sys));
     r->st.clFrontier[i] = f;
     for (rd = 0; rd < ROUNDS; ++rd) {
       unsigned int mm;
@@ -4957,7 +5149,7 @@ runSeam(
 
       unbanked = 0;
       if (f > 0 && (unsigned int)(f - 1) < ROUNDS
-       && (poss = systemPossess(r->p[i].sys, (unsigned char)(f - 1))))
+       && (poss = systemPossess(r->p[i].sys, rn((unsigned char)(f - 1)))))
         for (mm = 0; mm < NACT; ++mm)
           if (mm != i && r->p[i].indArrived[f - 1][mm]
            && !SYSTEM_TST(poss, mm))
@@ -5010,7 +5202,7 @@ runSeam(
 
       fprintf(stderr, "  STALL p%u frontier %3u live %u owed %u duty %u"
                       " held %4u cand %u retained",
-              i, (unsigned int)systemFrontier(r->p[i].sys),
+              i, (unsigned int)rv(systemFrontier(r->p[i].sys)),
               systemLive(r->p[i].sys), systemOwed(r->p[i].sys),
               systemDuty(r->p[i].sys), r->p[i].held,
               (unsigned int)r->p[i].candValid);
@@ -5019,10 +5211,10 @@ runSeam(
         const unsigned char *wnt;
         unsigned int j;
 
-        if (!systemRetained(r->p[i].sys, (unsigned char)rd))
+        if (!systemRetained(r->p[i].sys, rn((unsigned char)rd)))
           continue;
-        pos = systemPossess(r->p[i].sys, (unsigned char)rd);
-        wnt = systemWant(r->p[i].sys, (unsigned char)rd);
+        pos = systemPossess(r->p[i].sys, rn((unsigned char)rd));
+        wnt = systemWant(r->p[i].sys, rn((unsigned char)rd));
         fprintf(stderr, " r%u[pos", rd);
         for (j = 0; j < NACT; ++j)
           if (pos && SYSTEM_TST(pos, j))
@@ -5056,6 +5248,8 @@ runSeam(
         r->p[i].exchs[rd].f1 = 0;
         r->p[i].exchs[rd].inUse = 0;
       }
+    free(r->p[i].store);
+    r->p[i].store = 0;
     free(r->p[i].sys);
     r->p[i].sys = 0;
   }
@@ -5244,7 +5438,7 @@ assertRun(
   CHECK(s->converged, "run reached quiescence");
 #endif
 #ifdef W_REACH_WSHRINK
-  /* THE SIZING BOUNDARY, BANKED RATHER THAN ASSERTED.  At w = 1 the window
+  /* THE SIZING BOUNDARY, BANKED RATHER THAN ASSERTED.  At a reach of 1 the
    * holds one round, so a straggler more than one rung behind would be
    * served by nobody -- system.md's REACH proviso violated BY CONFIGURATION,
    * which is the "w and T_p are not independent" sizing obligation and NOT
@@ -5290,7 +5484,7 @@ assertRun(
     }
 #endif
     /* W_A6_PIN1 predicts the heal is OUTRUN -- a tolerance that never
-     * funds the tail lets the cohort roll the window off the round the
+     * funds the tail lets the cohort roll the reach off the round the
      * straggler is being served, so the adoption arm is the arm's own
      * prediction inverted and is not asserted there.  The serve arm
      * holds regardless: want evidence is born whether or not it lands --
@@ -5340,6 +5534,18 @@ assertRun(
    * second is a machine-consistency arm only. */
   CHECK(s->launchUnderShed == 0, "D: no advance outran n-t processes closing the prior round");
   CHECK(s->launchWhileBlocked == 0, "D: no launch taken while the advance signal withholds");
+#ifdef M_SEAM_FREE
+  /* THE MUTANT'S OWN TRIPWIRE, compiled nowhere else, so no baseline
+   * moves.  It is labelled for what it is: M_SEAM_FREE is caught by its
+   * own self-report and by nothing else -- neither D arm falls, and the
+   * header says why (with n-t real closes behind it the advance is
+   * permitted by R4; what the mutant bypasses is the tolerance BUDGET,
+   * which only the signal sees).  An arm that fires because the defect
+   * announced itself is worth having and worth NOT miscounting as the
+   * check that would have caught a silent one. */
+  CHECK(s->launchRogue == 0,
+        "tripwire: the glue launched without the machine's answer");
+#endif
   /* The vacuity arm is LAGGARD-only.  With premature indications held
    * and re-presented, a PLAIN run at zero loss fills its possession
    * records fast enough that R4 never has to withhold at all -- an
@@ -5353,21 +5559,21 @@ assertRun(
   /* F -- release safety.  The unsafe arm (an all-n release for a round a
    * process had not closed) stays strict -- it is a safety property no
    * posture excuses.  The structural arm (no eviction / wrap) is the
-   * "window sized past it" claim, which holds only WITHOUT a strand:
+   * "reach sized past it" claim, which holds only WITHOUT a strand:
    * once a correct process is stranded, the rounds it never possesses
    * can never reach all-n release, so the healthy processes MUST evict
-   * them as the window advances.  With an accepted strand present, that
+   * them as the frontier advances.  With an accepted strand present, that
    * eviction is expected, not a defect. */
   CHECK(s->releaseUnsafe == 0, "F: no all-n release of a round a process had not closed");
   /* the same carve-out, third shape: a lost process's rounds can never
    * reach all-n either, so under W_A4_PARTITION and W_A6_PIN1 the healthy
    * cohort MUST evict.  The unsafe arm above stays strict in every build --
    * no posture and no withdrawal excuses a safety property. */
-/* W_REACH_WSHRINK is the third: it turns the window DOWN to one round, so
+/* W_REACH_WSHRINK is the third: it turns the reach DOWN to one round, so
  * eviction is the configuration, not a defect -- asserted positively above. */
 #if !defined(W_A4_PARTITION) && !defined(W_A6_PIN1) && !defined(W_REACH_WSHRINK)
   if (!s->numAccepted && r->byzProc < 0 && !WSTARVED(r))
-    CHECK(s->releasesStructural == 0, "F: no eviction or wrap release (window sized past it)");
+    CHECK(s->releasesStructural == 0, "F: no eviction or wrap release (reach sized past it)");
 #endif
 
   /* G -- round binding.  TRIPWIRE, not a check: the counter moves only
@@ -5677,7 +5883,7 @@ main(
         printf("ENUM n=%u t=%u w=%u rounds=%u drop=%u tailSeed=%lu"
                " depth=%u\n",
                (unsigned int)NACT, (unsigned int)TVAL,
-               (unsigned int)(WENC + 1), (unsigned int)ROUNDS, drp,
+               (unsigned int)REACH, (unsigned int)ROUNDS, drp,
                tailSeed, (unsigned int)ENUMDEPTH);
         printf("ENUM deliveries in the leftmost run %lu; branch factors",
                EnumPops);
@@ -5807,11 +6013,11 @@ main(
     runScenario(&R, name, seed, drop < 0 ? 4 : (unsigned int)drop,
                 LAGPROC, LAGROUND, -1, BYZPROC, BYZ_WANT_FLOOD, 1);
 #elif SWEEP_BYZ == 5
-    /* THE ONE SCENARIO A SHRUNKEN WINDOW IS ABOUT.  The withholder keeps
+    /* THE ONE SCENARIO A SHRUNKEN REACH IS ABOUT.  The withholder keeps
      * all-n possession unreachable, so nothing releases by the all-n path
-     * and every close must EVICT -- which is what makes the window the
+     * and every close must EVICT -- which is what makes the reach the
      * binding retention constraint instead of a bound nothing reaches.  The
-     * laggard is then the straggler the window rolls away from. */
+     * laggard is then the straggler the reach rolls away from. */
     sprintf(name, "WITHHOLD+LAG seed %lu", seed);
     runScenario(&R, name, seed, drop < 0 ? 4 : (unsigned int)drop,
                 LAGPROC, LAGROUND, -1, BYZPROC, BYZ_WITHHOLD, 1);
@@ -5862,14 +6068,14 @@ main(
         "W_R2C_SILENT: post-decide silence left a stall or a strand");
 #endif
 #if defined(W_REACH_WSHRINK)
-  /* NON-VACUITY IS THE EVICTION, NOT THE STRAND.  The window at its floor
+  /* NON-VACUITY IS THE EVICTION, NOT THE STRAND.  The reach at its floor
    * must actually BIND -- else the arm says nothing about REACH at all --
    * and with a withholder present nothing releases by the all-n path, so
    * every close evicts.  The strand the brief predicted is REPORTED, not
    * required: see the header for what the measurement says. */
   CurTest = "W_REACH_WSHRINK coverage";
   CHECK(WEvictTotal > 0,
-        "W_REACH_WSHRINK: the floor window bound (rounds left by eviction)");
+        "W_REACH_WSHRINK: the floor reach bound (rounds left by eviction)");
   printf("W_REACH_WSHRINK: %lu evictions, %lu stalls-or-strands\n",
          WEvictTotal, WLostTotal);
 #endif
