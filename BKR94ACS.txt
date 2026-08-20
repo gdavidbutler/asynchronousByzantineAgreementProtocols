@@ -28,9 +28,31 @@ the model; A-Cast is a simulation over the pairwise channels
 dynamic: it may corrupt up to t players adaptively at any time
 (taking their private data and their control), and it schedules the
 delay of every message, but it can neither read nor alter messages
-between honest players. A deployment therefore owes exactly two
-properties per PAIR -- confidentiality ("secure") and eventual
-delivery ("reliable") -- and owes no broadcast medium.
+between honest players.
+
+That is the model for the paper's WHOLE construction -- the
+asynchronous secure computation this extract deliberately does not
+summarize. The two channel properties split cleanly across the
+paper's two halves, and the split is why this file is named ACS:
+
+  - Confidentiality ("secure": the cannot-be-heard clause, the
+    adversary's cannot-read clause) is consumed by the secret-sharing
+    and MPC side alone -- shares travel the pairwise channels, and a
+    share overheard is a secret leaked. Nothing in Section 4 reads
+    it: Lemma 2's four proof obligations (below) consume only the
+    three named subprotocol properties plus the two assumptions
+    about Q, and none of those mentions secrecy.
+
+  - Authentication (the cannot-alter clause: no message is generated
+    or altered in an honest player's name) plus eventual delivery
+    ("reliable") is what ACS and its subprotocols consume. It is
+    Bracha's own model assumption -- A-Cast is a Bracha broadcast,
+    and the BA slot is instantiated with Bracha here.
+
+A deployment of ACS as a standalone primitive -- this repo's use --
+therefore owes authenticated, eventually-delivering pairwise
+channels and no broadcast medium. Confidentiality is owed only
+where the paper's secure-computation side is also deployed.
 
 Termination caveat, and where it does NOT attach: the paper notes its
 MPC (and the Canetti-Rabin 1993 AVSS it builds on) carries an
