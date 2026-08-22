@@ -400,7 +400,8 @@ main(int argc, char **argv)
         const unsigned char *cv = bracha87Fig1Value(b);
         if (a == BRACHA87_ECHO_ALL || a == BRACHA87_READY_ALL) {
           CHECK(cv != 0, "Value non-null on ECHO_ALL/READY_ALL");
-          broadcastFig1(w.to, N_ACT, a, cv, vBytes);
+          if (cv)
+            broadcastFig1(w.to, N_ACT, a, cv, vBytes);
         } else if (a == BRACHA87_ACCEPT) {
           accepted[w.to] = 1;
           if (cv) memcpy(acceptedV[w.to], cv, vBytes);
@@ -449,7 +450,7 @@ main(int argc, char **argv)
       for (i = 0; i < act_count; ++i) {
         unsigned char a = actions[i];
         const unsigned char *cv = bracha87Fig1Value(b);
-        if (a == BRACHA87_ECHO_ALL || a == BRACHA87_READY_ALL)
+        if ((a == BRACHA87_ECHO_ALL || a == BRACHA87_READY_ALL) && cv)
           broadcastFig1(w.to, N_ACT, a, cv, 1);
         else if (a == BRACHA87_ACCEPT) {
           accepted[w.to] = 1;
@@ -510,7 +511,7 @@ main(int argc, char **argv)
       for (i = 0; i < act_count; ++i) {
         unsigned char a = actions[i];
         const unsigned char *cv = bracha87Fig1Value(b);
-        if (a == BRACHA87_ECHO_ALL || a == BRACHA87_READY_ALL)
+        if ((a == BRACHA87_ECHO_ALL || a == BRACHA87_READY_ALL) && cv)
           broadcastFig1(w.to, N_ACT, a, cv, 1);
         else if (a == BRACHA87_ACCEPT) {
           accepted[w.to] = 1;

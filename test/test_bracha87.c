@@ -463,7 +463,8 @@ testFig1Rules(
   printf("    Rule 1 (INITIAL)       : nout=%u out[0]=%u\n", nout, nout ? out[0] : 0);
   check("Rule 1: INITIAL -> ECHO_ALL", nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
   check("Rule 1: echoed set", (b->flags & BRACHA87_F1_ECHOED));
-  check("Rule 1: value correct", !memcmp(bracha87Fig1Value(b), val_A, VLEN));
+  check("Rule 1: value correct",
+        bracha87Fig1Value(b) && !memcmp(bracha87Fig1Value(b), val_A, VLEN));
 
   /* Rule 1: second INITIAL ignored */
   nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 1, val_B, out);
@@ -492,7 +493,8 @@ testFig1Rules(
   printf("    Rule 2 (echo threshold)   : nout=%u out[0]=%u\n", nout, nout ? out[0] : 0);
   check("Rule 2: 3 echoes -> ECHO_ALL", nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
   check("Rule 2: echoed set", (b->flags & BRACHA87_F1_ECHOED));
-  check("Rule 2: value correct", !memcmp(bracha87Fig1Value(b), val_A, VLEN));
+  check("Rule 2: value correct",
+        bracha87Fig1Value(b) && !memcmp(bracha87Fig1Value(b), val_A, VLEN));
   free(b);
 
   /*
@@ -851,7 +853,9 @@ testFig1Liveness(
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
   bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, out);
-  check("Liveness: echoed A", (b->flags & BRACHA87_F1_ECHOED) && !memcmp(bracha87Fig1Value(b), val_A, VLEN));
+  check("Liveness: echoed A", (b->flags & BRACHA87_F1_ECHOED)
+        && bracha87Fig1Value(b)
+        && !memcmp(bracha87Fig1Value(b), val_A, VLEN));
 
   bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_B, out);
   check("Liveness: 1 echo B, no ready yet", !(b->flags & BRACHA87_F1_RDSENT));
@@ -863,7 +867,7 @@ testFig1Liveness(
   printf("    Echoed A, 3 echoes B   : nout=%u rdSent=%u\n", nout, !!(b->flags & BRACHA87_F1_RDSENT));
   check("Liveness: 3 echoes B -> ready B (rule 4)", (b->flags & BRACHA87_F1_RDSENT));
   check("Liveness: value switched to B",
-        !memcmp(bracha87Fig1Value(b), val_B, VLEN));
+        bracha87Fig1Value(b) && !memcmp(bracha87Fig1Value(b), val_B, VLEN));
   {
     int hasReady = 0;
     unsigned int k;
@@ -886,7 +890,7 @@ testFig1Liveness(
   printf("    Echoed A, 2 readys B   : nout=%u rdSent=%u\n", nout, !!(b->flags & BRACHA87_F1_RDSENT));
   check("Liveness: 2 readys B -> ready B (rule 5)", (b->flags & BRACHA87_F1_RDSENT));
   check("Liveness: value switched to B (rule 5)",
-        !memcmp(bracha87Fig1Value(b), val_B, VLEN));
+        bracha87Fig1Value(b) && !memcmp(bracha87Fig1Value(b), val_B, VLEN));
   free(b);
 
   /*
@@ -907,7 +911,7 @@ testFig1Liveness(
   printf("    rdSent A, 3 readys B   : nout=%u accepted=%u\n", nout, !!(b->flags & BRACHA87_F1_ACCEPTED));
   check("Liveness: 3 readys B -> accept B (rule 6)", (b->flags & BRACHA87_F1_ACCEPTED));
   check("Liveness: accepted value is B",
-        !memcmp(bracha87Fig1Value(b), val_B, VLEN));
+        bracha87Fig1Value(b) && !memcmp(bracha87Fig1Value(b), val_B, VLEN));
   free(b);
 }
 
@@ -3391,7 +3395,8 @@ testFig1ValueSwitch(
   /* Byzantine initial: echo A */
   nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, &valA, out);
   check("ValSwitch: INITIAL echoes", nout >= 1);
-  check("ValSwitch: sent to A", bracha87Fig1Value(b)[0] == valA);
+  check("ValSwitch: sent to A",
+        bracha87Fig1Value(b) && bracha87Fig1Value(b)[0] == valA);
 
   /* 3 echoes for B from honest processes: threshold = (4+1)/2+1 = 3 */
   bracha87Fig1Input(b, BRACHA87_ECHO, 1, &valB, out);
@@ -3401,7 +3406,7 @@ testFig1ValueSwitch(
   /* Rule 4 fires for B: ready(B) */
   check("ValSwitch: rdSent", (b->flags & BRACHA87_F1_RDSENT));
   check("ValSwitch: value switched to B",
-        bracha87Fig1Value(b)[0] == valB);
+        bracha87Fig1Value(b) && bracha87Fig1Value(b)[0] == valB);
 
   /* 3 readys for B: threshold 2t+1 = 3 */
   bracha87Fig1Input(b, BRACHA87_READY, 1, &valB, out);
@@ -3410,7 +3415,7 @@ testFig1ValueSwitch(
 
   check("ValSwitch: accepted", (b->flags & BRACHA87_F1_ACCEPTED));
   check("ValSwitch: accepted B",
-        bracha87Fig1Value(b)[0] == valB);
+        bracha87Fig1Value(b) && bracha87Fig1Value(b)[0] == valB);
 
   printf("    Byz initial -> honest B : accepted B\n");
   free(b);
@@ -3587,13 +3592,21 @@ testFig1Bpr(
   bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
   bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
   bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
-  memcpy(sent, bracha87Fig1Value(b), VLEN);
+  {
+    const unsigned char *cv;
+
+    if ((cv = bracha87Fig1Value(b)))
+      memcpy(sent, cv, VLEN);
+    check("BPR value preservation: value present", cv != 0);
+  }
   for (i = 0; i < 10; ++i)
     bracha87Fig1Bpr(b, out);
   check("BPR value preservation: echoed value intact",
-        memcmp(bracha87Fig1Value(b), sent, VLEN) == 0);
+        bracha87Fig1Value(b)
+        && memcmp(bracha87Fig1Value(b), sent, VLEN) == 0);
   check("BPR value preservation: matches input",
-        memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
+        bracha87Fig1Value(b)
+        && memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
   printf("    value preservation   : 10 BPR calls, value byte-identical\n");
   free(b);
 
@@ -3649,7 +3662,8 @@ testFig1Bpr(
   check("BPR interleaved: ACCEPTED after 3rd READY",
         (b->flags & BRACHA87_F1_ACCEPTED));
   check("BPR interleaved: value matches input",
-        memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
+        bracha87Fig1Value(b)
+        && memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
   nout = bracha87Fig1Bpr(b, out);
   check("BPR interleaved: post-accept BPR returns 1 (READY only)",
         nout == 1 && out[0] == BRACHA87_READY_ALL);
@@ -3849,7 +3863,8 @@ testFig1Bpr(
     memcpy(val2, "BBBB", VLEN);
     bracha87Fig1Initiator(b, val2);
     check("BPR initiator re-call: value overwritten",
-          memcmp(bracha87Fig1Value(b), val2, VLEN) == 0);
+          bracha87Fig1Value(b)
+          && memcmp(bracha87Fig1Value(b), val2, VLEN) == 0);
   }
 
   /* NULL out to Bpr -> 0 actions, no crash */
@@ -4092,7 +4107,8 @@ testFig1PostAcceptRecord(
         (b->flags & BRACHA87_F1_ACCEPTED)
         && (b->flags & BRACHA87_F1_RDSENT));
   check("PostAccept n=4: accepted value unchanged",
-        memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
+        bracha87Fig1Value(b)
+        && memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
 
   /*
    * acFrom subset of rdFrom, the ingress order bracha87Fig1ProcessAccepted
@@ -4373,6 +4389,8 @@ testBprLargeN(
       if (!nacts)
         continue;
       vi = bracha87Fig1Value(f1[i]);
+      if (!vi)
+        continue;
       for (k = 0; k < nacts; ++k) {
         unsigned char type;
 

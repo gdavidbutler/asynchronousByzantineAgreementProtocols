@@ -2464,6 +2464,156 @@ testExhausted(
   free(a);
 }
 
+/*--------------------------------------------------------------------------*/
+/*  The decided count excludes the exhausted sentinel.                      */
+/*                                                                          */
+/*  BKR94 Step 3 reads SubSet once all n BAs have output a value.  An       */
+/*  exhausted BA output nothing -- Fig4 spent its round space with no       */
+/*  decision -- so it must never satisfy that condition.  Lemma 2 Part C    */
+/*  gets cross-process agreement on SubSet from BA agreement, which is a    */
+/*  statement about the value a BA delivers; a BA that delivered none       */
+/*  delivers no agreement, so a process announcing SubSet with one BA       */
+/*  still outputless is announcing a set nothing shows the others share.    */
+/*  Substituting a value for it is worse, not better: the substitute is     */
+/*  unilateral and can disagree with another process's real output.         */
+/*                                                                          */
+/*  The condition applies in exactly one state, and this builds it: BA_0    */
+/*  driven to EXHAUSTED and every other BA driven to a decision, so the     */
+/*  sentinel is the LAST entry missing from the count.  A drive that        */
+/*  exhausts one BA while the rest stay undecided leaves the count short    */
+/*  whether or not the sentinel is admitted, and separates nothing.         */
+/*  Completion is then asserted absent as a STANDING fact, not a reading    */
+/*  at one instant: the drive continues past the last decision, feeding     */
+/*  further inputs and further turns, and neither the flag nor the action   */
+/*  may appear.                                                             */
+/*                                                                          */
+/*  Deliberately NOT covered here, because the single-BA arm above owns     */
+/*  it: EXHAUSTED's once-only output and its no-duplicate property, the     */
+/*  0xFE sentinel's own value, and the retry gate's treatment of it.  This  */
+/*  arm asserts only what the OTHER BAs' decisions fail to do to            */
+/*  completion.                                                             */
+/*                                                                          */
+/*  Value schedules at n=4, t=1, maxPhases=1 (3 rounds, one phase):         */
+/*    BA_0        2:2 across the initiators in every round -- no majority   */
+/*                at step 1, none above n/2 at step 2 so no (d, v) is       */
+/*                ever formed, and step 3 finds no (d, v) at all and takes  */
+/*                the coin.  No decision, and sub=2 of the last phase is    */
+/*                EXHAUSTED.                                                */
+/*    BA_1..BA_3  0 from every initiator at rounds 0 and 1, then (d, 0) at  */
+/*                round 2.  Step 1 takes majority 0, step 2 sees 0 in more  */
+/*                than n/2 and sets (d, 0), step 3 sees more than 2t        */
+/*                messages of form (d, 0) and decides 0.                    */
+/*--------------------------------------------------------------------------*/
+
+static void
+testExhaustedAmongDecided(
+  void
+){
+  unsigned long sz;
+  struct bkr94acs *a;
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
+  struct bkr94acsAct tout[BKR94ACS_RETRY_MAX_ACTS];
+  unsigned int process;
+  unsigned int round;
+  unsigned int b;
+  unsigned int q;
+  unsigned int sender;
+  unsigned int n;
+  unsigned int k;
+  unsigned int exhaustedSeen;
+  unsigned int completeSeen;
+  unsigned int decided;
+  unsigned char value;
+
+  printf("\n  EXHAUSTED with every other BA decided:\n");
+
+  sz = bkr94acsSz(3, 0, 1);  /* n=4 (encoded 3), vLen=1 (encoded 0), 1 phase */
+  a = (struct bkr94acs *)calloc(1, sz);
+  if (!a) {
+    check("testExhaustedAmongDecided alloc", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
+
+  exhaustedSeen = 0;
+  completeSeen = 0;
+
+  /*
+   * BA_0 first, so its sentinel is standing when the last decision
+   * lands.  Per (BA, round, initiator): one INITIAL from the
+   * initiator, then three distinct READYs -- rdCnt 1, then 2 firing
+   * Rule 5, then 3 firing Rule 6 and the accept the round consumes.
+   * Every BA's turns are drained after every input, so a completion
+   * action cannot slip past on a BA other than the one being fed.
+   */
+  for (process = 0; process < 4; ++process)
+    for (round = 0; round < 3; ++round)
+      for (b = 0; b < 4; ++b) {
+        value = process
+          ? (unsigned char)((round < 2) ? 0 : BRACHA87_D_FLAG)
+          : (unsigned char)((b < 2) ? 0 : 1);
+        for (sender = 0; sender <= 3; ++sender) {
+          (void)bkr94acsBaInput(a, (unsigned char)process,
+                 (unsigned char)round, (unsigned char)b,
+                 (unsigned char)(sender ? BRACHA87_READY : BRACHA87_INITIAL),
+                 (unsigned char)(sender ? sender : b), value, out);
+          for (q = 0; q < 4; ++q)
+            while ((n = bkr94acsTurn(a, (unsigned char)q, 1, tout)) > 0)
+              for (k = 0; k < n; ++k) {
+                if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
+                  ++exhaustedSeen;
+                if (tout[k].act == BKR94ACS_ACT_COMPLETE)
+                  ++completeSeen;
+              }
+        }
+      }
+
+  check("Exhausted among decided: BA_0 carries the exhausted sentinel",
+        bkr94acsBaDecision(a, 0) == 0xFE);
+  check("Exhausted among decided: EXHAUSTED output once", exhaustedSeen == 1);
+  decided = 0;
+  for (b = 1; b < 4; ++b)
+    if (bkr94acsBaDecision(a, (unsigned char)b) <= 1)
+      ++decided;
+  check("Exhausted among decided: the other three BAs decided", decided == 3);
+  check("Exhausted among decided: no COMPLETE action is ever output",
+        completeSeen == 0);
+  check("Exhausted among decided: complete stays clear", a->complete == 0);
+
+  /*
+   * Past the last decision.  Further inputs on every BA, and a further
+   * turn call on every BA, must leave the standing state where it is:
+   * the exhausted BA's round space is spent so its duty is HELD
+   * forever, and no arrival can make an outputless BA output.
+   */
+  for (round = 0; round < 3; ++round)
+    for (b = 0; b < 4; ++b)
+      for (q = 0; q < 4; ++q) {
+        (void)bkr94acsBaInput(a, (unsigned char)q, (unsigned char)round,
+               (unsigned char)b, BRACHA87_READY, 0, 0, out);
+        while ((n = bkr94acsTurn(a, (unsigned char)q, 1, tout)) > 0)
+          for (k = 0; k < n; ++k)
+            if (tout[k].act == BKR94ACS_ACT_COMPLETE)
+              ++completeSeen;
+      }
+
+  check("Exhausted among decided: still no COMPLETE action after further"
+        " input", completeSeen == 0);
+  check("Exhausted among decided: complete still clear after further input",
+        a->complete == 0);
+
+  printf("    baDecision = 0x%02X %u %u %u; COMPLETE output %u time(s); "
+         "complete=%u\n",
+         (unsigned)bkr94acsBaDecision(a, 0),
+         (unsigned)bkr94acsBaDecision(a, 1),
+         (unsigned)bkr94acsBaDecision(a, 2),
+         (unsigned)bkr94acsBaDecision(a, 3),
+         completeSeen,
+         (unsigned)(a->complete ? 1 : 0));
+
+  free(a);
+}
+
 /*
  * White-box: bkr94acsAcastValue ACCEPT-gate transition for a
  * non-self process.
@@ -2762,6 +2912,7 @@ main(
   testBprByzantineSilent();
   testBprHighDrop();
   testExhausted();
+  testExhaustedAmongDecided();
   testAcastValueGate();
   testForgedInitial();
 
