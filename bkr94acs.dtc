@@ -122,11 +122,10 @@ no,"BA_j outputs 1",
 #               already triggered" latch (BKR94ACS_F_THRESHOLD) is
 #               gone.
 #
-# The trichotomy mirrors the system layer's R4 advance rule
-# (system.md MET / TOLERANCE / HELD): the same decision -- proceed
-# without the tail -- at this layer's grain, under the same caller
-# discipline (count sweeps only while TOLERANCE; the budget is
-# deployment tuning).
+# The trichotomy names the one decision shape -- proceed without
+# the tail -- under the caller discipline both duty queries share
+# (count sweeps only while TOLERANCE; the budget is deployment
+# tuning).
 #
 # Out of the merged dispatch because its inputs (the n-t count,
 # the unentered set, elapsed tolerance) appear in no other rule --

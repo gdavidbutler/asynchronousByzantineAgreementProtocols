@@ -2,7 +2,7 @@
 
 Generated with Claude Code (https://claude.ai/code)
 
-A C library implementing Gabriel Bracha's 1987 paper (Figures 1, 3, and 4 as composable pure state machines; Figure 2 captured for paper completeness and subsumed by Figure 3), the BKR94 Asynchronous Common Subset (ACS) protocol built from them, and a system layer that runs an unbounded sequence of ACS rounds over an application input stream (no paper covers that composition; `system.md` is its governing specification).
+A C library implementing Gabriel Bracha's 1987 paper (Figures 1, 3, and 4 as composable pure state machines; Figure 2 captured for paper completeness and subsumed by Figure 3), and the BKR94 Asynchronous Common Subset (ACS) protocol built from them.
 
 ## Overview
 
@@ -12,19 +12,15 @@ Each module boundary matches the paper exactly, so the paper's proofs apply per-
 
 The `bkr94acs` module composes these figures into multi-value agreement: N processes A-Cast arbitrary values, and all honest processes agree on the same common subset of at least n-t A-Casts. This is Ben-Or/Kelmer/Rabin 1994 Section 4 Figure 3 (Protocol Agreement[Q]).
 
-The `system` module composes above `bkr94acs`: one ACS instance agrees on one subset, and `system.[hc]` turns a series of them into a single agreed sequence -- the obligation layer that manages what the sequence itself creates (exactly-once presentation, joining, serving, adoption, retention). See *The System Layer* below.
-
-The API reference is the headers themselves: `bracha87.h`, `bkr94acs.h`, and `system.h` carry the per-function contracts, and this README does not restate them. **If you are integrating the library**, the load-bearing sections are *When to Use What*, *Message System*, *Bracha Phase Retry*, *Examples*, *Coin Choice*, and *Abandonment* -- plus *The System Layer* if your problem is a sequence of agreements rather than one. **If you are auditing the implementation or porting it to another language**, additionally read *Design Rationale*, *Architecture*, *Test Coverage*, *Correctness Audit*, *Implementation Notes*, and *Re-Implementing in Another Language*; for the system layer the governing specification is `system.md`. **If the subject is unfamiliar**, *The Papers* names the sources and their in-tree extracts.
+The API reference is the headers themselves: `bracha87.h` and `bkr94acs.h` carry the per-function contracts, and this README does not restate them. **If you are integrating the library**, the load-bearing sections are *When to Use What*, *Message System*, *Bracha Phase Retry*, *Examples*, *Coin Choice*, and *Abandonment*. **If you are auditing the implementation or porting it to another language**, additionally read *Design Rationale*, *Architecture*, *Test Coverage*, *Correctness Audit*, *Implementation Notes*, and *Re-Implementing in Another Language*. **If the subject is unfamiliar**, *The Papers* names the sources and their in-tree extracts.
 
 ## When to Use What
 
-This library provides two application-facing agreement primitives and a composition layer above them. Pick by the shape of your problem.
+This library provides two application-facing agreement primitives. Pick by the shape of your problem.
 
 **Reliable broadcast -- `bracha87Fig1`.** One designated sender announces a value; all correct processes either accept the same value or none do, under up to `t` Byzantine faults at `n > 3t`. Use when you have a known initiator per message: configuration distribution from a designated source, single-writer state replication, one-shot dissemination of a signed announcement, or as a reliable-channel building block inside your own outer protocol. Application surface: `bracha87Fig1Input` per delivered message, `bracha87Fig1RetryStep` over the caller-owned instance array per retry tick. See `example/bracha87Fig1.c`.
 
 **Common subset -- `bkr94acs`.** N processes each A-Cast a value; all correct processes agree on the same common subset of at least `n-t` A-Casts. Use when you need agreement on a batch of contributions among symmetric processes: MPC input bundling, distributed candidate selection -- anything shaped as "agree on the set" rather than "agree on a single value." Application surface: the loop under *Bracha Phase Retry* below. See `example/bkr94acs.c`.
-
-**An agreed sequence -- the system layer.** N processes run ACS rounds in order, forming one unbounded, ordered, agreed sequence of subsets -- values that missed a round ride the next one, processes fall behind and catch up from served evidence, and retained state is released only on evidence. Use when the problem is a stream rather than a batch: an append-only agreed log of contributions, ongoing agreement that must survive processes leaving and returning. Application surface: the obligation state machine in `system.h`, driven beside the `bkr94acs` loop. See *The System Layer* below and `example/system.c`.
 
 Fig 3 (VALID-set framework) and Fig 4 (binary Byzantine agreement) are exposed for completeness but exist primarily as internal mechanism feeding `bkr94acs`; raw single-bit binary BA has no realistic standalone caller (the seven-year gap between Bracha 1987 and BKR94 1994 is exactly that evidence).
 
@@ -161,20 +157,20 @@ while (!terminate) {
 
 ```bash
 make            # build .o and examples
-make check      # build and run all six test binaries (see Test Coverage below)
+make check      # build and run all five test binaries (see Test Coverage below)
 make clean      # remove build artifacts
 make clobber    # also remove dtc's leftover .psu intermediates
 ```
 
 A C89 compiler is the only requirement. The rule dispatch is generated (see *Paper-Faithful Dispatch via DTC* below), but the generated `*Rules.c` snippets are committed and treated as source here: nothing in the ordinary build runs `dtc`, and neither `clean` nor `clobber` removes them.
 
-The reason is what generation costs. `dtc` performs a full search for a depth-minimal dispatch, and the search grows with the table: regenerating `systemRules.c` alone takes 2 min 34 s on an Apple M2, against 0.14 s for the four paper tables put together, and a slower machine pays proportionally more. That is a cost the person who edits `system.dtc` should pay once, not a toll on everyone who builds. Committing the snippets also makes the repository self-contained -- `dtc` lives in a second repository, so a build that invoked it could not be run from a clone of this one alone.
+The reason is what generation costs. `dtc` performs a full search for a depth-minimal dispatch, and the search grows steeply with the table -- a cost the person who edits a `.dtc` should pay once, not a toll on everyone who builds. Committing the snippets also makes the repository self-contained -- `dtc` lives in a second repository, so a build that invoked it could not be run from a clone of this one alone.
 
 Editing a `.dtc` therefore means regenerating deliberately, and the per-table targets exist because of that same asymmetry:
 
 ```bash
-make rules              # re-run dtc + psu.awk for all five tables
-make rules-system       # or just the one whose .dtc changed
+make rules              # re-run dtc + psu.awk for all four tables
+make rules-bkr94acs     # or just the one whose .dtc changed
 ```
 
 `make rules && git diff --exit-code` is the check that no `.dtc` edit went unbuilt -- `dtc` is deterministic, so a nonempty diff means a real one. That path needs `../decisionTableCompiler/dtc` and `awk`; the regenerated snippet is reviewed as a diff and committed alongside the `.dtc` that caused it. The `.psu` is dtc's intermediate -- `psu.awk` is its only consumer -- and stays untracked.
@@ -183,7 +179,7 @@ Compiler flags: `-std=c89 -pedantic -Wall -Wextra -Os -g`
 
 ## Examples
 
-Three runnable examples sit in `example/`, one per application-facing API surface. All run in a single process over an in-memory queue. For `example_bracha87Fig1` and `example_bkr94acs` the queue is lossless: `example_bracha87Fig1` is a single synchronous pump exercising the state machines, while `example_bkr94acs` runs the full application loop -- drain ingress, then a sweep carrying the BPR retry and the paced turn/fanout decisions, terminated by the barren-sweep progress gate -- so it exercises the caller discipline end to end, though never the give-up half of abandonment that only loss makes real. `example_system`'s queue delivers shuffled and lossy, and its scenario flags cut a process off mid-run or make one process Byzantine inside the fault budget -- the sequencing claims it exists to demonstrate are visible only under those conditions.
+Two runnable examples sit in `example/`, one per application-facing API surface. Both run in a single process over an in-memory lossless queue: `example_bracha87Fig1` is a single synchronous pump exercising the state machines, while `example_bkr94acs` runs the full application loop -- drain ingress, then a sweep carrying the BPR retry and the paced turn/fanout decisions, terminated by the barren-sweep progress gate -- so it exercises the caller discipline end to end, though never the give-up half of abandonment that only loss makes real.
 
 The low-level Fig 3 and Fig 4 entry points have no dedicated examples -- they exist as internal mechanism feeding `bkr94acs` with no realistic standalone caller (see *When to Use What*); their behavior is exercised through `bkr94acs` and through the test suites.
 
@@ -210,15 +206,6 @@ The low-level Fig 3 and Fig 4 entry points have no dedicated examples -- they ex
 The `-d`/`-g` pair is the sweep-side pacing demonstration (see the fourth architecture fact below): one delayed honest A-Cast, released at the knife edge where step 2 first enables, excluded by the eager schedule and included by the grace -- and in the eager run the late value still accepts everywhere, pinning that exclusion is participation loss, never value loss.
 
 The `8` is not a transferable number, and the demo is deliberately narrow about which half it exercises. The delayed A-Cast is *released* by a direct `bkr94acsAcast` onto a lossless queue, so it reaches every process at once: the budget here measures only sweeps-to-enablement, never the rate at which a Retry cursor re-carries a delayed instance. A deployment's budget has to span that rate instead -- one full cursor pass per re-offer of any particular instance -- which on a real transport is a much larger number of ticks and a much smaller number of sweeps. Size it against `bkr94acsSentFig1Count(a)`, as the *Abandonment* section sizes S, not against this example.
-
-`example/system.c` -- the system layer composed with BKR94 ACS: an unbounded sequence of rounds over staged application messages, under seeded shuffle and loss. The run prints its verdicts directly: sequence identity (byte-identical agreed sequences, `system.md` L6), exactly-once presentation (R1), heal-by-adoption for a cut process, and Byzantine containment:
-
-```bash
-./example_system 4 1 3 6              # 4 processes, t=1, recovery reach 3 rounds, 6 messages each
-./example_system -s 42 -l 10 4 1 3 6  # seeded shuffle, 10% loss
-./example_system -s 42 -L 2:3 4 1 3 6 # cut process 2 from round 3's traffic (recovery legs excepted) -- it heals by adoption plus replayed content
-./example_system -B 3:5 7 2 3 6       # process 3 forges possession and serves fabricated compositions
-```
 
 ## Coin Choice -- Caller Responsibility
 
@@ -275,36 +262,6 @@ Every scenario below resolves to the same gate. What differs is only how the loc
 
 **After COMPLETE.** Success is not a stop: other processes may still be below their thresholds, and post-decide continuation owes them the READY traffic that will carry them (the partition scenario, seen from the other side). The ACCEPTED annotation gives the tail a true end when the announcements survive loss: once every process has announced accept on every sent instance, Retry's full sweep returns 0 -- quiescence -- and nothing more is owed to anyone, so stopping then needs no further patience. But quiescence is best-effort, not a guaranteed terminal state (the final announcements can themselves be lost), so the barren-sweep gate remains the backstop: a `COMPLETE` process keeps draining and ticking, and leaves through the same gate -- the success flavor of the one policy.
 
-## The System Layer -- an Unbounded Sequence of Rounds
-
-One ACS instance agrees on one subset; an application has a stream. `system.[hc]` is the composition layer that runs ACS instances in order -- a **round** is a position in that unbounded sequence -- and manages the obligations the sequence itself creates, which no single instance ever faces. No paper governs this layer. `system.md` is the governing specification: requirements, derived rules, the implementer obligations below, a state invariant with its induction, and proofs of the lemmas the layer rests on. `system.h` carries the per-function contracts; the state machine is pure like the layers below (caller memory, bounded out[], no I/O, no threads, no allocation) and composes with `bkr94acs` at the caller, not at compile time.
-
-**Retention is the caller's storage, not the machine's.** The layer decides everything about a retained round -- when it is born, who is owed it, when it is released, which one an eviction takes -- and holds none of them. The rounds this process retains, and the per-round records behind them, live in caller storage reached through four operations fixed at initialization: what is held for a round, begin holding one, stop holding one, and what is held after one. The reason is that retention DEPTH is the one quantity this layer must not fix. What *must* be retained is derived from evidence and stays unbounded while any process withholds; what *can* be retained is the deployment's declared recovery reach, sized against how long a returning process is expected to take. A window compiled into the machine puts a tuning constant where a requirement belongs, makes the two look like one quantity, and forces every deployment into a single storage shape for a set whose natural home ranges from a small array to a database. So the machine asks what is held and directs what to hold; how deep, and in what, is the deployment's answer -- and the gap between the two is not a defect to close but the fault budget the advance rule is spending. The seam is not free either: several conjuncts of the state invariant were structurally true while the machine owned the storage and are premises now, so `system.md` states them as retention requirements the caller must meet, and the coverage register carries a row for each. A reference implementation ships as `systemStore.[hc]` -- a capacity-bounded array held in the comparator's order, where the capacity IS the declared reach and reaching it is what makes the machine evict. It is one worked answer to the four operations, not a required part of the layer: a deployment is free to answer them from a tree, an index over its artifact store, or a database, and the machine cannot tell, which is the point.
-
-Sequencing is not free, and each cost is inherited from the layers' own proofs rather than chosen:
-
-- ACS legitimately excludes up to t honest contributions per round, and exclusion is final at the agreement layer. An accepted application value that missed a round is still owed: it must ride the next round, byte-identical, without ever appearing twice (exactly-once presentation).
-- BA semantics forbid a second execution of a possibly-decided instance (re-execution is wire-indistinguishable from equivocation). A process that falls behind therefore cannot re-run history: it closes old rounds by **adoption** -- served evidence, witnessed at t+1 distinct servers or proven from the linkage fold -- never by deciding them again.
-- A BA can exhaust its round encoding without deciding (*Abandonment*); the sequence must carry that process forward anyway. The serve/adoption route is the uniform heal for every genuinely-behind correct process, and nothing here adds a stop.
-- The papers' proofs assume every honest process eventually enters each instance, so participation in an evidenced round is conformance, not politeness.
-
-The layer's shape is the BPR discipline lifted from message granularity to round granularity: an obligation is born from evidence, discharged toward all n, and retired only on remote evidence or an explicit bounded budget -- never on local progress, appetite, or silence. Five obligations carry everything: **PARTICIPATE** (run every evidenced round, in order), **PRESENT** (an accepted value rides every launched round until witnessed in an agreed subset), **ADMIT** (the only obligation assumed by choice, gated on self-local capacity and the advance rule), **SERVE** (a retained round is served to processes that evidence want of it -- and want is observed from their stale traffic, never announced or solicited), **RETAIN** (a completed or adopted round is retained, and released only when all n processes evidence possession of it, or by eviction -- the out-of-band boundary).
-
-The advance rule is the layer's fault-budget promise: **t is reserved for faults**, so offered load must not spend it on an honest process that is merely slow -- and the promise holds without any synchrony assumption, because the model admits none. A process advances past round R only when n-t processes evidence possession of R, and then holds up to T_p of its own sweeps for the stragglers -- funded catch-up time during which its serves and post-decide tails keep running, not idleness. Two budgets result, deliberately separate: T_p, the duty budget per advance, and S, the progress budget of *Abandonment*, with S > T_p. A corollary of the same discipline is that **PARTITIONED is the default state**: under unbounded latency no process can ever prove it is not partitioned -- it can only prove, from self-local evidence, that it is presently participating or recovering -- and the abandonment policy firing is the deployment acting on that lapse.
-
-Like the *Message System* assumptions one level down, the calculus consumes properties this repository does not construct. A deployment supplies six implementer obligations -- each is a property; the construction, formats, and algorithms are the implementer's (`system.md` records the derivation of each and what rests on it):
-
-1. **Linkage.** Round identity derives from the predecessor's agreed result, decidably and bindingly: traffic for round R authenticates only against R-1's result, no two distinct round results derive the same identity, and a candidate that folds to a verified identity therefore IS the agreed result. The first round's base is provisioned to every process out of band, with the identity material the deployment already delivers. This is what makes adoption a proof rather than trust, and what makes any authenticated act of a later round evidence that its sender holds R.
-2. **Two-grain artifact.** A round's artifact is a COMPOSITION (the agreed subset plus per-member digests, fixed by agreement itself) and per-member CONTENT, reconstructible from any t+1 correct holders out of self-validating pieces (a bad piece is detected and discarded, never corrected). Composition drives the clock, serving, and release; content may lag indefinitely, and an unrecoverable member costs its own content line, never the round.
-3. **Witnessable served facts.** A fact served to a process that did not witness the round's agreement is acceptable on exactly two grounds: identical assertion by t+1 distinct servers (at least one honest), or provability from the linkage fold given one assertion. Nothing weaker admits a served fact.
-4. **Forward-only derivation with a floor base.** Round-keyed derivation state advances forward-only -- an advanced-past step is unrecoverable, and that destruction is a security property the layer must not undo. The implementer instead retains, at the retention floor, a recomputation base sufficient to re-derive any retained round's serving form by computing forward. Release advances the derivation floor and the retention floor together; forward secrecy is bounded by the floor, and that bound is the accepted cost of serving.
-5. **Budgeted authorship.** Authoring an authenticated value consumes a finite budget; re-presentation of an accepted value must be byte-identical to its first authored form (a re-authored duplicate is detectably distinct and rejectable); and budget exhaustion forces an identity-maintenance round, which must not consume a pending application value -- its win is not the value's win.
-6. **Declared recovery reach.** Each process retains, and can serve from, every round between its retention floor and its frontier that it has not released, and declares how far that floor may stand behind -- finite, sized against the eventual guarantee rather than a worst case asynchrony does not supply, and per-process rather than uniform. Where depth sits across the processes matters as much as how much is bought: a returner closes each composition rung on one correct retainer, so composition recovery reaches as deep as the DEEPEST retainer, while content needs the (t+1)-th deepest. This is the obligation the caller-held retention above makes concrete -- the store's own bound is the reach, and declining to hold another round is how it binds.
-
-A complete deployment of this layer is therefore everything the layers below already require -- the transport, the identity and keys behind sender-authenticated ingress, the coin, the tick, the abandonment policy -- plus these six properties.
-
-Because no paper exists to stand behind the layer, `system.md` carries the proof burden itself: an inductive state invariant discharged per entry point, and lemmas covering the bounded hold, adoption agreement, supersession, presentation, release safety, sequence identity, and naming soundness. And because those proofs have no peer-review history the way the papers do, they are tested like the code is: `test/systemProofCoverage.md` is the register mapping every premise the proofs consume to the test arm that exercises it (see *Test Coverage*).
-
 ---
 
 ## The Papers
@@ -320,8 +277,6 @@ J. H. Saltzer, D. P. Reed, D. D. Clark, "End-To-End Arguments in System Design,"
 `BKR94ACS.txt` is the line-by-line extract of BKR94 Section 4 used as `bkr94acs.[hc]`'s reference.
 
 `SRC84.txt` is the relevant extract of the End-to-End paper used as the design citation for BPR.
-
-The system layer has no governing paper. `system.md` is the governing specification for it -- constructed from the three extracts above, the repository's BPR mechanism, and the requirements it records -- and carries its own proofs (see *The System Layer*).
 
 ## Design Rationale -- Why These Three Papers
 
@@ -374,16 +329,7 @@ N A-Casts -> N Fig1(n,t,vLen) -> accept -> enter 1 in BA
                                      (caller-paced sample) -> Fig4 -> common subset
 ```
 
-### System Layer Sequence (system)
-
-```
-accepted value -> rides every launched round until agreed (exactly-once)
-round R: ACS  -> COMPLETE (or ADOPT from served evidence) -> retain
-retained R    -> serve wanting processes -> release at all-n possession
-frontier      -> R+1 under the advance rule (n-t possession, then all-n or T_p)
-```
-
-Per-figure contracts -- rule tables, thresholds, state, and action semantics -- are in the section banners and function documentation of `bracha87.h`; the ACS composition's are in `bkr94acs.h`; the system layer's are in `system.h`, governed by `system.md`. Four facts of the ACS composition are kept here because no single entry point's documentation owns them:
+Per-figure contracts -- rule tables, thresholds, state, and action semantics -- are in the section banners and function documentation of `bracha87.h`; the ACS composition's are in `bkr94acs.h`. Four facts of the ACS composition are kept here because no single entry point's documentation owns them:
 
 The step-2 trigger is "n-t BAs decided with output 1," not "n-t Fig 1 ACCEPTs." The two coincide in benign runs but diverge under asynchrony or Byzantine scheduling, and only the decide-1 trigger satisfies Part A case (i) of the BKR94 Lemma 2 proof.
 
@@ -395,7 +341,7 @@ Every message's per-message discriminator -- the Bracha87 type, the class, and (
 
 ## Test Coverage
 
-`make check` runs six test binaries, each scoped to catch a different class of regression; together they form a defense in depth.
+`make check` runs five test binaries, each scoped to catch a different class of regression; together they form a defense in depth.
 
 | Binary | Scope | What it catches |
 |---|---|---|
@@ -404,13 +350,10 @@ Every message's per-message discriminator -- the Bracha87 type, the class, and (
 | `test_bracha87_blackbox` | Protocol black-box (bracha87) | Header-contract drift: validity/agreement/totality, precise echo thresholds, the BPR retirement contract, array Retry -- derived from `bracha87.h` and `Bracha87.txt` only. |
 | `test_bkr94acs` | Protocol white-box (bkr94acs) | All-to-all simulation, step-2 trigger and post-decide-continuation regressions, BPR drop-convergence and Byzantine-silent canaries, EXHAUSTED handling (decide/exhaust acts drained from the sweep-side turn, as deployed); reaches into internal layout. |
 | `test_bkr94acs_blackbox` | Protocol black-box (bkr94acs) | Header-contract drift: Lemma 2 Parts A-D, Input dedup (the invariant a progress counter rests on), Retry/quiescence under drop, EXHAUSTED, equivocating A-Cast initiator, step-2 pacing (the eager schedule excludes a delayed honest A-Cast, the grace includes it, a budgeted fanout completes past a dead slot), turn pacing (deliveries alone decide nothing; TOLERANCE needs the elapsed signal, MET fires free; turns quiescent at completion) -- no `.c` reads. |
-| `test_system` | System-layer contract | Derived from `system.h`, `system.md`, and `system.dtc` only: the advance gate's three duty classes, serve/retain/release including deep retention (round names never recur; releases come only from all-n or eviction), the witness book and single-fire adoption, premature possession indications, and close-versus-late-witness commutation. |
 
 The white-box / black-box pairing surfaces a different class of bug at each layer. White-box catches internal-invariant regressions (a state-machine flag set wrong, a count left unbumped). Black-box catches API contract drift -- header text and code behavior pulling apart over time. Recent contract-drift fix caught by the black-box suite: `bkr94acsAcastValue`'s ACCEPT-gate (header documented "0 if not yet accepted" but pre-fix returned ECHOED-stored bytes, exposing pre-Lemma-2 values to callers).
 
 The black-box suites stay strict about scope: only `*.h`, paper-extract `.txt`, and the matching black-box-style sibling are read while writing tests. When a test fails, the contract sources alone determine whether to tighten the code or rewrite the comment.
-
-The system layer carries additional instruments beyond `make check`, deliberately standalone (they are falsifiers, and a validation artifact stands aside from what it validates): an exhaustive reachable-state falsifier for the state invariant; a composed-seam falsifier that drives real `bkr94acs` instances through the composition glue under seeded shuffle, loss, partition, Byzantine, and premise-withdrawal arms -- every check paired with a mutant that proves it can fire, and the whole 22-mutant matrix runnable in one command, so that pairing is checked rather than recorded; and three mutant tiers that apply anchored mutations to scratch copies and assert the designated check catches each -- one over `system.c` (the machine), one over `systemStore.c` (the retention storage the machine directs but does not hold, whose terms are caller obligations), one over `example/system.c` (the caller half of exactly-once presentation, the one harness that stages application values). `test/systemProofCoverage.md` is the register: every premise the `system.md` proofs consume, mapped to the arm that tests it and an honest status, including what remains uncovered and why.
 
 ## Correctness Audit
 
@@ -475,7 +418,7 @@ A port that wants to preserve this library's correctness story has two pieces of
 
 ### Paper-Faithful Dispatch via DTC
 
-Each module's per-call decision logic is captured in a CSV decision table written in the paper's vocabulary (`bracha87Fig{1,3,4}.dtc`, `bkr94acs.dtc`; the system layer's `system.dtc` follows the same pipeline, in `system.md`'s vocabulary rather than a paper's). A small bridge per module (`*ToC.dtc`) maps domain names and values to C identifiers and constants. The decisionTableCompiler (`../decisionTableCompiler/dtc`) co-compiles each pair to an optimal-depth pseudocode dispatch, which a local `psu.awk` translates to a C snippet the entry-point function `#include`s.
+Each module's per-call decision logic is captured in a CSV decision table written in the paper's vocabulary (`bracha87Fig{1,3,4}.dtc`, `bkr94acs.dtc`). A small bridge per module (`*ToC.dtc`) maps domain names and values to C identifiers and constants. The decisionTableCompiler (`../decisionTableCompiler/dtc`) co-compiles each pair to an optimal-depth pseudocode dispatch, which a local `psu.awk` translates to a C snippet the entry-point function `#include`s.
 
 | Source | Bridge | Generated snippet | Entry point | Depth |
 |--------|--------|-------------------|-------------|-------|
@@ -484,7 +427,6 @@ Each module's per-call decision logic is captured in a CSV decision table writte
 | `bracha87Fig3.dtc` | `bracha87Fig3ToC.dtc` | `bracha87Fig3Rules.c` | `bracha87Fig3Accept` | 4 |
 | `bracha87Fig4.dtc` | `bracha87Fig4ToC.dtc` | `bracha87Fig4Rules.c` | `bracha87Fig4Round` | 6 |
 | `bkr94acs.dtc` | `bkr94acsToC.dtc` | `bkr94acsRules.c` | both bkr94acs entry points (one snippet, two `#include`s) | 7 |
-| `system.dtc` | `systemToC.dtc` | `systemRules.c` | all five system entry points (one snippet, five `#include`s) | 15 |
 
 `dtc` enforces exhaustiveness and exclusivity of the rules at compile time. Depths are full-optimum (full search confirms each is depth-minimal for its boundary-input set). The C wrapper computes boundary inputs, `#include`s the dispatch, and applies the boolean outputs as side effects in an order that is the API contract (e.g. for Fig 1: `echo` before `ready` before `accept`). See `../decisionTableCompiler/README.md` for the bridge mechanism.
 

@@ -529,8 +529,7 @@ bkr94acsRetry(
  *   the enter-0 fanout  (BKR94 step 2)      bkr94acsFanoutDuty/Fanout
  *   the BA round turn   (Bracha Fig4 round)  bkr94acsTurnDuty/Turn
  *
- * Both duty queries classify with the same trichotomy (the system
- * layer's R4 shape):
+ * Both duty queries classify with the same trichotomy:
  *
  *   BKR94ACS_DUTY_HELD       not enabled: firing now would be
  *                            unsound or is impossible; elapsed
