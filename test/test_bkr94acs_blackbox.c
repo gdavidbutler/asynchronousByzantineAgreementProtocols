@@ -2509,6 +2509,201 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
+  BANNER("F1b: quiescence under the decided-0 retire mechanism");
+  /* ---------------------------------------------------------------- */
+  /*  F1's schedule carried past COMPLETE to the Retry 0 return at    */
+  /*  every process, with both READY annotations exchanged.  A short  */
+  /*  SubSet is not a separate ending -- it is a COMPLETE, and the    */
+  /*  contract is |SubSet| >= n-t -- so what this arm is for is the   */
+  /*  RETIRE MECHANISM, which differs here: bkr94acs.h states the     */
+  /*  per-process retry gate skips the A-Cast walk of a BA that       */
+  /*  decided 0, so for that instance the gate itself is the retire   */
+  /*  and its READY mask can stay permanently short.                  */
+  /*                                                                  */
+  /*  The mask claim is therefore SCOPED to the instances the retry   */
+  /*  still SERVES.  An unscoped claim would fail against the correct */
+  /*  machine, on this very schedule.                                 */
+  /*                                                                  */
+  /*  Its own phases and its own cap, deliberately: F1 allocates 8    */
+  /*  phases and stops at COMPLETE, while the retirement tail runs    */
+  /*  well past completion over the whole round space.                */
+  /* ---------------------------------------------------------------- */
+  {
+    struct bracha87Retry cursors[4];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, 2)];
+    struct bkr94acsAct acastOut[1];
+    struct wire w;
+    unsigned int tolSweeps, fanActs;
+    unsigned int quiesced[4];
+    unsigned int nQuiesced;
+    unsigned int served, covered, gated, gatedShort;
+    unsigned int iter, n, p, j, r, b, q;
+
+    if (allocCluster(processes, 4, 1, 0, 2) == 0) {
+      for (p = 0; p < MAX_PROCESSES; ++p)
+        obsInit(&obs[p]);
+      for (p = 0; p < 4; ++p) {
+        bracha87RetryInit(&cursors[p]);
+        quiesced[p] = 0;
+      }
+      qReset();
+
+      for (p = 0; p < 3; ++p) {
+        acasts[p] = (unsigned char)(0xF0 + p);
+        n = bkr94acsAcast(processes[p], &acasts[p], acastOut);
+        observeAndOutput(&obs[p], (unsigned char)p, 4, acastOut, n, 1, 0, -1);
+      }
+      CHECK(fDrive(processes, obs, cursors, 0, -1, 500,
+                   &tolSweeps, &fanActs) == 0,
+            "F1b: all four complete without 3's A-Cast");
+
+      /* The late submission: its value is still accepted everywhere,
+       * and the subset is already fixed -- participation loss. */
+      acasts[3] = 0xF3;
+      n = bkr94acsAcast(processes[3], &acasts[3], acastOut);
+      observeAndOutput(&obs[3], 3, 4, acastOut, n, 1, 0, -1);
+
+      nQuiesced = 0;
+      for (iter = 0; iter < 20000 && nQuiesced < 4; ++iter) {
+        while (qSize() > 0) {
+          qPopHead(&w);
+          if (w.cls == BKR94ACS_CLS_ACAST) {
+            n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                      w.from, w.value, out);
+            if (w.accepted)
+              bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
+            /* Leaving the rotation is provisional: only a tick can
+             * answer a want, so an armed want puts the process back. */
+            if (w.type == BRACHA87_READY && !w.answered) {
+              bkr94acsAcastWants(processes[w.to], w.process, w.from);
+              if (quiesced[w.to]) {
+                quiesced[w.to] = 0;
+                --nQuiesced;
+              }
+            }
+          } else {
+            n = bkr94acsBaInput(processes[w.to], w.process, w.round,
+                                       w.initiator, w.type, w.from,
+                                       w.baValue, out);
+            if (w.accepted)
+              bkr94acsBaAccepted(processes[w.to], w.process, w.round,
+                                        w.initiator, w.from);
+            if (w.type == BRACHA87_READY && !w.answered) {
+              bkr94acsBaWants(processes[w.to], w.process, w.round,
+                                     w.initiator, w.from);
+              if (quiesced[w.to]) {
+                quiesced[w.to] = 0;
+                --nQuiesced;
+              }
+            }
+          }
+          observeAndOutput(&obs[w.to], w.to, 4, out, n, 1, 0, -1);
+        }
+        for (p = 0; p < 4; ++p) {
+          if (!quiesced[p]) {
+            n = bkr94acsRetry(processes[p], &cursors[p], out);
+            if (!n && bkr94acsSentFig1Count(processes[p])) {
+              quiesced[p] = 1;
+              ++nQuiesced;
+            }
+            observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
+          }
+          for (b = 0; b < 4; ++b)
+            while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1,
+                                     out)) > 0) {
+              if (quiesced[p]) {
+                quiesced[p] = 0;
+                --nQuiesced;
+              }
+              observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
+            }
+          n = bkr94acsFanout(processes[p], out);
+          if (n) {
+            if (quiesced[p]) {
+              quiesced[p] = 0;
+              --nQuiesced;
+            }
+            observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
+          }
+        }
+      }
+      CHECK(nQuiesced == 4, "F1b: every process reached the Retry 0 return");
+      CHECK(qSize() == 0, "F1b: the wire is silent at quiescence");
+
+      for (p = 0; p < 4; ++p) {
+        unsigned char subset[4];
+
+        CHECK(processes[p]->complete, "F1b: quiescence past COMPLETE");
+        CHECK(bkr94acsRetry(processes[p], &cursors[p], out) == 0,
+              "F1b: and the 0 return is stable");
+        CHECK(bkr94acsSubset(processes[p], subset) == 3,
+              "F1b: |SubSet| == 3");
+        CHECK(bkr94acsBaDecision(processes[p], 3) == 0,
+              "F1b: the excluded process's BA decided 0");
+        CHECK(bkr94acsAcastValue(processes[p], 3) != 0,
+              "F1b: the late A-Cast is accepted everywhere");
+      }
+
+      /* The scoped ending evidence.  An A-Cast whose BA decided 0 is
+       * out of the walk -- the gate is its retire -- so it is counted
+       * and skipped, never required to cover. */
+      served = 0;
+      covered = 0;
+      gated = 0;
+      gatedShort = 0;
+      for (p = 0; p < 4; ++p) {
+        for (j = 0; j < 4; ++j) {
+          const struct bracha87Fig1 *f1;
+          const unsigned char *skip;
+
+          if (!(f1 = bkr94acsAcastFig1(processes[p], (unsigned char)j))
+           || !bracha87Fig1Value(f1))
+            continue;
+          skip = bracha87Fig1Skip(f1, BRACHA87_READY_ALL);
+          for (q = 0; q < 4; ++q)
+            if (!skip || !BRACHA87_SKIP_TST(skip, q))
+              break;
+          if (!bkr94acsBaDecision(processes[p], (unsigned char)j)) {
+            ++gated;
+            if (q < 4)
+              ++gatedShort;
+            continue;
+          }
+          ++served;
+          if (q == 4)
+            ++covered;
+        }
+        for (j = 0; j < 4; ++j)
+          for (r = 0; r < 6; ++r)
+            for (b = 0; b < 4; ++b) {
+              const struct bracha87Fig1 *f1;
+              const unsigned char *skip;
+
+              if (!(f1 = bkr94acsBaFig1(processes[p], (unsigned char)j,
+                                        (unsigned char)r, (unsigned char)b))
+               || !bracha87Fig1Value(f1))
+                continue;
+              ++served;
+              skip = bracha87Fig1Skip(f1, BRACHA87_READY_ALL);
+              for (q = 0; q < 4; ++q)
+                if (!skip || !BRACHA87_SKIP_TST(skip, q))
+                  break;
+              if (q == 4)
+                ++covered;
+            }
+      }
+      CHECK(gated == 4, "F1b: the excluded A-Cast is gated at every process");
+      CHECK(served > 0, "F1b: served instances were actually examined");
+      CHECK(served == covered,
+            "F1b: every instance the retry still serves has a full READY mask");
+      printf("      F1b: %u served instances, %u covered, %u gated"
+             " (%u of them with a short mask)\n",
+             served, covered, gated, gatedShort);
+      freeCluster(processes, 4);
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
   BANNER("F2: grace includes the same delayed honest A-Cast");
   /* ---------------------------------------------------------------- */
   {

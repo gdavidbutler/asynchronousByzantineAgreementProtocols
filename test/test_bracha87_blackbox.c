@@ -607,6 +607,36 @@ main(int argc, char **argv)
       CHECK(bracha87Fig1AllEchoed(b) == (i + 1 == N_ACT),
             "AllEchoed: 1 exactly when echoSenders == n");
     }
+
+    /* The all-echoed RETIRE, which is the accessor's reason to exist:
+     * header, bracha87Fig1Bpr -- "INITIAL (initiator only): retires at
+     * ACCEPTED, or once an echo has been observed from every process
+     * (echoSenders == n).  INITIAL only induces echoes, so all-echoed
+     * leaves nothing to induce."  The two gates are independent, so
+     * this one must retire INITIAL with ACCEPTED still clear, while
+     * ECHO and READY (which retire only at ACCEPTED) keep retrying.
+     * Echoes alone reach that state: the echo threshold fires the echo
+     * rule and then the ready rule, and ACCEPTED needs readys. */
+    bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
+    bracha87Fig1Initiator(b, v);
+    for (i = 0; i < N_ACT; ++i)
+      (void) bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, buf);
+    CHECK(bracha87Fig1AllEchoed(b) == 1,
+          "AllEchoed retire: every process has echoed");
+    CHECK((b->flags & BRACHA87_F1_ACCEPTED) == 0,
+          "AllEchoed retire: ACCEPTED still clear");
+    act_count = bracha87Fig1Bpr(b, actions);
+    {
+      int saw_init = 0, saw_echo = 0, saw_ready = 0;
+      for (i = 0; i < act_count; ++i) {
+        if (actions[i] == BRACHA87_INITIAL_ALL) saw_init = 1;
+        if (actions[i] == BRACHA87_ECHO_ALL)    saw_echo = 1;
+        if (actions[i] == BRACHA87_READY_ALL)   saw_ready = 1;
+      }
+      CHECK(!saw_init, "BPR INITIAL retired at all-echoed without ACCEPTED");
+      CHECK(saw_echo, "BPR ECHO still retried at all-echoed");
+      CHECK(saw_ready, "BPR READY still retried at all-echoed");
+    }
   }
 
   /* ---------------------------------------------------------------- */

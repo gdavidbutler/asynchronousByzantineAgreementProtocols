@@ -1901,6 +1901,86 @@ testFig4Step3Boundary(
 }
 
 /*
+ * Step 3 case (ii) -- adopt -- as the FINAL step of the FINAL phase, so
+ * the round space is spent with no decision and the round returns
+ * BRACHA87_EXHAUSTED.
+ *
+ * What this separates: the standing exhaustion witnesses all reach case
+ * (iii).  Their phases carry a 2:2 split, no (d, v) is ever formed, and
+ * dc[dmax] is 0, so they exercise the coin path into exhaustion and say
+ * nothing about the other non-deciding branch.  Case (i) is the one
+ * branch exclusive with exhaustion -- it returns BRACHA87_DECIDE -- so
+ * case (ii) is the remaining branch an exhaustion witness can take, and
+ * this is it.
+ *
+ * n=4, t=1, maxPhases=1: rounds 0, 1, 2 are the single phase's three
+ * steps.  Round 2 carries two (d, 0) and two plain 0, so dc[0] = 2 --
+ * more than t = 1, not more than 2t = 2.
+ *
+ * The coin is what makes the branch OBSERVABLE rather than merely
+ * constructed: it returns 1 while the adopted value is 0, so the value
+ * left standing names which of the two branches ran.
+ */
+static void
+testFig4AdoptFinalExhausted(
+  void
+){
+  struct bracha87Fig4 *b;
+  unsigned long sz;
+  unsigned char vals[MAX_N];
+  unsigned char senders[MAX_N];
+  unsigned int act;
+  unsigned int i;
+
+  printf("\n  Step 3 adopt branch into EXHAUSTED:\n");
+
+  sz = bracha87Fig4Sz(3, 1);
+  if (!(b = (struct bracha87Fig4 *)calloc(1, sz))) {
+    check("AdoptExhaust: alloc", 0);
+    return;
+  }
+  CoinVal = 1;
+  bracha87Fig4Init(b, 3, 1, 1, 0, testCoin, 0);
+  for (i = 0; i < 4; ++i) {
+    senders[i] = (unsigned char)i;
+    vals[i] = 0;
+  }
+
+  act = bracha87Fig4Round(b, 0, 4, senders, vals);
+  check("AdoptExhaust: step 1 broadcasts", act == BRACHA87_BROADCAST);
+  act = bracha87Fig4Round(b, 1, 4, senders, vals);
+  check("AdoptExhaust: step 2 broadcasts", act == BRACHA87_BROADCAST);
+
+  vals[0] = 0 | BRACHA87_D_FLAG;
+  vals[1] = 0 | BRACHA87_D_FLAG;
+  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  printf("    n=4 t=1 dc==t+1(2), last phase: act=%u val=%u coin=%u\n",
+         act, b->value, CoinVal);
+
+  check("AdoptExhaust: EXHAUSTED at sub=2 of the last phase",
+        act == BRACHA87_EXHAUSTED);
+  check("AdoptExhaust: no DECIDE alongside EXHAUSTED",
+        !(act & BRACHA87_DECIDE));
+  check("AdoptExhaust: adopt fired -- value is the (d,v) value, not the coin",
+        b->value == 0 && CoinVal == 1);
+  check("AdoptExhaust: DECIDED flag clear",
+        !(b->flags & BRACHA87_F4_DECIDED));
+  check("AdoptExhaust: EXHAUSTED flag set",
+        (b->flags & BRACHA87_F4_EXHAUSTED) != 0);
+
+  /* The round space is spent, so every further round is a no-op. */
+  check("AdoptExhaust: subsequent Round(2) returns 0",
+        bracha87Fig4Round(b, 2, 4, senders, vals) == 0);
+  check("AdoptExhaust: subsequent Round(0) returns 0",
+        bracha87Fig4Round(b, 0, 4, senders, vals) == 0);
+  check("AdoptExhaust: still EXHAUSTED, still undecided",
+        (b->flags & BRACHA87_F4_EXHAUSTED)
+        && !(b->flags & BRACHA87_F4_DECIDED));
+
+  free(b);
+}
+
+/*
  * Test Fig4: decided process continues participating (paper requirement).
  * After deciding, subsequent rounds return BRACHA87_BROADCAST with the
  * decision value unchanged, advancing through phases.
@@ -5258,6 +5338,7 @@ main(
    */
   testFig4Steps();
   testFig4Step3Boundary();
+  testFig4AdoptFinalExhausted();
   testFig4PostDecide();
   testFig4PostDecideAdversarial();
   testFig4EdgeCases();

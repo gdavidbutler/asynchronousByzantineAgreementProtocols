@@ -129,7 +129,7 @@ qShuffle(
  * hardwired before the firing moved to the BPR sweep -- and
  * broadcast its BA_SEND acts from 'self' to all n processes.
  */
-static void
+static unsigned int
 qFanout(
   struct bkr94acs *st
  ,unsigned char self
@@ -146,6 +146,48 @@ qFanout(
       qPush(BKR94ACS_CLS_BA, acts[k].process, acts[k].round,
             acts[k].initiator, acts[k].type, self, (unsigned char)p,
             &acts[k].baValue, 1);
+  return (nacts);
+}
+
+/*--------------------------------------------------------------------------*/
+/*  The t=0 fanout-duty probe, armed only by the vacuity arm below.         */
+/*                                                                          */
+/*  Read-only, and placed where the drive consults the duty: after the      */
+/*  turns (only a turn produces the decisions the duty counts) and before   */
+/*  the fanout that reads it.                                               */
+/*--------------------------------------------------------------------------*/
+
+static int VacArmed;
+static unsigned long VacQueries;
+static unsigned long VacHeld;
+static unsigned long VacMet;
+static unsigned long VacTolerance;
+static unsigned long VacUnenteredDecided;
+static unsigned long VacFanoutActs;
+
+static void
+vacProbe(
+  const struct bkr94acs *st
+ ,unsigned int n
+){
+  unsigned int j;
+
+  ++VacQueries;
+  switch (bkr94acsFanoutDuty(st)) {
+  case BKR94ACS_DUTY_HELD:
+    ++VacHeld;
+    break;
+  case BKR94ACS_DUTY_MET:
+    ++VacMet;
+    break;
+  default:
+    ++VacTolerance;
+    break;
+  }
+  for (j = 0; j < n; ++j)
+    if (!bkr94acsBaEntered(st, (unsigned char)j)
+     && bkr94acsBaDecision(st, (unsigned char)j) == 1)
+      ++VacUnenteredDecided;
 }
 
 /*
@@ -242,6 +284,7 @@ runAcs(
     struct bkr94acs *st;
     struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
     unsigned int nacts;
+    unsigned int nfan;
     unsigned int k;
     unsigned int oldTail;
 
@@ -301,7 +344,11 @@ runAcs(
      * deliveries.
      */
     qTurns(st, m->to, n);
-    qFanout(st, m->to, n);
+    if (VacArmed)
+      vacProbe(st, n);
+    nfan = qFanout(st, m->to, n);
+    if (VacArmed)
+      VacFanoutActs += nfan;
 
     if (shuffleSeed && Qtail > oldTail)
       qShuffle(&shuffleSeed);
@@ -2614,6 +2661,534 @@ testExhaustedAmongDecided(
   free(a);
 }
 
+/*--------------------------------------------------------------------------*/
+/*  EXHAUSTED reached through Fig 4 step 3's ADOPT branch.                  */
+/*                                                                          */
+/*  What this separates: the standing exhaustion arms carry a 2:2 split     */
+/*  through every round, so no (d, v) is ever formed, the agreeing count    */
+/*  is 0, and step 3 takes the coin.  Case (i) decides and therefore        */
+/*  cannot precede exhaustion, which leaves case (ii) -- more than t and    */
+/*  at most 2t agreeing (d, v) -- as the other branch an exhaustion can be  */
+/*  reached through.  This is its witness at the composed layer, where the  */
+/*  values must survive Fig 3 validation instead of being handed to Fig 4   */
+/*  directly.                                                              */
+/*                                                                          */
+/*  The schedule is a knife edge at n=4, t=1, maxPhases=1 (n-t = 3):        */
+/*    round 0  0, 0, 1, 1 -- 2:2.  A round-1 message is validated by        */
+/*             evaluating N over this set, and both 0 and 1 are reachable   */
+/*             in some n-t subset of it, so the evaluation is permissive    */
+/*             and the 3:1 round 1 below validates.  Any other round-0      */
+/*             split makes it exact, admits only the majority, and blocks   */
+/*             round 1.                                                     */
+/*    round 1  0, 0, 0, 1 -- exactly 3:1.  N over this set yields (d, 0)    */
+/*             AND permits a plain value, because dropping the one excess   */
+/*             copy of 0 leaves some n-t subset without a strict majority.  */
+/*             At 4:0 the excess drop still leaves a majority, the          */
+/*             evaluation is exact, plain values are rejected, every        */
+/*             round-2 message must carry (d, 0), and the BA decides        */
+/*             instead of exhausting.                                       */
+/*    round 2  (d,0), (d,0), 0, 0 -- two agreeing (d, 0): more than t = 1   */
+/*             and not more than 2t = 2.  Step 3 adopts, the phase was the  */
+/*             last, so the round space is spent and the turn reports       */
+/*             EXHAUSTED.                                                   */
+/*                                                                          */
+/*  The schedule is also what this process itself sends: its round-1 value  */
+/*  is the round-0 majority (0) and its round-2 value is (d, 0), which is   */
+/*  what initiator 0 carries in each round above.                          */
+/*                                                                          */
+/*  Sequencing is binding.  bkr94acsBaGetValid answers the BA's NEXT round  */
+/*  and answers 0 once the round space is spent, so the sample that names   */
+/*  the branch must be read after round 2 validates and BEFORE the turn     */
+/*  that consumes it.  The turns are therefore taken one at a time and      */
+/*  never drained, which is why this arm cannot reuse feedFig1Accept.      */
+/*                                                                          */
+/*  The sample assert is a construction guard: it states what was fed, and  */
+/*  no library change can move it.  What this arm carries is the            */
+/*  exhaustion reached from that sample.                                    */
+/*--------------------------------------------------------------------------*/
+
+/*
+ * Drive one BA Fig1 to ACCEPT without turning any round, so the caller
+ * chooses when the sample is consumed.  sendInitial is 0 for an instance
+ * a turn has already marked as the initiator: its INITIAL is the turn's,
+ * and the readys alone carry it through ECHOED and RDSENT to ACCEPTED.
+ */
+static void
+feedFig1AcceptNoTurn(
+  struct bkr94acs *a
+ ,unsigned char process
+ ,unsigned char round
+ ,unsigned char initiator
+ ,unsigned char value
+ ,struct bkr94acsAct *out
+ ,unsigned char sendInitial
+){
+  unsigned char sender;
+
+  /* from == initiator, the only INITIAL the ingress binds (pitfall 17). */
+  if (sendInitial)
+    (void)bkr94acsBaInput(a, process, round, initiator,
+                          BRACHA87_INITIAL, initiator, value, out);
+  /* rdCnt 1, 2, 3 at n=4, t=1: rule 5 at t+1, rule 6 at 2t+1. */
+  for (sender = 1; sender <= 3; ++sender)
+    (void)bkr94acsBaInput(a, process, round, initiator,
+                          BRACHA87_READY, sender, value, out);
+}
+
+static void
+testExhaustedAdoptBranch(
+  void
+){
+  static const unsigned char Round0[4] = { 0, 0, 1, 1 };
+  static const unsigned char Round1[4] = { 0, 0, 0, 1 };
+  unsigned long sz;
+  struct bkr94acs *a;
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
+  struct bkr94acsAct tout[3];   /* bkr94acsTurn bound */
+  unsigned char round2[4];
+  unsigned char senders[4];
+  unsigned char values[4];
+  unsigned int exhaustedSeen;
+  unsigned int cnt;
+  unsigned int dcnt;
+  unsigned int n;
+  unsigned int k;
+  unsigned int b;
+
+  printf("\n  EXHAUSTED through the step 3 adopt branch:\n");
+
+  sz = bkr94acsSz(3, 0, 1);  /* n=4 (encoded 3), vLen=1 (encoded 0), 1 phase */
+  if (!(a = (struct bkr94acs *)calloc(1, sz))) {
+    check("testExhaustedAdoptBranch alloc", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
+
+  round2[0] = (unsigned char)(0 | BRACHA87_D_FLAG);
+  round2[1] = (unsigned char)(0 | BRACHA87_D_FLAG);
+  round2[2] = 0;
+  round2[3] = 0;
+
+  for (b = 0; b < 4; ++b)
+    feedFig1AcceptNoTurn(a, 0, 0, (unsigned char)b, Round0[b], out, 1);
+  check("AdoptBranch: round 0 turns on its own sample",
+        bkr94acsTurn(a, 0, 1, tout) > 0);
+
+  for (b = 0; b < 4; ++b)
+    feedFig1AcceptNoTurn(a, 0, 1, (unsigned char)b, Round1[b], out, 1);
+  check("AdoptBranch: round 1 turns on its own sample",
+        bkr94acsTurn(a, 0, 1, tout) > 0);
+
+  for (b = 0; b < 4; ++b)
+    feedFig1AcceptNoTurn(a, 0, 2, (unsigned char)b, round2[b], out, 1);
+
+  check("AdoptBranch: the last round is MET before its turn",
+        bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_MET);
+  cnt = bkr94acsBaGetValid(a, 0, senders, values);
+  dcnt = 0;
+  for (k = 0; k < cnt; ++k)
+    if ((values[k] & BRACHA87_D_FLAG)
+     && (values[k] & ~BRACHA87_D_FLAG) == 0)
+      ++dcnt;
+  printf("    last round sample: %u validated, %u agreeing (d, 0)\n",
+         cnt, dcnt);
+  check("AdoptBranch: the last round's sample is the adopt band",
+        dcnt > 1 && dcnt <= 2);
+
+  exhaustedSeen = 0;
+  n = bkr94acsTurn(a, 0, 1, tout);
+  for (k = 0; k < n; ++k)
+    if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED && tout[k].process == 0)
+      ++exhaustedSeen;
+  check("AdoptBranch: EXHAUSTED output once from the adopt branch",
+        exhaustedSeen == 1);
+  check("AdoptBranch: baDecision[0] == 0xFE (exhausted sentinel)",
+        bkr94acsBaDecision(a, 0) == 0xFE);
+  check("AdoptBranch: complete remains clear after EXHAUSTED",
+        a->complete == 0);
+  check("AdoptBranch: the sample is empty once the round space is spent",
+        bkr94acsBaGetValid(a, 0, senders, values) == 0);
+
+  /* Further arrivals cannot make an outputless BA output again. */
+  (void)bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, 0, 0, out);
+  while ((n = bkr94acsTurn(a, 0, 1, tout)) > 0)
+    for (k = 0; k < n; ++k)
+      if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
+        ++exhaustedSeen;
+  check("AdoptBranch: no duplicate EXHAUSTED on subsequent input",
+        exhaustedSeen == 1);
+
+  free(a);
+}
+
+/*--------------------------------------------------------------------------*/
+/*  Quiescence after the EXHAUSTED ending.                                  */
+/*                                                                          */
+/*  EXHAUSTED is the library's one stop, and it is the ending the retry     */
+/*  gate gives no shortcut for: the gate skips an A-Cast walk only for a    */
+/*  BA that decided 0, and the exhausted sentinel is 0xFE, so every sent    */
+/*  instance must retire on its own evidence.  The standing arms cover the  */
+/*  opposite direction (retry CONTINUES past EXHAUSTED) and quiescence      */
+/*  after COMPLETE; nothing covers quiescence after this one, and the       */
+/*  schedule explorer cannot, since its terminal precedence classifies an   */
+/*  exhausted state as EXHAUSTED and never subjects it to the quiescence    */
+/*  battery.                                                                */
+/*                                                                          */
+/*  THE DRIVE IS SYNTHETIC, and says so: exhausting every BA at every       */
+/*  process is not reachable in an honest all-to-all cluster at this size.  */
+/*  Three correct processes entering the same value carry step 1's          */
+/*  majority, step 2 forms (d, v) and step 3 decides in the first phase,    */
+/*  whichever way they entered.  So each process's Fig 3 is fed a sample    */
+/*  no single honest schedule produces at all four at once.  What the arm   */
+/*  claims is the retry machinery's behavior after exhaustion, never the    */
+/*  exhaustion's reachability.                                              */
+/*                                                                          */
+/*  Every instance is nonetheless locally coherent -- no instance is left   */
+/*  in a state its own process could not hold.  Round 0 is fed at every     */
+/*  slot; from round 1 on, the slot belonging to the process itself is the  */
+/*  one its own turn initiated, so only the readys are fed there and the    */
+/*  value stays the turn's.  Every round's sample is then 2:2, which forms  */
+/*  no (d, v) at all, so step 3 takes the coin and the single phase ends    */
+/*  exhausted.                                                              */
+/*                                                                          */
+/*  BINDING CONSTRAINT: every instance of every round is driven to ACCEPT,  */
+/*  not merely the n-t that complete a round.  ECHO retires at ACCEPTED     */
+/*  alone, so an ECHOED-but-not-ACCEPTED instance would output ECHO_ALL     */
+/*  forever and the 0 return would never come against the CORRECT machine.  */
+/*                                                                          */
+/*  The evidence is per-instance and is the point: the 0 return alone is    */
+/*  the weaker fact a machine that retired READY on its own local accept    */
+/*  also produces, and sooner.  What separates them is WHOSE accepts closed */
+/*  the gate, so the arm reads each sent instance's READY suppress mask --  */
+/*  the mask the header names as the retire gate, and the one that excludes */
+/*  a process still asking to be announced to.                              */
+/*--------------------------------------------------------------------------*/
+
+static void
+testQuiescenceAfterExhausted(
+  void
+){
+  struct bkr94acs *processes[4];
+  struct bracha87Retry cursor[4];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
+  struct bkr94acsAct tout[3];   /* bkr94acsTurn bound */
+  unsigned long sz;
+  unsigned int exhausted[4];
+  unsigned int quiesced[4];
+  unsigned int nQuiesced;
+  unsigned int iter;
+  unsigned int sent;
+  unsigned int served;
+  unsigned int covered;
+  unsigned int idle;
+  unsigned int held;
+  unsigned int stable;
+  unsigned int n;
+  unsigned int p;
+  unsigned int j;
+  unsigned int r;
+  unsigned int b;
+  unsigned int q;
+  unsigned int k;
+
+  printf("\n  Quiescence after the EXHAUSTED ending:\n");
+
+  sz = bkr94acsSz(3, 0, 1);  /* n=4 (encoded 3), vLen=1 (encoded 0), 1 phase */
+  memset(processes, 0, sizeof (processes));
+  for (p = 0; p < 4; ++p)
+    if (!(processes[p] = (struct bkr94acs *)calloc(1, sz))) {
+      check("testQuiescenceAfterExhausted alloc", 0);
+      for (q = 0; q < 4; ++q)
+        free(processes[q]);
+      return;
+    }
+  for (p = 0; p < 4; ++p) {
+    bkr94acsInit(processes[p], 3, 1, 0, 1, (unsigned char)p, testCoin, 0);
+    exhausted[p] = 0;
+  }
+
+  for (p = 0; p < 4; ++p)
+    for (r = 0; r < 3; ++r) {
+      for (j = 0; j < 4; ++j)
+        for (b = 0; b < 4; ++b) {
+          unsigned char v;
+
+          if (!r)
+            v = (unsigned char)((b < 2) ? 0 : 1);
+          else if (b == p)
+            v = 0;                    /* the value this turn broadcast */
+          else
+            v = (unsigned char)((b == ((p == 0) ? 1u : 0u)) ? 0 : 1);
+          feedFig1AcceptNoTurn(processes[p], (unsigned char)j,
+                               (unsigned char)r, (unsigned char)b, v, out,
+                               (unsigned char)(!r || b != p));
+        }
+      /* One turn per BA now that its round's sample is complete at all n. */
+      for (j = 0; j < 4; ++j) {
+        n = bkr94acsTurn(processes[p], (unsigned char)j, 1, tout);
+        for (k = 0; k < n; ++k)
+          if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
+            ++exhausted[p];
+      }
+    }
+
+  for (p = 0; p < 4; ++p) {
+    check("QuiesceExhausted: one EXHAUSTED per BA", exhausted[p] == 4);
+    for (j = 0; j < 4; ++j)
+      if (bkr94acsBaDecision(processes[p], (unsigned char)j) != 0xFE)
+        break;
+    check("QuiesceExhausted: the 0xFE sentinel stands on every BA", j == 4);
+  }
+
+  /* Further arrivals and further turns past the ending. */
+  for (p = 0; p < 4; ++p)
+    for (j = 0; j < 4; ++j) {
+      (void)bkr94acsBaInput(processes[p], (unsigned char)j, 0, 0,
+                            BRACHA87_READY, 0, 0, out);
+      while ((n = bkr94acsTurn(processes[p], (unsigned char)j, 1, tout)) > 0)
+        for (k = 0; k < n; ++k)
+          if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
+            ++exhausted[p];
+    }
+
+  /*
+   * The accepts are ANNOUNCED, never set: an announcement rides the
+   * READY the retry is already outputting, and that egress is the only
+   * path a process has to tell the others.  Calling the ingress setter
+   * directly instead would write the very bits the ending evidence
+   * below reads, and a machine that retired READY on its own local
+   * accept -- outputting no READY at all past accept -- would still
+   * pass.  The annotation's absence is the want, routed back the same
+   * way, so a process suppressed before it was announced to is
+   * un-suppressed for the egress that answers it.
+   */
+  for (p = 0; p < 4; ++p) {
+    bracha87RetryInit(&cursor[p]);
+    quiesced[p] = 0;
+  }
+  nQuiesced = 0;
+  for (iter = 0; iter < 20000 && nQuiesced < 4; ++iter)
+    for (p = 0; p < 4; ++p) {
+      if (quiesced[p])
+        continue;
+      n = bkr94acsRetry(processes[p], &cursor[p], out);
+      if (!n && bkr94acsSentFig1Count(processes[p])) {
+        quiesced[p] = 1;
+        ++nQuiesced;
+        continue;
+      }
+      for (k = 0; k < n; ++k) {
+        if (out[k].act != BKR94ACS_ACT_BA_SEND
+         || out[k].type != BRACHA87_READY)
+          continue;
+        for (q = 0; q < 4; ++q) {
+          if (q == p
+           || (out[k].skip && BRACHA87_SKIP_TST(out[k].skip, q)))
+            continue;
+          if (out[k].accepted)
+            bkr94acsBaAccepted(processes[q], out[k].process, out[k].round,
+                               out[k].initiator, (unsigned char)p);
+          if (!out[k].answer || !BRACHA87_SKIP_TST(out[k].answer, q)) {
+            bkr94acsBaWants(processes[q], out[k].process, out[k].round,
+                            out[k].initiator, (unsigned char)p);
+            /* Leaving the rotation is provisional -- only a tick can
+             * answer a want, so the wanted process goes back on. */
+            if (quiesced[q]) {
+              quiesced[q] = 0;
+              --nQuiesced;
+            }
+          }
+        }
+      }
+    }
+  check("QuiesceExhausted: every process reaches the Retry 0 return",
+        nQuiesced == 4);
+
+  stable = 0;
+  held = 0;
+  for (p = 0; p < 4; ++p) {
+    check("QuiesceExhausted: no further EXHAUSTED past the ending",
+          exhausted[p] == 4);
+    check("QuiesceExhausted: complete stays clear across further input",
+          processes[p]->complete == 0);
+    for (j = 0; j < 4; ++j)
+      if (bkr94acsTurnDuty(processes[p], (unsigned char)j)
+          == BKR94ACS_DUTY_HELD)
+        ++held;
+    /* Stable: a whole sweep's worth of calls, every one of them idle. */
+    sent = bkr94acsSentFig1Count(processes[p]);
+    idle = 0;
+    for (k = 0; k <= sent; ++k)
+      if (!bkr94acsRetry(processes[p], &cursor[p], out))
+        ++idle;
+    if (sent && idle == sent + 1)
+      ++stable;
+  }
+  check("QuiesceExhausted: TurnDuty HELD for every BA of every process",
+        held == 16);
+  check("QuiesceExhausted: and the 0 return is stable at every process",
+        stable == 4);
+
+  served = 0;
+  covered = 0;
+  for (p = 0; p < 4; ++p)
+    for (j = 0; j < 4; ++j)
+      for (r = 0; r < 3; ++r)
+        for (b = 0; b < 4; ++b) {
+          const struct bracha87Fig1 *f1;
+          const unsigned char *skip;
+
+          /* Sent is the test the header names, and reading the value is
+           * how it is taken -- so the read guards itself. */
+          if (!(f1 = bkr94acsBaFig1(processes[p], (unsigned char)j,
+                                    (unsigned char)r, (unsigned char)b))
+           || !bracha87Fig1Value(f1))
+            continue;
+          ++served;
+          if (!(skip = bracha87Fig1Skip(f1, BRACHA87_READY_ALL)))
+            continue;
+          for (q = 0; q < 4; ++q)
+            if (!BRACHA87_SKIP_TST(skip, q))
+              break;
+          if (q == 4)
+            ++covered;
+        }
+  check("QuiesceExhausted: every owned BA Fig1 is sent and examined",
+        served == 4 * 4 * 3 * 4);
+  check("QuiesceExhausted: every sent instance's READY mask covers all n",
+        served == covered);
+  printf("    4 processes, %u sent instances, %u with a full READY mask,"
+         " %u quiescent\n", served, covered, nQuiesced);
+
+  for (p = 0; p < 4; ++p)
+    free(processes[p]);
+}
+
+/*--------------------------------------------------------------------------*/
+/*  The TOLERANCE class is empty at t=0, and the two duty queries are       */
+/*  empty for DIFFERENT reasons.  These two arms assert the vacuity, each   */
+/*  in the form its own query admits.                                       */
+/*                                                                          */
+/*  bkr94acsTurnDuty is empty by ARITHMETIC: a round is turnable at n-t     */
+/*  validated and MET at n, and at t=0 those are the same number, so the    */
+/*  half-open band between them holds nothing.  The falsifiable form is     */
+/*  the boundary pair -- HELD at n-1, MET at n, on one call sequence --     */
+/*  which an off-by-one MET boundary breaks by reading TOLERANCE at a full  */
+/*  sample.  An end-to-end drive cannot park the count at n-1, so this arm  */
+/*  feeds its own instance one initiator at a time and never turns.         */
+/*--------------------------------------------------------------------------*/
+
+static void
+testTurnDutyVacuityT0(
+  void
+){
+  unsigned long sz;
+  struct bkr94acs *a;
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
+  unsigned char senders[4];
+  unsigned char values[4];
+  unsigned int tolerance;
+  unsigned int cnt;
+  unsigned int b;
+
+  printf("\n  TurnDuty TOLERANCE is empty at t=0:\n");
+
+  sz = bkr94acsSz(3, 0, 1);  /* n=4 (encoded 3), vLen=1 (encoded 0), 1 phase */
+  if (!(a = (struct bkr94acs *)calloc(1, sz))) {
+    check("testTurnDutyVacuityT0 alloc", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 0, 0, 1, 0, testCoin, 0);
+
+  tolerance = 0;
+  check("TurnDutyT0: a fresh BA is HELD",
+        bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_HELD);
+
+  for (b = 0; b < 4; ++b) {
+    /* At t=0 the ready threshold is t+1 = 1 and the accept threshold
+     * 2t+1 = 1, so two distinct READY senders carry any instance from
+     * ECHOED through RDSENT to ACCEPTED. */
+    (void)bkr94acsBaInput(a, 0, 0, (unsigned char)b, BRACHA87_INITIAL,
+                          (unsigned char)b, 0, out);
+    (void)bkr94acsBaInput(a, 0, 0, (unsigned char)b, BRACHA87_READY, 1, 0, out);
+    (void)bkr94acsBaInput(a, 0, 0, (unsigned char)b, BRACHA87_READY, 2, 0, out);
+
+    cnt = bkr94acsBaGetValid(a, 0, senders, values);
+    check("TurnDutyT0: the validated count grows one per initiator",
+          cnt == b + 1);
+    if (bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_TOLERANCE)
+      ++tolerance;
+    if (b + 1 < 4)
+      check("TurnDutyT0: HELD below n validated, since n-t is n at t=0",
+            bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_HELD);
+    else
+      check("TurnDutyT0: MET at n validated, with no band before it",
+            bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_MET);
+  }
+  check("TurnDutyT0: TOLERANCE never classified at any count",
+        tolerance == 0);
+  printf("    n=4 t=0: HELD at 1, 2 and 3 validated, MET at 4,"
+         " TOLERANCE %u times\n", tolerance);
+
+  free(a);
+}
+
+/*--------------------------------------------------------------------------*/
+/*  bkr94acsFanoutDuty is empty at t=0 for a DIFFERENT reason, and the      */
+/*  difference is what this arm asserts.  Its guard reads "the BA-output-1  */
+/*  count is at least n-t, and something is unentered", which at t=0 is     */
+/*  "all n BAs decided 1 with one of them unentered".  Nothing in that      */
+/*  comparison forbids it.  What forbids it is the protocol: at t=0 a       */
+/*  round completes only at all n validated, so a BA can decide only if     */
+/*  this process's own round-0 message is among them, and that message is   */
+/*  exactly its entry.  Unentered therefore implies undecided.              */
+/*                                                                          */
+/*  So the assertion is that MECHANISM, probed at every duty query of a     */
+/*  full run, rather than an absence a machine that never queries would     */
+/*  also satisfy -- which is also why HELD and MET are each required to     */
+/*  occur.  The companion reading, that the fanout outputs nothing all      */
+/*  run, restates the duty guard rather than adding evidence.               */
+/*--------------------------------------------------------------------------*/
+
+static void
+testFanoutDutyVacuityT0(
+  void
+){
+  char acasts[MAX_PROCESSES][MAX_VLEN];
+  struct acsResult results[MAX_PROCESSES];
+  int ran;
+
+  printf("\n  FanoutDuty TOLERANCE is empty at t=0:\n");
+
+  memset(acasts, 0, sizeof (acasts));
+  strcpy(acasts[0], "joe");
+  strcpy(acasts[1], "sam");
+  strcpy(acasts[2], "sally");
+  strcpy(acasts[3], "tim");
+
+  VacQueries = VacHeld = VacMet = VacTolerance = 0;
+  VacUnenteredDecided = 0;
+  VacFanoutActs = 0;
+  VacArmed = 1;
+  ran = runAcs(4, 0, acasts, 6, 0, results);
+  VacArmed = 0;
+
+  check("FanoutDutyT0: the n=4 t=0 run completed", ran == 0);
+  check("FanoutDutyT0: every process completed", allComplete(results, 4));
+  check("FanoutDutyT0: the duty was actually queried", VacQueries > 0);
+  check("FanoutDutyT0: no BA is ever unentered and decided 1",
+        VacUnenteredDecided == 0);
+  check("FanoutDutyT0: TOLERANCE never classified across the run",
+        VacTolerance == 0);
+  check("FanoutDutyT0: HELD and MET both occur",
+        VacHeld > 0 && VacMet > 0);
+  check("FanoutDutyT0: the fanout output nothing across the run",
+        VacFanoutActs == 0);
+  printf("    n=4 t=0: %lu queries, HELD %lu, MET %lu, TOLERANCE %lu,"
+         " fanout acts %lu\n",
+         VacQueries, VacHeld, VacMet, VacTolerance, VacFanoutActs);
+}
+
 /*
  * White-box: bkr94acsAcastValue ACCEPT-gate transition for a
  * non-self process.
@@ -2913,6 +3488,10 @@ main(
   testBprHighDrop();
   testExhausted();
   testExhaustedAmongDecided();
+  testExhaustedAdoptBranch();
+  testQuiescenceAfterExhausted();
+  testTurnDutyVacuityT0();
+  testFanoutDutyVacuityT0();
   testAcastValueGate();
   testForgedInitial();
 
