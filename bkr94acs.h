@@ -906,6 +906,46 @@ bkr94acsAcastSkip(
 );
 
 /*
+ * Borrowed read-only access to an owned Fig1 instance: the A-Cast Fig1
+ * for 'process', or the BA Fig1 for (process, round, initiator) -- the
+ * same keys the Accepted/Wants ingress routes on.  Returns 0 for a
+ * null or out-of-range argument.  Same borrowed lifetime as the mask
+ * accessors: valid until the next mutating library call.
+ *
+ * READ-ONLY, structurally: the pointer is const, and inputs go through
+ * the bkr94acs entries, which route wire facts to the right instance
+ * and record the composition-level side effects (self-accept, step-1
+ * enter) no bare Fig1 call knows to make.
+ *
+ * What this is for: the quiescence ending claim is PER-INSTANCE
+ * evidence -- a sent Fig1 retires its READY only when its
+ * accepted-process bitmap (bracha87Fig1Answer) covers all n -- while
+ * the retry's 0 return is the weaker derived fact: a machine that
+ * retired READY on the forbidden LOCAL accept (pitfalls 10/16) also
+ * returns 0, sooner.  A caller or instrument that wants to CHECK the
+ * claim rather than infer it reads the instance: bracha87Fig1Value
+ * non-null is the sent test (both ready paths require ECHOED, so
+ * RDSENT implies it, and an INITIATOR carries its value), and a sent
+ * instance whose answer mask covers all n retired its READY on the
+ * remote all-accepted gate -- the distinction the 0 return cannot
+ * show.  Every other bracha87Fig1 reader (Skip, AllEchoed) composes
+ * the same way.
+ */
+const struct bracha87Fig1 *
+bkr94acsAcastFig1(
+  const struct bkr94acs *
+ ,unsigned char            /* process */
+);
+
+const struct bracha87Fig1 *
+bkr94acsBaFig1(
+  const struct bkr94acs *
+ ,unsigned char            /* process: which process's BA */
+ ,unsigned char            /* round: BA round */
+ ,unsigned char            /* initiator: who initiated this Fig1 broadcast */
+);
+
+/*
  * Number of Fig1 instances currently sent (any of F1_INITIATOR,
  * F1_ECHOED, F1_RDSENT set).  Walks the N A-Cast Fig1s plus the
  * full BA Fig1 space -- sent state is NOT bounded by

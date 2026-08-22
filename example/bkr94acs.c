@@ -42,7 +42,7 @@
  *
  *   QUIESCENT   the proof stop, demonstrated here, per process on
  *               its OWN evidence: a bkr94acsRetry pass past its
- *               A-Cast owes nothing, so it leaves the sweep
+ *               A-Cast owes nothing, so it leaves the retry
  *               rotation.  Completion is then an assertion the
  *               results section checks, not the gate.  Reaching it
  *               needs both READY annotations round-tripped below --
@@ -54,7 +54,7 @@
  *               tell a laggard from a corpse.  Under loss it is the
  *               only exit a process that never hears an answer has.
  *               This demo loses nothing, so it never takes it.
- *   sweep cap   a harness guard, not protocol: a bound on the
+ *   tick cap    a harness guard, not protocol: a bound on the
  *               rotation, carrying no evidence of anything.
  *
  * Build:
@@ -66,14 +66,19 @@
  * Example:
  *   ./example_bkr94acs 4 1 joe sam sally tim
  *
- * The sweep-side pacing pair (-d names the WAN laggard, -g the grace):
+ * The sweep-side pacing pair (-d names the WAN laggard, -g the grace,
+ * in COMPLETED BPR SWEEPS -- full passes of the Retry cursor, the
+ * unit bkr94acs.h ratifies):
  *   ./example_bkr94acs -d 3 4 1 joe sam sally tim
  *     the eager schedule (budget 0) excludes the delayed honest
  *     process: SubSet = 3 of 4, its value accepted everywhere but
  *     excluded -- participation loss, not value loss
- *   ./example_bkr94acs -d 3 -g 8 4 1 joe sam sally tim
- *     the identical schedule under an 8-sweep grace includes it:
- *     SubSet = 4 of 4, step 2 never fires
+ *   ./example_bkr94acs -d 3 -g 1 4 1 joe sam sally tim
+ *     the identical schedule under a ONE-sweep grace includes it:
+ *     SubSet = 4 of 4, step 2 never fires.  One sweep is what a
+ *     grace is worth by construction: a pass re-offers every sent
+ *     instance once, so the released INITIAL reaches everyone
+ *     within it.
  * What the pair deliberately shows the eager run giving up is the
  * whole demonstration; a run without -d never even enables step 2
  * (every A-Cast enters 1 before three BAs decide).
@@ -386,18 +391,28 @@ main(
   struct bracha87Retry retry[MAX_PROCESSES];
 
   /* Sweep-side pacing state (the header's caller discipline: count
-   * sweeps while a decision's duty holds TOLERANCE, fire when the
-   * count exceeds the budget; reset whenever duty leaves TOLERANCE) */
-  unsigned int turnTicks[MAX_PROCESSES][MAX_PROCESSES];
-  unsigned int fanoutTicks[MAX_PROCESSES];
+   * COMPLETED SWEEPS while a decision's duty holds TOLERANCE, fire
+   * when the count reaches the budget, evaluating the verdict on
+   * every tick so a zero budget stays eager; reset whenever duty
+   * leaves TOLERANCE.  THE UNIT IS THE FULL SWEEP -- one complete
+   * pass of the Retry cursor over every sent Fig 1 instance,
+   * bkr94acsSentFig1Count calls -- per bkr94acs.h.  One loop pass
+   * here is a TICK (one Retry call per process, the header's
+   * application-loop template), so a sweep boundary for a process
+   * is its Retry returning 0 (an idle pass), its call count
+   * reaching bkr94acsSentFig1Count, or a quiescent tick (the pass
+   * it would have made owes nothing). */
+  unsigned int turnSweeps[MAX_PROCESSES][MAX_PROCESSES];
+  unsigned int fanoutSweeps[MAX_PROCESSES];
+  unsigned int retryCalls[MAX_PROCESSES];
   unsigned int fanoutFires;
-  unsigned int sweepCount;
+  unsigned int tickCount;
   unsigned int released;
 
   /* Per-process ending: quiescence is read per process, from its own
    * Retry sweep, so the run reports which processes left and when. */
   unsigned char quiescent[MAX_PROCESSES];
-  unsigned int quiesceSweep[MAX_PROCESSES];
+  unsigned int quiesceTick[MAX_PROCESSES];
   unsigned int quiesced;
 
   /* A-Cast strings */
@@ -545,7 +560,7 @@ main(
 
     /* The -d process is the WAN laggard: only its OUTBOUND A-Cast is
      * delayed.  It runs, receives, retries, and enters like everyone
-     * else; its INITIAL releases in the sweep loop below. */
+     * else; its INITIAL releases in the tick loop below. */
     if (dproc >= 0 && i == (unsigned int)dproc)
       continue;
     nActs = bkr94acsAcast(processes[i],
@@ -564,25 +579,27 @@ main(
     qShuffle(&shuffleSeed);
 
   /*----------------------------------------------------------------------*/
-  /*  Drive to completion: drain ingress, tick the sweep, repeat -- the   */
-  /*  bkr94acs.h application loop.  The sweep carries the BPR retry and   */
-  /*  the two sweep-side protocol decisions, each paced by -g's           */
-  /*  tolerance budget (0 = fire whenever enabled, the eager schedule).   */
+  /*  Drive to completion: drain ingress, tick, repeat -- the            */
+  /*  bkr94acs.h application loop.  A tick is one Retry call per          */
+  /*  process plus the two sweep-side protocol decisions, each paced      */
+  /*  by -g's tolerance budget in COMPLETED SWEEPS (0 = fire whenever     */
+  /*  enabled, the eager schedule).                                       */
   /*----------------------------------------------------------------------*/
 
   released = (dproc < 0) ? 1 : 0;
-  sweepCount = 0;
+  tickCount = 0;
   fanoutFires = 0;
   quiesced = 0;
   memset(quiescent, 0, sizeof (quiescent));
-  memset(quiesceSweep, 0, sizeof (quiesceSweep));
-  memset(turnTicks, 0, sizeof (turnTicks));
-  memset(fanoutTicks, 0, sizeof (fanoutTicks));
+  memset(quiesceTick, 0, sizeof (quiesceTick));
+  memset(turnSweeps, 0, sizeof (turnSweeps));
+  memset(fanoutSweeps, 0, sizeof (fanoutSweeps));
+  memset(retryCalls, 0, sizeof (retryCalls));
 
   for (;;) {
     unsigned int progress;
 
-    ++sweepCount;
+    ++tickCount;
     progress = 0;
 
     /*--------------------------------------------------------------------*/
@@ -706,21 +723,21 @@ main(
     }
 
     /* The queue is drained (Qhead == Qtail): reset the indices so the
-     * append-only store's capacity bounds one sweep's traffic, not the
+     * append-only store's capacity bounds one tick's traffic, not the
      * whole run's -- without this a long retirement tail fills the
      * queue and qPush's silent drop would fake quiescence. */
     Qhead = Qtail = 0;
 
     /*--------------------------------------------------------------------*/
-    /*  The delayed A-Cast releases at the first sweep its own process    */
+    /*  The delayed A-Cast releases at the first tick its own process     */
     /*  observes step 2 leave HELD: the WAN knife edge.  Under a budget   */
-    /*  that is TOLERANCE -- the grace clock is running and the next      */
-    /*  drain delivers the INITIAL, so step 1 wins.  At -g 0 TOLERANCE    */
-    /*  never survives to a sweep boundary (the tick fires the fanout     */
-    /*  within the same pass that decides the n-t'th BA), so the first    */
+    /*  that is TOLERANCE -- the grace clock is counting completed        */
+    /*  sweeps and the next drain delivers the INITIAL, so step 1 wins.   */
+    /*  At -g 0 the verdict elapses within the same tick that decides     */
+    /*  the n-t'th BA (it is evaluated on every tick), so the first       */
     /*  observable state is MET: the door shut before the laggard's       */
     /*  INITIAL could leave, and the release demonstrates the arrival     */
-    /*  that was one sweep too late.                                      */
+    /*  that was one tick too late.                                       */
     /*--------------------------------------------------------------------*/
 
     if (!released
@@ -729,8 +746,8 @@ main(
 
       released = 1;
       progress = 1;
-      printf("process %d: delayed A-Cast \"%s\" releases (sweep %u)\n",
-             dproc, acasts[dproc], sweepCount);
+      printf("process %d: delayed A-Cast \"%s\" releases (tick %u)\n",
+             dproc, acasts[dproc], tickCount);
       if (bkr94acsAcast(processes[dproc],
                           (const unsigned char *)acasts[dproc],
                           &acastAct) == 1)
@@ -742,17 +759,25 @@ main(
     }
 
     /*--------------------------------------------------------------------*/
-    /*  Sweep tick: the BPR retry plus the sweep-side decisions.          */
+    /*  The tick: one Retry call per process plus the sweep-side          */
+    /*  decisions, their tolerance clocks counting completed sweeps.      */
     /*--------------------------------------------------------------------*/
 
     for (i = 0; i < n; ++i) {
       struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
       unsigned int nacts;
       unsigned int p;
+      unsigned int sweepDone;
       unsigned char duty;
 
-      /* One retry call per process per sweep -- looping until idle
-       * would flood the network; see bracha87.h's flood warning.
+      /* One retry call per process per TICK -- looping until idle
+       * would flood the network; see bracha87.h's flood warning.  A
+       * full BPR SWEEP -- one complete pass of the cursor over every
+       * sent Fig 1 instance, bkr94acsSentFig1Count calls -- spans
+       * many ticks, and its boundary here is what the tolerance
+       * clocks below count: a 0 return (an idle pass), the call
+       * count reaching bkr94acsSentFig1Count, or a quiescent tick
+       * (the pass it would have made owes nothing).
        * Receivers dedup at Fig1Input, so under perfect delivery a
        * retry's duplicates produce no new state; here it carries the
        * -d laggard's late INITIAL and re-carries anything a lossy
@@ -766,43 +791,59 @@ main(
        * bounds what a process OWES, never what it may still be told --
        * and a turn or fanout below re-arms it, since either can seed a
        * fresh Fig 1 for a round nobody has broadcast yet. */
+      sweepDone = 0;
       if (!quiescent[i]) {
         nacts = bkr94acsRetry(processes[i], &retry[i], acts);
+        ++retryCalls[i];
+        if (!nacts
+         || retryCalls[i] >= bkr94acsSentFig1Count(processes[i])) {
+          retryCalls[i] = 0;
+          sweepDone = 1;
+        }
         if (!nacts && bkr94acsSentFig1Count(processes[i])) {
           quiescent[i] = 1;
-          quiesceSweep[i] = sweepCount;
+          quiesceTick[i] = tickCount;
           ++quiesced;
           if (verbose)
-            printf("process %u: QUIESCENT (sweep %u)\n", i, sweepCount);
+            printf("process %u: QUIESCENT (tick %u)\n", i, tickCount);
         }
         qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [retry]");
-      }
+      } else
+        /* A quiescent process's pass owes nothing: an idle sweep
+         * completes every tick, so its tolerance clocks keep
+         * running. */
+        sweepDone = 1;
 
       /*
-       * BA round turns, paced per (instance, BA): count sweeps while
-       * bkr94acsTurnDuty holds TOLERANCE, pass the elapsed signal
-       * once the count exceeds -g.  MET fires free -- the full
-       * sample is in hand and waiting buys nothing.  The grace is
+       * BA round turns, paced per (ACS state, BA): count COMPLETED
+       * SWEEPS while bkr94acsTurnDuty holds TOLERANCE, pass the
+       * elapsed signal once the count reaches -g -- evaluated on
+       * every tick, so a zero budget recovers the eager schedule
+       * exactly (bkr94acs.h: a clock that only advances at a sweep
+       * boundary fires one boundary late even at zero).  MET fires
+       * free -- the full sample is in hand and waiting buys
+       * nothing.  The grace is
        * scoped to UNDECIDED BAs: once bkr94acsBaDecision reports a
        * decision, post-decide continuation rounds carry the pinned
        * value and their sample no longer chooses anything, so
        * holding them to the budget would only convoy the cohort
        * (each process's round-k INITIAL waits on its own turn of
        * k-1, and one process's stall holds everyone at n-t).  One
-       * turn per BA per sweep, and the clock re-arms only when duty
+       * turn per BA per tick, and the clock re-arms only when duty
        * leaves TOLERANCE: a cascade that holds it continuously
        * spends ONE budget across all of its rounds, one round per
-       * sweep past the boundary; a later round pays its own grace
+       * tick past the elapse; a later round pays its own grace
        * only after a HELD dip (an evidence gap) resets the count.
        */
       for (p = 0; p < n; ++p) {
         duty = bkr94acsTurnDuty(processes[i], (unsigned char)p);
-        if (duty == BKR94ACS_DUTY_TOLERANCE)
-          ++turnTicks[i][p];
-        else
-          turnTicks[i][p] = 0;
+        if (duty == BKR94ACS_DUTY_TOLERANCE) {
+          if (sweepDone)
+            ++turnSweeps[i][p];
+        } else
+          turnSweeps[i][p] = 0;
         nacts = bkr94acsTurn(processes[i], (unsigned char)p,
-                             turnTicks[i][p] > graceBudget
+                             turnSweeps[i][p] >= graceBudget
                              || bkr94acsBaDecision(processes[i],
                                   (unsigned char)p) != 0xFF, acts);
         if (nacts) {
@@ -823,11 +864,12 @@ main(
        * and leaves the unentered set before the fanout reads it.
        */
       duty = bkr94acsFanoutDuty(processes[i]);
-      if (duty == BKR94ACS_DUTY_TOLERANCE)
-        ++fanoutTicks[i];
-      else
-        fanoutTicks[i] = 0;
-      if (fanoutTicks[i] > graceBudget) {
+      if (duty == BKR94ACS_DUTY_TOLERANCE) {
+        if (sweepDone)
+          ++fanoutSweeps[i];
+      } else
+        fanoutSweeps[i] = 0;
+      if (fanoutSweeps[i] >= graceBudget) {
         nacts = bkr94acsFanout(processes[i], acts);
         if (nacts) {
           fanoutFires += nacts;
@@ -836,8 +878,8 @@ main(
             quiescent[i] = 0;
             --quiesced;
           }
-          printf("process %u: step 2 fires (sweep %u) -- enter 0 in %u unentered BA(s)\n",
-                 i, sweepCount, nacts);
+          printf("process %u: step 2 fires (tick %u) -- enter 0 in %u unentered BA(s)\n",
+                 i, tickCount, nacts);
         }
         qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [step 2]");
       }
@@ -861,8 +903,8 @@ main(
     (void)progress;
     if (quiesced == n)
       break;
-    if (sweepCount > 100000) {
-      fprintf(stderr, "no convergence within the sweep cap\n");
+    if (tickCount > 100000) {
+      fprintf(stderr, "no convergence within the tick cap\n");
       exitCode = 1;
       break;
     }
@@ -967,11 +1009,11 @@ main(
 
   for (i = 0; i < n; ++i)
     if (quiescent[i])
-      printf("Process %u: QUIESCENT at sweep %u\n", i, quiesceSweep[i]);
+      printf("Process %u: QUIESCENT at tick %u\n", i, quiesceTick[i]);
     else
-      printf("Process %u: not quiescent (sweep cap)\n", i);
-  printf("Ending: %u of %u processes QUIESCENT in %u sweeps\n",
-         quiesced, n, sweepCount);
+      printf("Process %u: not quiescent (tick cap)\n", i);
+  printf("Ending: %u of %u processes QUIESCENT in %u ticks\n",
+         quiesced, n, tickCount);
 
   /*----------------------------------------------------------------------*/
   /*  The -d demonstration's verdict: included under grace, excluded      */
@@ -995,8 +1037,8 @@ main(
     for (i = 0; i < n; ++i)
       if (!bkr94acsAcastValue(processes[i], (unsigned char)dproc))
         acceptedEverywhere = 0;
-    printf("\nDelayed process %d (grace budget %u, %u sweeps): %s\n",
-           dproc, graceBudget, sweepCount,
+    printf("\nDelayed process %d (grace budget %u sweeps, %u ticks): %s\n",
+           dproc, graceBudget, tickCount,
            inSubset
              ? "INCLUDED -- the grace let step 1 win"
              : "EXCLUDED -- the eager schedule shut the door");
@@ -1030,8 +1072,9 @@ usage:
     "  -s seed      shuffle seed (0 = ordered delivery)\n"
     "  -d process   hold that process's A-Cast until step 2 first\n"
     "               enables (the WAN laggard; needs t >= 1)\n"
-    "  -g budget    tolerance budget in sweeps for the sweep-side\n"
-    "               decisions (0 = eager; with -d, a sufficient\n"
-    "               budget includes the laggard in SubSet)\n");
+    "  -g budget    tolerance budget for the sweep-side decisions,\n"
+    "               in completed BPR sweeps -- full Retry-cursor\n"
+    "               passes (0 = eager; with -d, -g 1 includes the\n"
+    "               laggard in SubSet)\n");
   return (1);
 }

@@ -1380,6 +1380,29 @@ bkr94acsAcastSkip(
                            BRACHA87_INITIAL_ALL));
 }
 
+const struct bracha87Fig1 *
+bkr94acsAcastFig1(
+  const struct bkr94acs *a
+ ,unsigned char process
+){
+  if (!a || process > a->n)
+    return (0);
+  return (acastF1(a, process));
+}
+
+const struct bracha87Fig1 *
+bkr94acsBaFig1(
+  const struct bkr94acs *a
+ ,unsigned char process
+ ,unsigned char round
+ ,unsigned char initiator
+){
+  if (!a || process > a->n || round >= maxRounds(a)
+   || initiator > a->n)
+    return (0);
+  return (baF1(a, process, round, initiator));
+}
+
 unsigned int
 bkr94acsSentFig1Count(
   const struct bkr94acs *a
