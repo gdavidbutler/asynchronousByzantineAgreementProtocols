@@ -703,8 +703,11 @@ main(
        * holding them to the budget would only convoy the cohort
        * (each process's round-k INITIAL waits on its own turn of
        * k-1, and one process's stall holds everyone at n-t).  One
-       * turn per BA per sweep: an undecided cascade's later rounds
-       * each get their own grace.
+       * turn per BA per sweep, and the clock re-arms only when duty
+       * leaves TOLERANCE: a cascade that holds it continuously
+       * spends ONE budget across all of its rounds, one round per
+       * sweep past the boundary; a later round pays its own grace
+       * only after a HELD dip (an evidence gap) resets the count.
        */
       for (p = 0; p < n; ++p) {
         duty = bkr94acsTurnDuty(processes[i], (unsigned char)p);

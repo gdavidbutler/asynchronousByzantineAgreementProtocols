@@ -703,6 +703,84 @@ bkr94acsBaDecision(
 );
 
 /*
+ * Returns 1 iff this process has entered a value into the BA for
+ * 'process' -- 1 from BKR94 step 1 ("For each Pj for whom you (Pi)
+ * know Q(j) = 1, participate in BA_j with input 1") or 0 from step
+ * 2's fanout -- else 0, and 0 on null state or out-of-range process.
+ *
+ * The complement is step 2's own set: "enter input 0 to every BA
+ * protocol for which you have not yet entered a value."
+ * bkr94acsFanoutDuty reads it (MET is nothing unentered) and
+ * bkr94acsFanout empties it, one BKR94ACS_ACT_BA_SEND per entry.
+ *
+ * Latched, per the paper's single-input rule: "Once a BA has received
+ * an input from Pi (1 from step 1 or 0 from step 2), step 1 and step
+ * 2 stop touching it -- BA semantics demand a single input per
+ * player."  Set once, never cleared; no BA is entered twice.
+ *
+ * BA_self is included: step 1 makes no exception for j == self, so
+ * this process enters BA_self on the same evidence (Q(self) = 1) as
+ * any other BA.
+ *
+ * WHICH value was entered is not answered.  The entered value is the
+ * BA's input and a BA past its first round no longer holds it
+ * (struct bracha87Fig4.value is the current estimate); the decided
+ * value is bkr94acsBaDecision.
+ *
+ * This is what THIS process did.  BKR94's entered facts are local --
+ * Lemma 2 Part D reads a single honest player's entry -- so nothing
+ * here licenses an inference about another process's entries, its
+ * Q values, or its correctness.
+ */
+unsigned int
+bkr94acsBaEntered(
+  const struct bkr94acs *
+ ,unsigned char            /* process: which process's BA */
+);
+
+/*
+ * The validated set for one BA's next round -- the messages Fig 3 has
+ * placed in VALID^k for the round bkr94acsTurnDuty classifies and
+ * bkr94acsTurn would compute over.  "Wait till a set S of n - t
+ * k-messages have been validated" (Bracha87 Fig 3): the duty query
+ * answers the size of that set, this answers the set.
+ *
+ * Returns the count and fills senders[] and values[] (caller provides
+ * n entries each), forwarding bracha87Fig3GetValid for the BA's Fig 3
+ * at its next round.  A VALID set's elements are the paper's
+ * (q, k, v), so senders and values are answered together; k is fixed
+ * by the round.  values are the BA's binary values, carrying
+ * BRACHA87_D_FLAG in a 3i+2 round (Bracha's "(d, v)").
+ *
+ * The count is the one bkr94acsTurnDuty classifies from: >= n-t is
+ * its TOLERANCE-or-MET boundary, == n its MET.
+ *
+ * The round is implicit and is the BA's next -- this surface names a
+ * BA round nowhere else (bkr94acsTurnDuty and bkr94acsTurn take none;
+ * a round reaches the caller on struct bkr94acsAct.round alone).  A
+ * VALID set only grows within its round, but a turn advances the
+ * round, so successive calls across a turn answer different sets and
+ * the count is not monotone across one.  A BA whose round space is
+ * exhausted (bkr94acsBaDecision 0xFE) has no next round: 0.
+ *
+ * A VALID set is one process's own -- the paper's VALID^k_p.  A
+ * message validated here is validated at every correct process
+ * EVENTUALLY (Bracha87 Lemma 6, "VALID sets are eventually equal"),
+ * never at the instant of this call, and nothing about another
+ * process's set is readable from this one.
+ *
+ * Returns 0 on null state, out-of-range process, or a null senders[]
+ * or values[].
+ */
+unsigned int
+bkr94acsBaGetValid(
+  const struct bkr94acs *
+ ,unsigned char            /* process: which process's BA */
+ ,unsigned char *          /* senders out, n entries */
+ ,unsigned char *          /* values out, n entries */
+);
+
+/*
  * Returns 1 iff A-Cast Fig1[process] has recorded an echo from all n
  * processes (distinct echo senders == n), else 0 (and 0 on null state or
  * out-of-range process).

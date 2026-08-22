@@ -3989,6 +3989,170 @@ testFig1SkipAccept(
 
 
 /*
+ * Post-accept observation: Input RECORDS past accept, never COMPUTES.
+ *
+ * Accept can precede the last echo -- readys alone carry Rules 5 and 6 --
+ * so the per-sender dedup and count writes continue past ACCEPT.  What
+ * reads them stays live: bracha87Fig1AllEchoed, the INITIAL and ECHO
+ * suppress masks, and the acFrom-subset-of-rdFrom property
+ * bracha87Fig1ProcessAccepted documents.  The rule dispatch is not
+ * reached, so every post-accept Input outputs 0 acts and ACCEPT is
+ * output exactly once.  n=4 t=1, replayed at n=7 t=2.
+ */
+static void
+testFig1PostAcceptRecord(
+  void
+){
+  struct bracha87Fig1 *b;
+  unsigned long sz;
+  unsigned char out[3];
+  unsigned int nout;
+  unsigned int acts;
+  unsigned int sawAccept;
+  unsigned int held;
+  unsigned int i;
+  unsigned char val[VLEN];
+  unsigned char other[VLEN];
+  const unsigned char *m;
+  const unsigned char *rm;
+
+  printf("\n  Fig1 post-accept observation tests:\n");
+  memcpy(val, "AAAA", VLEN);
+  memcpy(other, "BBBB", VLEN);
+
+  /*
+   * Accept before any echo is recorded: initiator, then readys from
+   * 2t+1 = 3 distinct senders.  The third fires accept.
+   */
+  sz = bracha87Fig1Sz(3, VLEN - 1);
+  b = calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Initiator(b, val);
+  bracha87Fig1Input(b, BRACHA87_READY, 0, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
+  sawAccept = 0;
+  for (i = 0; i < nout; ++i)
+    if (out[i] == BRACHA87_ACCEPT) sawAccept = 1;
+  check("PostAccept n=4: 2t+1 readys accept", sawAccept);
+  check("PostAccept n=4: ACCEPTED and RDSENT set",
+        (b->flags & BRACHA87_F1_ACCEPTED)
+        && (b->flags & BRACHA87_F1_RDSENT));
+  check("PostAccept n=4: no echo recorded at accept",
+        bracha87Fig1AllEchoed(b) == 0);
+
+  /* acts accumulates every act Input outputs past accept: it must stay 0. */
+  acts = 0;
+
+  for (i = 0; i < 3; ++i) {
+    nout = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val, out);
+    acts += nout;
+    check("PostAccept n=4: post-accept echo outputs 0 acts", nout == 0);
+  }
+  check("PostAccept n=4: all-echoed 0 at 3 of 4 echoers",
+        bracha87Fig1AllEchoed(b) == 0);
+
+  /* Dedup survives accept: a repeat from 1 adds no echoer. */
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 1, other, out);
+  acts += nout;
+  check("PostAccept n=4: repeated echo outputs 0 acts", nout == 0);
+  check("PostAccept n=4: repeated echo adds no echoer",
+        bracha87Fig1AllEchoed(b) == 0);
+
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, val, out);
+  acts += nout;
+  check("PostAccept n=4: n-th post-accept echo outputs 0 acts", nout == 0);
+  check("PostAccept n=4: all-echoed 1 at n echoers past accept",
+        bracha87Fig1AllEchoed(b) == 1);
+
+  m = bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL);
+  check("PostAccept n=4: INITIAL mask holds every post-accept echoer",
+        BRACHA87_SKIP_TST(m, 0) && BRACHA87_SKIP_TST(m, 1)
+        && BRACHA87_SKIP_TST(m, 2) && BRACHA87_SKIP_TST(m, 3));
+
+  /* The ECHO mask grows on a post-accept ready from a sender not yet in
+   * rdFrom -- 3 sent no ready before accept. */
+  m = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
+  check("PostAccept n=4: ECHO mask clear for 3 before its ready",
+        !BRACHA87_SKIP_TST(m, 3));
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);
+  acts += nout;
+  check("PostAccept n=4: post-accept ready outputs 0 acts", nout == 0);
+  m = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
+  check("PostAccept n=4: ECHO mask holds 3 after its post-accept ready",
+        BRACHA87_SKIP_TST(m, 3));
+
+  /* Duplicates and an INITIAL round out the flood. */
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 0, val, out);
+  acts += nout;
+  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  acts += nout;
+  check("PostAccept n=4: no act anywhere past accept", acts == 0);
+  check("PostAccept n=4: flags unchanged by the flood",
+        (b->flags & BRACHA87_F1_ACCEPTED)
+        && (b->flags & BRACHA87_F1_RDSENT));
+  check("PostAccept n=4: accepted value unchanged",
+        memcmp(bracha87Fig1Value(b), val, VLEN) == 0);
+
+  /*
+   * acFrom subset of rdFrom, the ingress order bracha87Fig1ProcessAccepted
+   * documents: the ready carrying the ACCEPTED annotation goes through
+   * Input first, so recording the accept cannot name a process rdFrom is
+   * missing -- which is only true while Input still records past accept.
+   */
+  bracha87Fig1ProcessAccepted(b, 3);
+  m  = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
+  rm = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+  check("PostAccept n=4: rdFrom holds the late ready sender",
+        BRACHA87_SKIP_TST(m, 3));
+  check("PostAccept n=4: acFrom holds the late ready sender",
+        BRACHA87_SKIP_TST(rm, 3));
+  held = 1;
+  for (i = 0; i < 4; ++i)
+    if (BRACHA87_SKIP_TST(rm, i) && !BRACHA87_SKIP_TST(m, i))
+      held = 0;
+  check("PostAccept n=4: acFrom is a subset of rdFrom", held);
+  free(b);
+
+  /* Replay at n=7 t=2: 2t+1 = 5 readys accept, then all 7 echoes. */
+  sz = bracha87Fig1Sz(6, VLEN - 1);
+  b = calloc(1, sz);
+  bracha87Fig1Init(b, 6, 2, VLEN - 1);
+  bracha87Fig1Initiator(b, val);
+  nout = 0;
+  for (i = 0; i < 5; ++i)
+    nout = bracha87Fig1Input(b, BRACHA87_READY, (unsigned char)i, val, out);
+  sawAccept = 0;
+  for (i = 0; i < nout; ++i)
+    if (out[i] == BRACHA87_ACCEPT) sawAccept = 1;
+  check("PostAccept n=7: 2t+1 readys accept", sawAccept);
+  check("PostAccept n=7: no echo recorded at accept",
+        bracha87Fig1AllEchoed(b) == 0);
+
+  acts = 0;
+  for (i = 0; i < 7; ++i) {
+    nout = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val, out);
+    acts += nout;
+    check("PostAccept n=7: post-accept echo outputs 0 acts", nout == 0);
+    if (i < 6)
+      check("PostAccept n=7: all-echoed 0 while echoers < n",
+            bracha87Fig1AllEchoed(b) == 0);
+  }
+  check("PostAccept n=7: all-echoed 1 at n echoers past accept",
+        bracha87Fig1AllEchoed(b) == 1);
+  check("PostAccept n=7: no act anywhere past accept", acts == 0);
+  m = bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL);
+  held = 1;
+  for (i = 0; i < 7; ++i)
+    if (!BRACHA87_SKIP_TST(m, i))
+      held = 0;
+  check("PostAccept n=7: INITIAL mask holds every post-accept echoer", held);
+  printf("    post-accept record   : all-echoed, suppress masks and acFrom<=rdFrom live past accept; 0 acts, one ACCEPT\n");
+  free(b);
+}
+
+
+/*
  * Test echo threshold with even n+t.
  *
  * The echo threshold must be strictly greater than (n+t)/2 to guarantee
@@ -4713,6 +4877,7 @@ main(
   testFig1ValueSwitch();
   testFig1Bpr();
   testFig1SkipAccept();
+  testFig1PostAcceptRecord();
   testBprLargeN();
 
   /*

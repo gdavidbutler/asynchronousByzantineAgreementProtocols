@@ -212,6 +212,12 @@ bracha87Fig1Initiator(
  *
  * Deduplication: at most one echo and one ready per sender.
  *
+ * Recording continues past ACCEPT: an arrival after this instance has
+ * accepted still takes its per-sender echo/ready record -- feeding
+ * bracha87Fig1AllEchoed, the suppress masks, and the acFrom-subset-of-
+ * rdFrom ingress order -- and returns 0.  No action is output twice,
+ * ACCEPT included.
+ *
  * INITIAL sender obligation: this instance is keyed to ONE designated
  * initiator.  Only that initiator may send (initial, v); ECHO and
  * READY arrive legitimately from any process (and are sender-deduped).

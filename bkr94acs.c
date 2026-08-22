@@ -1274,6 +1274,40 @@ bkr94acsBaDecision(
 }
 
 unsigned int
+bkr94acsBaEntered(
+  const struct bkr94acs *a
+ ,unsigned char process
+){
+  if (!a || process > a->n)
+    return (0);
+  return (bkr94acsEnterd(a)[process] != BKR94ACS_ENTER_NONE);
+}
+
+unsigned int
+bkr94acsBaGetValid(
+  const struct bkr94acs *a
+ ,unsigned char process
+ ,unsigned char *senders
+ ,unsigned char *values
+){
+  unsigned char nextRound;
+
+  if (!a || process > a->n || !senders || !values)
+    return (0);
+  /*
+   * The BA's next round is the one bkr94acsTurnDuty classifies and
+   * bkr94acsTurn consumes; at maxRounds the round space is exhausted
+   * and there is no next round to answer for (bracha87Fig3GetValid
+   * would answer 0 for the out-of-range round anyway).
+   */
+  nextRound = bkr94acsNextRound(a)[process];
+  if (nextRound >= maxRounds(a))
+    return (0);
+  return (bracha87Fig3GetValid(&baF4(a, process)->fig3, nextRound,
+                               senders, values));
+}
+
+unsigned int
 bkr94acsAcastAllEchoed(
   const struct bkr94acs *a
  ,unsigned char process

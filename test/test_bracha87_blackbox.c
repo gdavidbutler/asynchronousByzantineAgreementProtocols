@@ -663,6 +663,54 @@ main(int argc, char **argv)
   }
 
   /* ---------------------------------------------------------------- */
+  BANNER("Fig1 post-accept observation");
+  /* ---------------------------------------------------------------- */
+  /* Header, bracha87Fig1AllEchoed: "1 iff this instance has recorded  */
+  /* an echo from every one of the n processes", and "under <= t       */
+  /* silent processes this never reaches 1" -- the only stated bar.    */
+  /* Accept is reachable on readys alone (2t+1, Rule 6) without any    */
+  /* echo recorded, so the two are independent and an echo arriving    */
+  /* after accept must still be recorded.  Header, bracha87Fig1Input:  */
+  /* "Returns number of actions (0..3)"; nothing after accept meets a  */
+  /* rule, so the count is 0 and BRACHA87_ACCEPT never repeats.        */
+  {
+    struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
+    static const unsigned char v[1] = { 1 };
+    unsigned int saw_accept;
+    unsigned int post_acts;
+
+    bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
+    bracha87Fig1Initiator(b, v);
+    /* 2t+1 = 3 distinct readys accept, with no echo recorded. */
+    for (i = 0; i < 2u * T_VAL + 1; ++i)
+      act_count = bracha87Fig1Input(b, BRACHA87_READY, (unsigned char) i, v, actions);
+    saw_accept = 0;
+    for (i = 0; i < act_count; ++i)
+      if (actions[i] == BRACHA87_ACCEPT) saw_accept = 1;
+    CHECK(saw_accept, "PostAccept: 2t+1 readys accept");
+    CHECK(bracha87Fig1AllEchoed(b) == 0, "PostAccept: no echo recorded at accept");
+
+    /* n distinct echoes, all delivered after accept. */
+    post_acts = 0;
+    saw_accept = 0;
+    for (i = 0; i < N_ACT; ++i) {
+      act_count = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, actions);
+      post_acts += act_count;
+      for (j = 0; j < act_count; ++j)
+        if (actions[j] == BRACHA87_ACCEPT) saw_accept = 1;
+      CHECK(bracha87Fig1AllEchoed(b) == (i + 1 == N_ACT),
+            "PostAccept: AllEchoed 1 exactly when echo senders == n");
+    }
+    /* Duplicates and an INITIAL round out the post-accept traffic. */
+    post_acts += bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, actions);
+    post_acts += bracha87Fig1Input(b, BRACHA87_READY, 0, v, actions);
+    post_acts += bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, actions);
+    CHECK(post_acts == 0, "PostAccept: every post-accept Input returns 0 actions");
+    CHECK(!saw_accept, "PostAccept: ACCEPT is not output a second time");
+    CHECK(bracha87Fig1AllEchoed(b) == 1, "PostAccept: AllEchoed stays 1");
+  }
+
+  /* ---------------------------------------------------------------- */
   BANNER("Fig2 receive / dedup / ROUND_COMPLETE / GetReceived");
   /* ---------------------------------------------------------------- */
   /* Header: "Returns BRACHA87_ROUND_COMPLETE if this causes n-t       */

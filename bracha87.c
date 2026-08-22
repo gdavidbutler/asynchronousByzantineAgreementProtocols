@@ -288,7 +288,7 @@ bracha87Fig1Input(
   unsigned char retryEcho;
   unsigned char retryReady;
 
-  if (!b || !value || !out || from > b->n || (b->flags & BRACHA87_F1_ACCEPTED))
+  if (!b || !value || !out || from > b->n)
     return (0);
 
   /* Per-sender deduplication and count update; ec/rd are 0 on the
@@ -313,6 +313,13 @@ bracha87Fig1Input(
   default:
     return (0);
   }
+
+  /* Post-accept arrivals are recorded, never computed: the per-sender
+   * writes above keep AllEchoed, the INITIAL/ECHO suppress masks, and
+   * the acFrom-subset-of-rdFrom property live past ACCEPT, while the
+   * dispatch below stays unreachable -- ACCEPT outputs exactly once. */
+  if (b->flags & BRACHA87_F1_ACCEPTED)
+    return (0);
 
   haveEchoed    = (b->flags & BRACHA87_F1_ECHOED) ? 1 : 0;
   haveSentReady = (b->flags & BRACHA87_F1_RDSENT) ? 1 : 0;
@@ -411,9 +418,10 @@ bracha87Fig1Bpr(
    * ACCEPTED is strictly stronger: it is the witness that the t+1
    * correct readys now exist.  (Pitfall 10's ban on retiring READY
    * at accept is untouched -- READY is exactly what the amplification
-   * tail consumes; see the READY output below.)  Retiring AT accept
-   * also sidesteps the Input accept-guard's bitmap freeze: nothing
-   * downstream of accept is counted, but nothing needs to be.
+   * tail consumes; see the READY output below.)  Input keeps recording
+   * per-sender echoes and readys past accept, so the all-echoed retire
+   * and the suppress masks stay live for the side channels that consume
+   * them.
    *
    * INITIAL carries a second, independent retire: echoSenders == n.
    * INITIAL induces only echoes (Rule 1/2); once every process has

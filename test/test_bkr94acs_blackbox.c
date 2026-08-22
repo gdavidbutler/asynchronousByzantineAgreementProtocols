@@ -1494,6 +1494,253 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
+  BANNER("B8: A-Cast ACCEPT before the last echo leaves the gates live");
+  /* ---------------------------------------------------------------- */
+  {
+    /*
+     * Per .h bkr94acsAcastAllEchoed: "1 iff A-Cast Fig1[process] has
+     * recorded an echo from all n processes", and the reason it is
+     * exposed at all -- "ACCEPTED can be reached at 2t+1 readys (up to
+     * t byzantine, t un-validated above the n=3t+1 boundary) while
+     * correct processes still lack the payload.  Pinning the side
+     * channel to ACCEPTED would strand them; pinning it here does
+     * not."  That contract only holds if an echo arriving AFTER the
+     * A-Cast's accept still counts: otherwise the gate a side channel
+     * retires on is pinned to ACCEPTED after all, by omission.
+     * bkr94acsAcastSkip is the per-process refinement -- it "drops each
+     * process from the side channel's recipient set the moment IT
+     * echoes" -- so it must gain a late echoer's bit for the same
+     * reason.  Per .h bkr94acsAcastInput the return is the number of
+     * actions; an accepted A-Cast has no rule left to fire, so a late
+     * echo is recorded silently.
+     */
+    unsigned long sz;
+    struct bkr94acs *a;
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, 4)];
+    unsigned char v[1];
+    const unsigned char *m;
+    unsigned int nact;
+    unsigned int late;
+
+    sz = bkr94acsSz(3, 0, 4);
+    a = (struct bkr94acs *)calloc(1, sz);
+    if (!a) goto b8_done;
+    bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+    v[0] = 1;
+
+    /* Two echoes only -- short of both n and the echo threshold. */
+    bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, 0, v, out);
+    bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 0, v, out);
+    bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 1, v, out);
+    CHECK(bkr94acsAcastAllEchoed(a, 0) == 0, "B8: gate 0 below n echoers");
+
+    /* 2t+1 readys accept ahead of the remaining echoes. */
+    for (i = 0; i < 3; ++i)
+      bkr94acsAcastInput(a, 0, BRACHA87_READY, (unsigned char)i, v, out);
+    CHECK(bkr94acsAcastAllEchoed(a, 0) == 0, "B8: gate still 0 at accept");
+    m = bkr94acsAcastSkip(a, 0);
+    CHECK(m != 0, "B8: skip mask non-null");
+    if (m)
+      CHECK(!BRACHA87_SKIP_TST(m, 2) && !BRACHA87_SKIP_TST(m, 3),
+            "B8: mask clear for the late echoers at accept");
+
+    /* The remaining echoes arrive after accept. */
+    for (late = 2; late < 4; ++late) {
+      nact = bkr94acsAcastInput(a, 0, BRACHA87_ECHO, (unsigned char)late,
+                                v, out);
+      CHECK(nact == 0, "B8: post-accept echo outputs 0 acts");
+      CHECK(bkr94acsAcastAllEchoed(a, 0) == (late == 3),
+            "B8: gate 1 exactly when echo senders == n");
+    }
+    m = bkr94acsAcastSkip(a, 0);
+    if (m)
+      CHECK(BRACHA87_SKIP_TST(m, 2) && BRACHA87_SKIP_TST(m, 3),
+            "B8: mask gains the late echoers");
+
+    free(a);
+  }
+  b8_done: ;
+
+  /* ---------------------------------------------------------------- */
+  BANNER("B9: bkr94acsBaEntered / bkr94acsBaGetValid contracts");
+  /* ---------------------------------------------------------------- */
+  {
+    /*
+     * Both accessors are read-only views of state the sweep-side
+     * decisions already consume, and the header states each as a
+     * correspondence with the duty query beside it:
+     *
+     *   bkr94acsBaEntered -- "1 iff this process has entered a value
+     *   into the BA for 'process' ... bkr94acsFanoutDuty reads it
+     *   (MET is nothing unentered)".  So MET and a BA reading 0 are
+     *   incompatible.  Latched: "Set once, never cleared".
+     *
+     *   bkr94acsBaGetValid -- "the count is the one bkr94acsTurnDuty
+     *   classifies from: >= n-t is its TOLERANCE-or-MET boundary,
+     *   == n its MET", and the set is the paper's (q, k, v), so the
+     *   senders are process indices and the values are what the
+     *   drive's wires carried.
+     *
+     * Nothing here reads an internal: the entering evidence is an
+     * A-Cast ACCEPT (step 1) or the fanout (step 2), and the VALID
+     * set is fed by BA-class wires this banner delivers itself.
+     */
+    unsigned int nAct = 4, t = 1, vLen = 1, mp = 10;
+    unsigned long sz;
+    struct bkr94acs *p0;
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 10)];
+    unsigned char senders[MAX_PROCESSES];
+    unsigned char values[MAX_PROCESSES];
+    unsigned char fedValue[MAX_PROCESSES];
+    unsigned char val1;
+    unsigned int src, k, p, b, cnt, duty, untouched, distinct;
+
+    sz = bkr94acsSz(nAct - 1, vLen - 1, mp);
+    p0 = calloc(1, sz);
+    if (!p0) goto b9_done;
+    bkr94acsInit(p0, nAct - 1, t, vLen - 1, mp, 0, testCoin, 0);
+
+    /* Defensive guards, both accessors. */
+    CHECK(bkr94acsBaEntered(0, 0) == 0, "B9: BaEntered NULL -> 0");
+    CHECK(bkr94acsBaEntered(p0, 200) == 0,
+          "B9: BaEntered out-of-range process -> 0");
+    memset(senders, 0xAA, sizeof (senders));
+    memset(values, 0xAA, sizeof (values));
+    CHECK(bkr94acsBaGetValid(0, 0, senders, values) == 0,
+          "B9: BaGetValid NULL -> 0");
+    CHECK(bkr94acsBaGetValid(p0, 200, senders, values) == 0,
+          "B9: BaGetValid out-of-range process -> 0");
+    CHECK(bkr94acsBaGetValid(p0, 0, 0, values) == 0,
+          "B9: BaGetValid NULL senders -> 0");
+    CHECK(bkr94acsBaGetValid(p0, 0, senders, 0) == 0,
+          "B9: BaGetValid NULL values -> 0");
+    untouched = 1;
+    for (k = 0; k < nAct; ++k)
+      if (senders[k] != 0xAA || values[k] != 0xAA)
+        untouched = 0;
+    CHECK(untouched, "B9: a refused BaGetValid touches neither array");
+
+    /* Fresh: nothing entered, no VALID set anywhere. */
+    for (b = 0; b < nAct; ++b) {
+      CHECK(bkr94acsBaEntered(p0, b) == 0,
+            "B9: BaEntered 0 for every BA of a fresh instance");
+      CHECK(bkr94acsBaGetValid(p0, b, senders, values) == 0,
+            "B9: BaGetValid 0 for every BA of a fresh instance");
+    }
+
+    /* The entering evidence for BA_1: process 1's A-Cast ACCEPTs, so
+     * step 1 enters 1.  Nothing else is entered by it. */
+    val1 = 0x51;
+    bkr94acsAcastInput(p0, 1, BRACHA87_INITIAL, 1, &val1, out);
+    for (src = 0; src < nAct; ++src)
+      bkr94acsAcastInput(p0, 1, BRACHA87_ECHO, src, &val1, out);
+    for (src = 0; src < nAct; ++src)
+      bkr94acsAcastInput(p0, 1, BRACHA87_READY, src, &val1, out);
+    CHECK(bkr94acsBaEntered(p0, 1) == 1,
+          "B9: BaEntered 1 after the entering evidence");
+    CHECK(bkr94acsBaEntered(p0, 0) == 0 && bkr94acsBaEntered(p0, 2) == 0
+       && bkr94acsBaEntered(p0, 3) == 0,
+          "B9: BaEntered 0 for the BAs no evidence reached");
+    CHECK(bkr94acsFanoutDuty(p0) != BKR94ACS_DUTY_MET,
+          "B9: fanout duty is not MET while a BA is unentered");
+
+    /* Latched: further A-Cast traffic for the same process enters
+     * nothing more and cannot clear the record. */
+    for (src = 0; src < nAct; ++src)
+      bkr94acsAcastInput(p0, 1, BRACHA87_READY, src, &val1, out);
+    CHECK(bkr94acsBaEntered(p0, 1) == 1,
+          "B9: BaEntered latched across duplicate A-Cast traffic");
+
+    /* BA_0's round 0, one BA-class ACCEPT per initiator, banked
+     * WITHOUT turning so the accessor keeps answering round 0.  The
+     * count and the duty class must agree at every step, and the set
+     * must be exactly the wires delivered. */
+    for (b = 0; b < nAct; ++b) {
+      fedValue[b] = (b < 2) ? 0 : 1;
+      feedBAAccept(p0, 0, 0, b, fedValue[b], out, 0, 0);
+
+      memset(senders, 0xAA, sizeof (senders));
+      memset(values, 0xAA, sizeof (values));
+      cnt = bkr94acsBaGetValid(p0, 0, senders, values);
+      duty = bkr94acsTurnDuty(p0, 0);
+      CHECK(cnt == b + 1,
+            "B9: BaGetValid count == the BA wires the drive validated");
+      CHECK((cnt >= nAct - t)
+            == (duty == BKR94ACS_DUTY_TOLERANCE
+             || duty == BKR94ACS_DUTY_MET),
+            "B9: count >= n-t exactly when TurnDuty is TOLERANCE or MET");
+      CHECK((cnt == nAct) == (duty == BKR94ACS_DUTY_MET),
+            "B9: count == n exactly when TurnDuty is MET");
+
+      /* Senders are process indices, distinct, and each carries the
+       * value its own wires carried. */
+      distinct = 1;
+      for (k = 0; k < cnt; ++k) {
+        unsigned int j;
+
+        if (senders[k] >= nAct)
+          distinct = 0;
+        for (j = 0; j < k; ++j)
+          if (senders[j] == senders[k])
+            distinct = 0;
+        if (values[k] != fedValue[senders[k]])
+          distinct = 0;
+      }
+      CHECK(distinct,
+            "B9: senders distinct and in range, values as delivered");
+      untouched = 1;
+      for (k = cnt; k < nAct; ++k)
+        if (senders[k] != 0xAA || values[k] != 0xAA)
+          untouched = 0;
+      CHECK(untouched, "B9: BaGetValid writes only the count it returns");
+    }
+
+    free(p0);
+
+    /* The fanout's own correspondence, over a converged cluster: at
+     * MET nothing is unentered, so every BA reads 1 at every process.
+     * The same run pins the duty correspondence at quiescence, where
+     * every BA is out of complete rounds. */
+    if (allocCluster(processes, nAct, t, vLen - 1, mp) == 0) {
+      for (p = 0; p < MAX_PROCESSES; ++p) obsInit(&obs[p]);
+      memset(acasts, 0, sizeof (acasts));
+      for (i = 0; i < nAct; ++i)
+        acasts[i * vLen] = 0x70 + i;
+
+      runHonest(nAct, vLen, mp, acasts, 0 /*ordered*/, processes, obs);
+
+      for (p = 0; p < nAct; ++p) {
+        CHECK(bkr94acsFanoutDuty(processes[p]) == BKR94ACS_DUTY_MET,
+              "B9: fanout duty MET at a converged process");
+        for (b = 0; b < nAct; ++b) {
+          CHECK(bkr94acsBaEntered(processes[p], b) == 1,
+                "B9: MET means every BA reads BaEntered 1");
+          cnt = bkr94acsBaGetValid(processes[p], b, senders, values);
+          duty = bkr94acsTurnDuty(processes[p], b);
+          CHECK((cnt >= nAct - t)
+                == (duty == BKR94ACS_DUTY_TOLERANCE
+                 || duty == BKR94ACS_DUTY_MET),
+                "B9: the boundary holds at quiescence too");
+          distinct = 1;
+          for (k = 0; k < cnt; ++k) {
+            unsigned int j;
+
+            if (senders[k] >= nAct)
+              distinct = 0;
+            for (j = 0; j < k; ++j)
+              if (senders[j] == senders[k])
+                distinct = 0;
+          }
+          CHECK(distinct,
+                "B9: quiescent senders distinct and in range");
+        }
+      }
+      freeCluster(processes, nAct);
+    }
+  }
+  b9_done: ;
+
+  /* ---------------------------------------------------------------- */
   /*  Section C -- BPR / Retry                                          */
   /* ---------------------------------------------------------------- */
 

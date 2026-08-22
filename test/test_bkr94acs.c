@@ -1455,12 +1455,12 @@ testBprCursorCoverage(
 /*  bkr94acsAcastAllEchoed white-box                                        */
 /*                                                                          */
 /*  Drives one process's instance of process 0's A-Cast Fig1 with ECHO from */
-/*  every process BEFORE any READY, so the echo bitmap reaches n before any */
-/*  ACCEPT could freeze it.  The accessor must read 0 until the n-th        */
-/*  distinct echo sender, 1 thereafter, and survive the post-accept         */
-/*  freeze (it latched at n).  This is the application's retirement gate    */
-/*  for an INITIAL-paired side channel (PSK / signature) -- it must NOT     */
-/*  retire at the A-Cast's ACCEPTED.                                        */
+/*  every process BEFORE any READY -- the echoes-first order.  The accessor */
+/*  must read 0 until the n-th distinct echo sender, 1 thereafter, and stay */
+/*  latched across accept.  This is the application's retirement gate for   */
+/*  an INITIAL-paired side channel (PSK / signature) -- it must NOT retire  */
+/*  at the A-Cast's ACCEPTED.  testAcastAllEchoedLate covers the            */
+/*  accept-first order.                                                     */
 /*--------------------------------------------------------------------------*/
 
 static void
@@ -1490,8 +1490,8 @@ testAcastAllEchoed(
   check("AllEchoed: fresh A-Cast -> 0", bkr94acsAcastAllEchoed(a, 0) == 0);
 
   bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, 0, val, acts);
-  /* ECHO from every process, no readys: echoSenders climbs to n with no
-   * ACCEPT (which needs 2t+1 readys) to freeze it short. */
+  /* ECHO from every process, no readys: echoSenders climbs to n before
+   * ACCEPT (which needs 2t+1 readys) can fire -- the echoes-first order. */
   for (from = 0; from < 4; ++from) {
     bkr94acsAcastInput(a, 0, BRACHA87_ECHO, (unsigned char)from, val, acts);
     check("AllEchoed: 1 exactly when echoSenders == n",
@@ -1501,9 +1501,82 @@ testAcastAllEchoed(
   /* Drive to ACCEPT via readys; the latched all-echoed bit holds. */
   for (from = 0; from < 4; ++from)
     bkr94acsAcastInput(a, 0, BRACHA87_READY, (unsigned char)from, val, acts);
-  check("AllEchoed: survives post-accept freeze",
+  check("AllEchoed: latched 1 across accept",
         bkr94acsAcastAllEchoed(a, 0) == 1);
   printf("    0 until echoSenders==n, latched 1 across accept\n");
+
+  free(a);
+}
+
+/*--------------------------------------------------------------------------*/
+/*  Accept-precedes-echoes at the ACS surface                               */
+/*                                                                          */
+/*  The reverse ingress order of testAcastAllEchoed: the A-Cast reaches      */
+/*  ACCEPT on 2t+1 readys while fewer than n processes have echoed, so the   */
+/*  all-echoed gate and the INITIAL suppress mask are still short of their   */
+/*  terminal values at accept.  The late echoes must still be recorded --    */
+/*  they are what an INITIAL-paired side channel retires on, and accept is   */
+/*  strictly weaker than all-echoed (2t+1 readys admit up to t byzantine     */
+/*  and t un-validated).  Each late echo yields no act; the gate reaches 1   */
+/*  on the n-th and the mask gains every late echoer.                       */
+/*--------------------------------------------------------------------------*/
+
+static void
+testAcastAllEchoedLate(
+  void
+){
+  struct bkr94acs *a;
+  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4, 4)];
+  unsigned char val[1];
+  unsigned long sz;
+  unsigned int nact;
+  unsigned int from;
+  const unsigned char *m;
+
+  printf("\n  bkr94acsAcastAllEchoed, accept before the last echo:\n");
+
+  sz = bkr94acsSz(3, 0, 4);
+  a = calloc(1, sz);
+  if (!a) {
+    check("alloc bkr94acs instance", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+  val[0] = 1;
+
+  /* Echoes from 0 and 1 only -- below the (n+t)/2+1 = 3 echo threshold,
+   * so nothing amplifies and echoSenders stays short of n. */
+  bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, 0, val, acts);
+  bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 0, val, acts);
+  bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 1, val, acts);
+  check("AllEchoedLate: 0 with 2 of 4 echoers",
+        bkr94acsAcastAllEchoed(a, 0) == 0);
+
+  /* 2t+1 = 3 readys accept, ahead of the remaining echoes. */
+  for (from = 0; from < 3; ++from)
+    bkr94acsAcastInput(a, 0, BRACHA87_READY, (unsigned char)from, val, acts);
+  check("AllEchoedLate: still 0 at accept",
+        bkr94acsAcastAllEchoed(a, 0) == 0);
+  m = bkr94acsAcastSkip(a, 0);
+  check("AllEchoedLate: mask clear for the late echoers at accept",
+        m && !BRACHA87_SKIP_TST(m, 2) && !BRACHA87_SKIP_TST(m, 3));
+
+  /* The remaining echoes, all post-accept. */
+  nact = bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 2, val, acts);
+  check("AllEchoedLate: post-accept echo yields no act", nact == 0);
+  check("AllEchoedLate: 0 with 3 of 4 echoers",
+        bkr94acsAcastAllEchoed(a, 0) == 0);
+  nact = bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 3, val, acts);
+  check("AllEchoedLate: n-th post-accept echo yields no act", nact == 0);
+  check("AllEchoedLate: 1 on the n-th echoer past accept",
+        bkr94acsAcastAllEchoed(a, 0) == 1);
+
+  m = bkr94acsAcastSkip(a, 0);
+  check("AllEchoedLate: mask gains the late echoers",
+        m && BRACHA87_SKIP_TST(m, 2) && BRACHA87_SKIP_TST(m, 3));
+  check("AllEchoedLate: mask holds the early echoers",
+        m && BRACHA87_SKIP_TST(m, 0) && BRACHA87_SKIP_TST(m, 1));
+  printf("    accept at 2t+1 readys, gate 0->1 on the n-th late echo\n");
 
   free(a);
 }
@@ -1621,6 +1694,257 @@ testBprProcessGate(
   check("BPR gate: process 1 (decided 1) IS retried (post-decide)",
         process1Seen >= 1);
   printf("    decided 1 process retried (post-decide continuation, pitfall #1)\n");
+
+  free(a);
+}
+
+/*--------------------------------------------------------------------------*/
+/*  bkr94acsBaEntered / bkr94acsBaGetValid white-box                        */
+/*                                                                          */
+/*  The two read-only views of what the sweep-side decisions consume:       */
+/*  entered[] (bkr94acsFanoutDuty's unentered scan) and the next round's    */
+/*  VALID set (bkr94acsTurnDuty's count, bkr94acsTurn's sample).            */
+/*                                                                          */
+/*  BaEntered: 0 for every BA of a fresh instance including self, 1 for a   */
+/*  BA step 1 entered on an A-Cast ACCEPT while un-accepted BAs stay 0, 1   */
+/*  for every BA once step 2's fanout has fired, and latched across         */
+/*  further A-Cast traffic and across a decision.                           */
+/*                                                                          */
+/*  BaGetValid: the round-0 set fed in, sender for sender and value for     */
+/*  value; the count read beside bkr94acsTurnDuty at each of its three      */
+/*  classes; a concrete before/after across one turn (the set is the NEXT   */
+/*  round's, so the count is not monotone across a turn); and 0 for a BA    */
+/*  whose round space is exhausted.                                        */
+/*--------------------------------------------------------------------------*/
+
+static void
+testBaEnteredGetValid(
+  void
+){
+  struct bkr94acs *a;
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, 4)];
+  unsigned char senders[4];
+  unsigned char values[4];
+  unsigned char val[1];
+  unsigned long sz;
+  unsigned int nact;
+  unsigned int from;
+  unsigned int b;
+  unsigned int i;
+  unsigned int cnt;
+  unsigned int before;
+  unsigned int after;
+  unsigned int untouched;
+
+  printf("\n  bkr94acsBaEntered:\n");
+
+  sz = bkr94acsSz(3, 0, 4);
+  a = calloc(1, sz);
+  if (!a) {
+    check("testBaEnteredGetValid alloc", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+  val[0] = 1;
+
+  check("BaEntered: NULL state -> 0", bkr94acsBaEntered(0, 0) == 0);
+  check("BaEntered: out-of-range process -> 0",
+        bkr94acsBaEntered(a, 200) == 0);
+  for (b = 0; b < 4; ++b)
+    check("BaEntered: fresh instance -> 0 for every BA (self included)",
+          bkr94acsBaEntered(a, b) == 0);
+
+  /* Step 1: drive process 1's A-Cast to ACCEPT at this process --
+   * Q(1) = 1 enters 1 into BA_1 and nothing else. */
+  bkr94acsAcastInput(a, 1, BRACHA87_INITIAL, 1, val, out);
+  for (from = 0; from < 4; ++from)
+    bkr94acsAcastInput(a, 1, BRACHA87_ECHO, from, val, out);
+  for (from = 0; from < 4; ++from)
+    bkr94acsAcastInput(a, 1, BRACHA87_READY, from, val, out);
+  check("BaEntered: 1 for the BA step 1 entered on ACCEPT",
+        bkr94acsBaEntered(a, 1) == 1);
+  check("BaEntered: 0 for the un-accepted BAs",
+        bkr94acsBaEntered(a, 0) == 0 && bkr94acsBaEntered(a, 2) == 0
+     && bkr94acsBaEntered(a, 3) == 0);
+
+  /* Step 2: n-t = 3 BAs decided with output 1 enables the fanout,
+   * which empties the unentered set. */
+  testWriteDecision(a, 0, 1);
+  testWriteDecision(a, 1, 1);
+  testWriteDecision(a, 2, 1);
+  check("BaEntered: fanout duty TOLERANCE with entries outstanding",
+        bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_TOLERANCE);
+  nact = bkr94acsFanout(a, out);
+  check("BaEntered: fanout enters the three un-entered BAs", nact == 3);
+  for (b = 0; b < 4; ++b)
+    check("BaEntered: 1 for every BA once the fanout has fired",
+          bkr94acsBaEntered(a, b) == 1);
+  check("BaEntered: fanout duty MET with nothing unentered",
+        bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_MET);
+
+  /* Latched: an A-Cast ACCEPT for an already-entered BA enters
+   * nothing, and a decision does not clear the record. */
+  bkr94acsAcastInput(a, 2, BRACHA87_INITIAL, 2, val, out);
+  for (from = 0; from < 4; ++from)
+    bkr94acsAcastInput(a, 2, BRACHA87_ECHO, from, val, out);
+  nact = 0;
+  for (from = 0; from < 4; ++from)
+    nact += bkr94acsAcastInput(a, 2, BRACHA87_READY, from, val, out);
+  check("BaEntered: latched 1 across a later A-Cast ACCEPT",
+        bkr94acsBaEntered(a, 2) == 1);
+  testWriteDecision(a, 3, 0);
+  check("BaEntered: latched 1 across a decision",
+        bkr94acsBaEntered(a, 3) == 1);
+  printf("    0 fresh, 1 on step 1's enter, all 1 past the fanout, latched\n");
+
+  free(a);
+
+  printf("\n  bkr94acsBaGetValid:\n");
+
+  a = calloc(1, sz);
+  if (!a) {
+    check("testBaEnteredGetValid alloc", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+
+  /* Defensive guards touch neither array: prefill both with a
+   * sentinel and require every byte back. */
+  memset(senders, 0xAA, sizeof (senders));
+  memset(values, 0xAA, sizeof (values));
+  check("BaGetValid: NULL state -> 0",
+        bkr94acsBaGetValid(0, 0, senders, values) == 0);
+  check("BaGetValid: out-of-range process -> 0",
+        bkr94acsBaGetValid(a, 200, senders, values) == 0);
+  check("BaGetValid: NULL senders -> 0",
+        bkr94acsBaGetValid(a, 0, 0, values) == 0);
+  check("BaGetValid: NULL values -> 0",
+        bkr94acsBaGetValid(a, 0, senders, 0) == 0);
+  untouched = 1;
+  for (i = 0; i < sizeof (senders) / sizeof (senders[0]); ++i)
+    if (senders[i] != 0xAA || values[i] != 0xAA)
+      untouched = 0;
+  check("BaGetValid: a refused call touches neither array", untouched);
+
+  /* Round 0 of BA_0, one Fig1 ACCEPT per initiator.  Values
+   * (0, 0, 1, 1) across initiators (0, 1, 2, 3) -- testExhausted's
+   * pattern, which validates at every sub-round.  No turn fires here,
+   * so the next round stays 0 and the set only grows. */
+  check("BaGetValid: 0 at a fresh BA's round 0",
+        bkr94acsBaGetValid(a, 0, senders, values) == 0);
+  for (b = 0; b < 4; ++b) {
+    unsigned char v;
+    unsigned char sender;
+
+    v = (b < 2) ? 0 : 1;
+    bkr94acsBaInput(a, 0, 0, b, BRACHA87_INITIAL, b, v, out);
+    for (sender = 1; sender <= 3; ++sender)
+      bkr94acsBaInput(a, 0, 0, b, BRACHA87_READY, sender, v, out);
+
+    memset(senders, 0xAA, sizeof (senders));
+    memset(values, 0xAA, sizeof (values));
+    cnt = bkr94acsBaGetValid(a, 0, senders, values);
+    check("BaGetValid: count == the ACCEPTs fed into round 0",
+          cnt == b + 1);
+    untouched = 1;
+    for (i = 0; i <= b; ++i)
+      if (senders[i] != i || values[i] != ((i < 2) ? 0 : 1))
+        untouched = 0;
+    check("BaGetValid: senders[] and values[] are what was fed",
+          untouched);
+
+    /* The count is the one bkr94acsTurnDuty classifies from:
+     * below n-t = 3 it is HELD, at 3 TOLERANCE, at n MET. */
+    if (cnt < 3)
+      check("BaGetValid: count < n-t reads TurnDuty HELD",
+            bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_HELD);
+    else if (cnt < 4)
+      check("BaGetValid: count >= n-t reads TurnDuty TOLERANCE",
+            bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_TOLERANCE);
+    else
+      check("BaGetValid: count == n reads TurnDuty MET",
+            bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_MET);
+  }
+
+  /* Across a turn the answer is the NEXT round's set, so the count
+   * is not monotone: 4 before, 0 after (round 1 has nothing yet). */
+  before = bkr94acsBaGetValid(a, 0, senders, values);
+  nact = bkr94acsTurn(a, 0, 1, out);
+  check("BaGetValid: the MET turn fired", nact > 0);
+  after = bkr94acsBaGetValid(a, 0, senders, values);
+  check("BaGetValid: full round-0 sample before the turn", before == 4);
+  check("BaGetValid: the next round's empty set after it", after == 0);
+
+  /* Feeding round 1 grows the round the accessor now answers. */
+  for (b = 0; b < 3; ++b) {
+    unsigned char v;
+    unsigned char sender;
+
+    v = (b < 2) ? 0 : 1;
+    bkr94acsBaInput(a, 0, 1, b, BRACHA87_INITIAL, b, v, out);
+    for (sender = 1; sender <= 3; ++sender)
+      bkr94acsBaInput(a, 0, 1, b, BRACHA87_READY, sender, v, out);
+  }
+  memset(senders, 0xAA, sizeof (senders));
+  memset(values, 0xAA, sizeof (values));
+  cnt = bkr94acsBaGetValid(a, 0, senders, values);
+  check("BaGetValid: round 1's own set, not round 0's", cnt == 3);
+  check("BaGetValid: round 1 senders[] are the round-1 initiators",
+        senders[0] == 0 && senders[1] == 1 && senders[2] == 2);
+  check("BaGetValid: round 1 values[] are the round-1 values",
+        values[0] == 0 && values[1] == 0 && values[2] == 1);
+  printf("    round-0 set exact, count 4 -> 0 across a turn, round-1 set exact\n");
+
+  free(a);
+
+  /* An exhausted BA has no next round.  testExhausted's drive shape,
+   * inlined because feedFig1Accept is declared below this point:
+   * maxPhases = 1, split values across all three sub-rounds, turns
+   * drained at a zero budget so the round space runs out. */
+  sz = bkr94acsSz(3, 0, 1);
+  a = calloc(1, sz);
+  if (!a) {
+    check("testBaEnteredGetValid alloc", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
+  {
+    struct bkr94acsAct tout[3];   /* bkr94acsTurn bound */
+    unsigned int round;
+    unsigned int exhaustedSeen;
+    unsigned int k;
+
+    exhaustedSeen = 0;
+    for (round = 0; round < 3; ++round)
+      for (b = 0; b < 4; ++b) {
+        unsigned char v;
+        unsigned char sender;
+
+        v = (b < 2) ? 0 : 1;
+        for (sender = 0; sender <= 3; ++sender) {
+          if (sender)
+            bkr94acsBaInput(a, 0, round, b, BRACHA87_READY, sender, v, out);
+          else
+            bkr94acsBaInput(a, 0, round, b, BRACHA87_INITIAL, b, v, out);
+          while ((nact = bkr94acsTurn(a, 0, 1, tout)) > 0)
+            for (k = 0; k < nact; ++k)
+              if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
+                ++exhaustedSeen;
+        }
+      }
+    check("BaGetValid: the drive exhausted BA_0",
+          exhaustedSeen == 1 && bkr94acsBaDecision(a, 0) == 0xFE);
+  }
+  memset(senders, 0xAA, sizeof (senders));
+  memset(values, 0xAA, sizeof (values));
+  check("BaGetValid: exhausted round space -> 0",
+        bkr94acsBaGetValid(a, 0, senders, values) == 0);
+  untouched = 1;
+  for (i = 0; i < sizeof (senders) / sizeof (senders[0]); ++i)
+    if (senders[i] != 0xAA || values[i] != 0xAA)
+      untouched = 0;
+  check("BaGetValid: an exhausted BA touches neither array", untouched);
+  printf("    exhausted BA answers 0 and touches nothing\n");
 
   free(a);
 }
@@ -2431,7 +2755,9 @@ main(
   testBpr();
   testBprCursorCoverage();
   testAcastAllEchoed();
+  testAcastAllEchoedLate();
   testBprProcessGate();
+  testBaEnteredGetValid();
   testBprSkipAccept();
   testBprByzantineSilent();
   testBprHighDrop();
