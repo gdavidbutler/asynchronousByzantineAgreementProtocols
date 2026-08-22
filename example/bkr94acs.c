@@ -33,11 +33,29 @@
  * in-memory queue -- every message is delivered, no loss, no
  * asynchrony; delivery order is deterministic unless -s is given.
  * It exercises the protocol state machines and the BPR retry but
- * does NOT exercise the deployment-time abandonment policy (the
- * barren-sweep gate) needed under real asynchronous transport;
- * that is inherently coupled to message loss, partial ordering,
- * and the failure modes those introduce. See README.md
- * "Abandonment" for the design.
+ * does NOT exercise the deployment-time abandonment policy needed
+ * under real asynchronous transport; that is inherently coupled to
+ * message loss, partial ordering, and the failure modes those
+ * introduce. See README.md "Abandonment" for the design.
+ *
+ * How a run ends -- the taxonomy, and which half this demo shows:
+ *
+ *   QUIESCENT   the proof stop, demonstrated here, per process on
+ *               its OWN evidence: a bkr94acsRetry pass past its
+ *               A-Cast owes nothing, so it leaves the sweep
+ *               rotation.  Completion is then an assertion the
+ *               results section checks, not the gate.  Reaching it
+ *               needs both READY annotations round-tripped below --
+ *               ACCEPTED for "I have accepted", ANSWERED for "I have
+ *               yours" -- since suppressing on the first alone
+ *               silences the announcement the other end waits for.
+ *   ABANDONED   the policy backstop (README.md "Abandonment"), which
+ *               reads the ABSENCE of progress and therefore cannot
+ *               tell a laggard from a corpse.  Under loss it is the
+ *               only exit a process that never hears an answer has.
+ *               This demo loses nothing, so it never takes it.
+ *   sweep cap   a harness guard, not protocol: a bound on the
+ *               rotation, carrying no evidence of anything.
  *
  * Build:
  *   (from project root) make example_bkr94acs
@@ -85,14 +103,18 @@
 /*  ride in ONE clsType byte per the canonical packed-byte layout in        */
 /*  bkr94acs.h.  qPush composes it; the process loop recovers it.  An       */
 /*  ACAST carries its value in value[]; BA folds its payload into           */
-/*  clsType and leaves value[] unused.  A READY also carries the            */
-/*  BKR94ACS_ACCEPTED bit (bit 4, class-independent): egress sets it from   */
-/*  the act's .accepted flag, ingress routes it to bkr94acs*Accepted --     */
-/*  the BPR per-process READY retire and the all-n quiescence gate.         */
+/*  clsType and leaves value[] unused.  A READY also carries the two        */
+/*  class-independent BPR annotations: BKR94ACS_ACCEPTED (bit 4) from the   */
+/*  act's .accepted flag, one fact about the sender, routed on ingress to   */
+/*  bkr94acs*Accepted; and BKR94ACS_ANSWERED (bit 5) from the act's         */
+/*  .answer mask, decided per RECIPIENT, whose ABSENCE routes to            */
+/*  bkr94acs*Wants.  Together they are the READY retire: the first says     */
+/*  "I have accepted," the second "I have yours," and quiescence needs      */
+/*  both in every direction.                                               */
 /*--------------------------------------------------------------------------*/
 
 struct msg {
-  unsigned char clsType;     /* class|type; +ACCEPTED on a READY;
+  unsigned char clsType;     /* class|type; +ACCEPTED,+ANSWERED on a READY;
                               * +cv,D_FLAG for BA (see above) */
   unsigned char process;      /* which process */
   unsigned char round;       /* BA round (class=BA only) */
@@ -135,6 +157,7 @@ qPush(
  ,unsigned char initiator
  ,unsigned char type
  ,unsigned char accepted /* READY only: act's .accepted -> wire bit 4 */
+ ,unsigned char answered /* READY only: act's .answer bit 'to' -> wire bit 5 */
  ,unsigned char from
  ,unsigned char to
  ,const unsigned char *value
@@ -157,13 +180,15 @@ qPush(
     MsgQ[Qtail].clsType = (unsigned char)
       (cls | type
        | (accepted ? BKR94ACS_ACCEPTED : 0)
+       | (answered ? BKR94ACS_ANSWERED : 0)
        | ((value[0] & 1) << 3)
        | (value[0] & BRACHA87_D_FLAG));
   else {
     /* A-Cast payload is real bytes; pack class, type, ACCEPTED. */
     MsgQ[Qtail].clsType = (unsigned char)
       (cls | type
-       | (accepted ? BKR94ACS_ACCEPTED : 0));
+       | (accepted ? BKR94ACS_ACCEPTED : 0)
+       | (answered ? BKR94ACS_ANSWERED : 0));
     memcpy(MsgQ[Qtail].value, value, valueLen);
   }
   ++Qtail;
@@ -226,7 +251,7 @@ typeName(
 /*--------------------------------------------------------------------------*/
 /*  Act framing -- the canonical packed-byte template                       */
 /*                                                                          */
-/*  Three sources hand the pump acts of the same kinds: a delivery          */
+/*  Three sources hand the loop acts of the same kinds: a delivery          */
 /*  (bkr94acs{Acast,Ba}Input), the step-2 fanout (bkr94acsFanout), and a     */
 /*  BA round turn (bkr94acsTurn).  They differ only in what enabled them,    */
 /*  never in how their acts are framed, so all three route here: the wire    */
@@ -270,7 +295,9 @@ qActs(
         if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
           continue;
         qPush(BKR94ACS_CLS_ACAST, acts[k].process, 0, 0,
-              acts[k].type, acts[k].accepted, self, (unsigned char)p,
+              acts[k].type, acts[k].accepted,
+              acts[k].answer && BRACHA87_SKIP_TST(acts[k].answer, p),
+              self, (unsigned char)p,
               acts[k].value, vLen);
       }
       break;
@@ -287,6 +314,7 @@ qActs(
           continue;
         qPush(BKR94ACS_CLS_BA, acts[k].process, acts[k].round,
               acts[k].initiator, acts[k].type, acts[k].accepted,
+              acts[k].answer && BRACHA87_SKIP_TST(acts[k].answer, p),
               self, (unsigned char)p,
               &acts[k].baValue, 1);
       }
@@ -365,6 +393,12 @@ main(
   unsigned int fanoutFires;
   unsigned int sweepCount;
   unsigned int released;
+
+  /* Per-process ending: quiescence is read per process, from its own
+   * Retry sweep, so the run reports which processes left and when. */
+  unsigned char quiescent[MAX_PROCESSES];
+  unsigned int quiesceSweep[MAX_PROCESSES];
+  unsigned int quiesced;
 
   /* A-Cast strings */
   char acasts[MAX_PROCESSES][MAX_VLEN];
@@ -521,7 +555,7 @@ main(
       continue;
     for (j = 0; j < n; ++j)
       qPush(BKR94ACS_CLS_ACAST, acastAct.process, 0, 0,
-            BRACHA87_INITIAL, acastAct.accepted,
+            BRACHA87_INITIAL, acastAct.accepted, 0,
             (unsigned char)i, (unsigned char)j,
             (const unsigned char *)acasts[i], vLen);
   }
@@ -539,6 +573,9 @@ main(
   released = (dproc < 0) ? 1 : 0;
   sweepCount = 0;
   fanoutFires = 0;
+  quiesced = 0;
+  memset(quiescent, 0, sizeof (quiescent));
+  memset(quiesceSweep, 0, sizeof (quiesceSweep));
   memset(turnTicks, 0, sizeof (turnTicks));
   memset(fanoutTicks, 0, sizeof (fanoutTicks));
 
@@ -549,7 +586,7 @@ main(
     progress = 0;
 
     /*--------------------------------------------------------------------*/
-    /*  Drain ingress.  Deliveries BANK evidence and emit the protocol's  */
+    /*  Drain ingress.  Deliveries BANK evidence and output the protocol's  */
     /*  own echo/ready traffic; no decision fires here.                   */
     /*--------------------------------------------------------------------*/
 
@@ -607,6 +644,29 @@ main(
          */
         if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
           bkr94acsAcastAccepted(st, m->process, m->from);
+        /*
+         * ANSWER-annotation ingress: a READY WITHOUT bit 5 is its sender
+         * saying it has not recorded OUR accept -- it would have
+         * suppressed us otherwise -- so un-suppress it for the next
+         * READY egress, which answers with the bit set.  Never route a
+         * READY that HAS the bit: an answer that armed a want would
+         * ping-pong and the pair would never fall silent.
+         */
+        if (type == BRACHA87_READY && !(m->clsType & BKR94ACS_ANSWERED)) {
+          bkr94acsAcastWants(st, m->process, m->from);
+          /*
+           * Leaving the rotation is PROVISIONAL: a want is evidence
+           * that something IS still owed, and a process that stopped
+           * ticking can never answer it.  Re-enter -- under loss this
+           * is what makes quiescence reachable, since a lost answer is
+           * re-requested by the next poke and the poke is worthless if
+           * nobody is left to hear it.
+           */
+          if (quiescent[m->to]) {
+            quiescent[m->to] = 0;
+            --quiesced;
+          }
+        }
       } else {
         /* Recover the BA binary value (+D_FLAG) from the wire byte. */
         baValue = (unsigned char)
@@ -624,6 +684,14 @@ main(
         if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
           bkr94acsBaAccepted(st, m->process, m->round,
                                     m->initiator, m->from);
+        if (type == BRACHA87_READY && !(m->clsType & BKR94ACS_ANSWERED)) {
+          bkr94acsBaWants(st, m->process, m->round,
+                                 m->initiator, m->from);
+          if (quiescent[m->to]) {
+            quiescent[m->to] = 0;
+            --quiesced;
+          }
+        }
       }
 
       /* Enqueue output actions as network messages.  A duplicate
@@ -668,7 +736,7 @@ main(
                           &acastAct) == 1)
         for (j = 0; j < n; ++j)
           qPush(BKR94ACS_CLS_ACAST, acastAct.process, 0, 0,
-                BRACHA87_INITIAL, acastAct.accepted,
+                BRACHA87_INITIAL, acastAct.accepted, 0,
                 (unsigned char)dproc, (unsigned char)j,
                 (const unsigned char *)acasts[dproc], vLen);
     }
@@ -688,9 +756,27 @@ main(
        * Receivers dedup at Fig1Input, so under perfect delivery a
        * retry's duplicates produce no new state; here it carries the
        * -d laggard's late INITIAL and re-carries anything a lossy
-       * transport would have dropped. */
-      nacts = bkr94acsRetry(processes[i], &retry[i], acts);
-      qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [retry]");
+       * transport would have dropped.
+       *
+       * A 0 return past this process's own A-Cast is QUIESCENCE on its
+       * OWN evidence: a full pass of its cursor found every sent Fig 1
+       * retired, which for READY means every process has announced its
+       * accept and holds this one's.  It owes nothing to anyone, so it
+       * leaves the rotation.  Its ingress stays open -- quiescence
+       * bounds what a process OWES, never what it may still be told --
+       * and a turn or fanout below re-arms it, since either can seed a
+       * fresh Fig 1 for a round nobody has broadcast yet. */
+      if (!quiescent[i]) {
+        nacts = bkr94acsRetry(processes[i], &retry[i], acts);
+        if (!nacts && bkr94acsSentFig1Count(processes[i])) {
+          quiescent[i] = 1;
+          quiesceSweep[i] = sweepCount;
+          ++quiesced;
+          if (verbose)
+            printf("process %u: QUIESCENT (sweep %u)\n", i, sweepCount);
+        }
+        qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [retry]");
+      }
 
       /*
        * BA round turns, paced per (instance, BA): count sweeps while
@@ -719,8 +805,13 @@ main(
                              turnTicks[i][p] > graceBudget
                              || bkr94acsBaDecision(processes[i],
                                   (unsigned char)p) != 0xFF, acts);
-        if (nacts)
+        if (nacts) {
           progress = 1;
+          if (quiescent[i]) {
+            quiescent[i] = 0;
+            --quiesced;
+          }
+        }
         qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [turn]");
       }
 
@@ -741,6 +832,10 @@ main(
         if (nacts) {
           fanoutFires += nacts;
           progress = 1;
+          if (quiescent[i]) {
+            quiescent[i] = 0;
+            --quiesced;
+          }
           printf("process %u: step 2 fires (sweep %u) -- enter 0 in %u unentered BA(s)\n",
                  i, sweepCount, nacts);
         }
@@ -749,27 +844,23 @@ main(
     }
 
     /*--------------------------------------------------------------------*/
-    /*  Terminate by the documented abandonment pattern: every process    */
-    /*  complete AND a barren sweep -- no delivery, turn, or fanout       */
-    /*  produced a fresh act.  BPR keeps re-sending (the library          */
-    /*  prescribes no stop; see README.md "Abandonment"), but Input       */
-    /*  dedup returns 0 acts for a duplicate, so retries never register   */
-    /*  as progress -- the invariant test_bkr94acs_blackbox C8 pins.      */
-    /*  The cap is a harness guard, not protocol.                         */
+    /*  Terminate by QUIESCENCE: every process has left the rotation on   */
+    /*  its own evidence -- a full Retry pass owing nothing.  That is a   */
+    /*  stronger ending than the barren-sweep abandon gate this loop      */
+    /*  used to take, and it is available only because both READY         */
+    /*  annotations round-trip here: the barren gate reads the ABSENCE    */
+    /*  of progress, which a laggard's silence imitates exactly, while    */
+    /*  quiescence reads evidence every process supplied.  Completion is  */
+    /*  then an assertion rather than the gate -- an un-complete process  */
+    /*  is reported below and fails the run.  Abandonment remains the     */
+    /*  policy any deployment still needs (README.md "Abandonment"),      */
+    /*  since loss can hold the rotation open; the cap stands in for it   */
+    /*  here and is a harness guard, not protocol.                        */
     /*--------------------------------------------------------------------*/
 
-    if (!progress) {
-      unsigned int allDone;
-
-      allDone = 1;
-      for (i = 0; i < n; ++i)
-        if (!processes[i]->complete) {
-          allDone = 0;
-          break;
-        }
-      if (allDone)
-        break;
-    }
+    (void)progress;
+    if (quiesced == n)
+      break;
     if (sweepCount > 100000) {
       fprintf(stderr, "no convergence within the sweep cap\n");
       exitCode = 1;
@@ -866,6 +957,21 @@ main(
     if (!allAgree)
       exitCode = 1;
   }
+
+  /*----------------------------------------------------------------------*/
+  /*  How the run ended, per process.  QUIESCENT is the proof stop: that   */
+  /*  process's Retry pass owed nothing.  Reaching the cap instead is the  */
+  /*  harness standing in for an abandonment policy, and a failure here    */
+  /*  since this demo loses nothing.                                       */
+  /*----------------------------------------------------------------------*/
+
+  for (i = 0; i < n; ++i)
+    if (quiescent[i])
+      printf("Process %u: QUIESCENT at sweep %u\n", i, quiesceSweep[i]);
+    else
+      printf("Process %u: not quiescent (sweep cap)\n", i);
+  printf("Ending: %u of %u processes QUIESCENT in %u sweeps\n",
+         quiesced, n, sweepCount);
 
   /*----------------------------------------------------------------------*/
   /*  The -d demonstration's verdict: included under grace, excluded      */

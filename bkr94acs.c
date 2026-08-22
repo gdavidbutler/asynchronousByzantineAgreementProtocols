@@ -376,6 +376,7 @@ bkr94acsEnter(
 
   out->value = 0;
   out->skip = 0;            /* fresh initiation: nothing to suppress yet */
+  out->answer = 0;
   out->act = BKR94ACS_ACT_BA_SEND;
   out->process = process;
   out->round = 0;
@@ -451,6 +452,8 @@ bkr94acsAcastInput(
     if (f1out[k] == BRACHA87_ECHO_ALL || f1out[k] == BRACHA87_READY_ALL) {
       out[nact].value = bracha87Fig1Value(f1);
       out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
+      out[nact].answer = (f1out[k] == BRACHA87_READY_ALL)
+        ? bracha87Fig1Answer(f1) : 0;
       out[nact].act = BKR94ACS_ACT_ACAST_SEND;
       out[nact].process = process;
       out[nact].round = 0;
@@ -616,6 +619,8 @@ bkr94acsBaInput(
 
       out[nact].value = 0;
       out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
+      out[nact].answer = (f1out[k] == BRACHA87_READY_ALL)
+        ? bracha87Fig1Answer(f1) : 0;
       out[nact].act = BKR94ACS_ACT_BA_SEND;
       out[nact].process = process;
       out[nact].round = round;
@@ -711,6 +716,7 @@ bkr94acsAcast(
 
   out->value = bracha87Fig1Value(acastF1(a, a->self));
   out->skip = 0;            /* fresh initiation: nothing to suppress yet */
+  out->answer = 0;
   out->act = BKR94ACS_ACT_ACAST_SEND;
   out->process = a->self;
   out->round = 0;
@@ -795,6 +801,8 @@ bkr94acsRetryOutputAcast(
   for (k = 0; k < n; ++k) {
     out[nact].value = cv;
     out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
+    out[nact].answer = (f1out[k] == BRACHA87_READY_ALL)
+      ? bracha87Fig1Answer(f1) : 0;
     out[nact].act = BKR94ACS_ACT_ACAST_SEND;
     out[nact].process = process;
     out[nact].round = 0;
@@ -839,6 +847,8 @@ bkr94acsRetryOutputBa(
   for (k = 0; k < n; ++k) {
     out[nact].value = 0;
     out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
+    out[nact].answer = (f1out[k] == BRACHA87_READY_ALL)
+      ? bracha87Fig1Answer(f1) : 0;
     out[nact].act = BKR94ACS_ACT_BA_SEND;
     out[nact].process = process;
     out[nact].round = round;
@@ -1081,6 +1091,7 @@ bkr94acsTurn(
     bkr94acsDecision(a)[process] = f4->decision;
     out[nact].value = 0;
     out[nact].skip = 0;
+    out[nact].answer = 0;
     out[nact].act = BKR94ACS_ACT_BA_DECIDED;
     out[nact].process = process;
     out[nact].round = 0;
@@ -1130,6 +1141,7 @@ bkr94acsTurn(
       a->complete = 1;
       out[nact].value = 0;
       out[nact].skip = 0;
+      out[nact].answer = 0;
       out[nact].act = BKR94ACS_ACT_COMPLETE;
       out[nact].process = 0;
       out[nact].round = 0;
@@ -1164,6 +1176,7 @@ bkr94acsTurn(
 
     out[nact].value = 0;
     out[nact].skip = 0;     /* fresh initiation: nothing to suppress */
+    out[nact].answer = 0;
     out[nact].act = BKR94ACS_ACT_BA_SEND;
     out[nact].process = process;
     out[nact].round = *nextRound;
@@ -1210,6 +1223,7 @@ bkr94acsTurn(
     bkr94acsDecision(a)[process] = 0xFE;
     out[nact].value = 0;
     out[nact].skip = 0;
+    out[nact].answer = 0;
     out[nact].act = BKR94ACS_ACT_BA_EXHAUSTED;
     out[nact].process = process;
     out[nact].round = 0;
@@ -1229,7 +1243,7 @@ bkr94acsTurn(
 /*  The transport decodes the BKR94ACS_ACCEPTED wire bit off a received     */
 /*  READY and routes it here: 'from' (the message sender) has accepted      */
 /*  the named Fig1 instance, so this process retires its per-process READY  */
-/*  retry to 'from' (bracha87Fig1Skip(READY) = acFrom).  Call AFTER the     */
+/*  retry to 'from' (bracha87Fig1Skip(READY)).  Call AFTER the             */
 /*  matching bkr94acs*Input for the same READY (which records rdFrom);      */
 /*  acFrom is then a subset of rdFrom.  Out-of-range indices are ignored.   */
 /*--------------------------------------------------------------------------*/
@@ -1257,6 +1271,44 @@ bkr94acsBaAccepted(
    || initiator > a->n || from > a->n)
     return;
   bracha87Fig1ProcessAccepted(baF1(a, process, round, initiator), from);
+}
+
+/*--------------------------------------------------------------------------*/
+/*  ANSWER-annotation ingress (the retire's other half)                     */
+/*                                                                          */
+/*  A received READY WITHOUT the BKR94ACS_ANSWERED wire bit is its sender   */
+/*  saying it has not recorded this process's accept of the named Fig1 --   */
+/*  it would have suppressed us otherwise.  Route it here and the Fig1      */
+/*  un-suppresses that sender for one READY egress, so the announcement it  */
+/*  is waiting for goes out (bracha87Fig1ProcessWants).  Call AFTER the     */
+/*  matching bkr94acs*Input, and never for a READY that DOES carry the      */
+/*  bit -- an answer that armed a want would ping-pong.  Out-of-range       */
+/*  indices are ignored.                                                    */
+/*--------------------------------------------------------------------------*/
+
+void
+bkr94acsAcastWants(
+  struct bkr94acs *a
+ ,unsigned char process
+ ,unsigned char from
+){
+  if (!a || process > a->n || from > a->n)
+    return;
+  bracha87Fig1ProcessWants(acastF1(a, process), from);
+}
+
+void
+bkr94acsBaWants(
+  struct bkr94acs *a
+ ,unsigned char process
+ ,unsigned char round
+ ,unsigned char initiator
+ ,unsigned char from
+){
+  if (!a || process > a->n || round >= maxRounds(a)
+   || initiator > a->n || from > a->n)
+    return;
+  bracha87Fig1ProcessWants(baF1(a, process, round, initiator), from);
 }
 
 /*--------------------------------------------------------------------------*/

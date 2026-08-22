@@ -663,6 +663,98 @@ main(int argc, char **argv)
   }
 
   /* ---------------------------------------------------------------- */
+  BANNER("Fig1 want / answer -- the READY retire's second half");
+  /* ---------------------------------------------------------------- */
+  /* Header, bracha87Fig1Skip: READY_ALL is "accepted processes MINUS  */
+  /* the ones that have asked for this instance's announcement", and   */
+  /* "the READY mask is also the retire gate ... when all n of its     */
+  /* bits are set."  Header, bracha87Fig1ProcessWants: records nothing */
+  /* before ACCEPTED; consumed by the next READY egress; a null or     */
+  /* out-of-range argument is ignored.  Header, bracha87Fig1Answer:    */
+  /* the raw accepted set, 0 for null, and a wanter is "precisely a    */
+  /* process in this mask that must still be sent to."                 */
+  {
+    struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
+    static const unsigned char v[1] = { 1 };
+    const unsigned char *m;
+    unsigned int saw_ready;
+
+    CHECK(bracha87Fig1Answer(0) == 0, "Answer: NULL -> 0");
+    bracha87Fig1ProcessWants(0, 0);                 /* NULL: no crash */
+
+    /* Pre-ACCEPTED a want records nothing. */
+    bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
+    (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, buf);
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 1, v, buf);
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, buf); /* RDSENT */
+    CHECK((b->flags & BRACHA87_F1_ACCEPTED) == 0, "Want: setup not accepted");
+    bracha87Fig1ProcessAccepted(b, 1);
+    bracha87Fig1ProcessWants(b, 1);
+    CHECK(BRACHA87_SKIP_TST(bracha87Fig1Skip(b, BRACHA87_READY_ALL), 1),
+          "Want: pre-ACCEPTED want records nothing");
+
+    /* Post-ACCEPTED it un-suppresses, and the answer mask keeps the
+     * process the suppress mask drops -- the two masks are different
+     * questions about the same recipient. */
+    for (i = 0; i < N_ACT; ++i)
+      (void) bracha87Fig1Input(b, BRACHA87_READY, (unsigned char) i, v, buf);
+    CHECK((b->flags & BRACHA87_F1_ACCEPTED) != 0, "Want: setup accepted");
+    for (i = 0; i < N_ACT; ++i)
+      bracha87Fig1ProcessAccepted(b, (unsigned char) i);
+    act_count = bracha87Fig1Bpr(b, actions);      /* drain any standing want */
+    m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    saw_ready = 1;
+    for (i = 0; i < N_ACT; ++i)
+      if (!BRACHA87_SKIP_TST(m, i)) saw_ready = 0;
+    CHECK(saw_ready, "Gate: full coverage at all n accepted");
+    act_count = bracha87Fig1Bpr(b, actions);
+    saw_ready = 0;
+    for (i = 0; i < act_count; ++i)
+      if (actions[i] == BRACHA87_READY_ALL) saw_ready = 1;
+    CHECK(!saw_ready, "Gate: READY retired at full coverage");
+
+    /* A want re-opens exactly the tick that answers it, and the answer
+     * is TICK-PACED: the arm itself outputs nothing, and the mask it
+     * leaves still names every other process. */
+    bracha87Fig1ProcessWants(b, 2);
+    m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    CHECK(!BRACHA87_SKIP_TST(m, 2), "Want: post-ACCEPTED want un-suppresses");
+    CHECK(BRACHA87_SKIP_TST(m, 0) && BRACHA87_SKIP_TST(m, 1)
+       && BRACHA87_SKIP_TST(m, 3),
+          "Want: un-suppresses the wanter only");
+    m = bracha87Fig1Answer(b);
+    CHECK(BRACHA87_SKIP_TST(m, 2), "Answer: a wanter stays answerable");
+    act_count = bracha87Fig1Bpr(b, actions);
+    saw_ready = 0;
+    for (i = 0; i < act_count; ++i)
+      if (actions[i] == BRACHA87_READY_ALL) saw_ready = 1;
+    CHECK(saw_ready, "Gate: a want re-opens READY");
+    act_count = bracha87Fig1Bpr(b, actions);
+    saw_ready = 0;
+    for (i = 0; i < act_count; ++i)
+      if (actions[i] == BRACHA87_READY_ALL) saw_ready = 1;
+    CHECK(!saw_ready, "Gate: the egress consumed it and READY retires again");
+
+    /* Out-of-range is ignored: no other process loses its suppression. */
+    bracha87Fig1ProcessWants(b, (unsigned char)(N_ACT + 9));
+    m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    saw_ready = 1;
+    for (i = 0; i < N_ACT; ++i)
+      if (!BRACHA87_SKIP_TST(m, i)) saw_ready = 0;
+    CHECK(saw_ready, "Want: out-of-range ignored");
+
+    /* An un-announced process is never answerable: claiming it would
+     * tell a correct process to stop asking for an announcement this
+     * instance still needs. */
+    bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
+    m = bracha87Fig1Answer(b);
+    saw_ready = 0;
+    for (i = 0; i < N_ACT; ++i)
+      if (BRACHA87_SKIP_TST(m, i)) saw_ready = 1;
+    CHECK(!saw_ready, "Answer: fresh instance answers nobody");
+  }
+
+  /* ---------------------------------------------------------------- */
   BANNER("Fig1 post-accept observation");
   /* ---------------------------------------------------------------- */
   /* Header, bracha87Fig1AllEchoed: "1 iff this instance has recorded  */

@@ -4591,6 +4591,389 @@ testFig1ArrayRetry(
 
 
 
+
+
+/*************************************************************************/
+/*  Fig 1 want / answer -- the READY retire's second half                */
+/*                                                                       */
+/*  acFrom alone conflates "q has accepted" with "q holds MY accept."    */
+/*  Suppressing READY on the first silences the announcement that        */
+/*  carries the second, so q's own gate stands one bit short for good.   */
+/*  bracha87Fig1ProcessWants is the repair signal (a (ready, v) with no  */
+/*  answer annotation), bracha87Fig1Answer is the annotation, and        */
+/*  bracha87Fig1Skip(READY_ALL) is the difference plus the retire gate.  */
+/*************************************************************************/
+
+/*
+ * Wire byte annotations for the sweep drivers below.  Same positions the
+ * bundled examples frame to (BKR94ACS_ACCEPTED / BKR94ACS_ANSWERED); the
+ * bare layer fixes only bits 0-1, so a test frames its own.
+ */
+#define WA_ACCEPTED 0x10
+#define WA_ANSWERED 0x20
+
+#define WA_MSGS 8192
+
+struct waMsg {
+  unsigned char type;      /* type in bits 0-1 + the two annotations */
+  unsigned char from;
+  unsigned char to;
+  unsigned char value[VLEN];
+};
+
+static struct waMsg WaCur[WA_MSGS];
+static unsigned int WaNCur;
+static struct waMsg WaNxt[WA_MSGS];
+static unsigned int WaNNxt;
+static struct waMsg WaHeld[WA_MSGS];
+static unsigned int WaNHeld;
+
+static void
+waPush(
+  unsigned char type
+ ,unsigned char accepted
+ ,unsigned char answered
+ ,unsigned char from
+ ,unsigned char to
+ ,const unsigned char *value
+){
+  if (WaNNxt >= WA_MSGS) {
+    fprintf(stderr, "waPush overflow\n");
+    return;
+  }
+  WaNxt[WaNNxt].type = (unsigned char)(type
+    | (accepted ? WA_ACCEPTED : 0)
+    | (answered ? WA_ANSWERED : 0));
+  WaNxt[WaNNxt].from = from;
+  WaNxt[WaNNxt].to = to;
+  memcpy(WaNxt[WaNNxt].value, value, VLEN);
+  ++WaNNxt;
+}
+
+/*
+ * Drive n Fig 1 instances of one broadcast to quiescence under the caller
+ * discipline both examples follow: drain the sweep's inbound, then tick
+ * each process once (bracha87Fig1RetryStep), then swap buffers.  Lossless
+ * -- nothing is dropped, only REORDERED.
+ *
+ * holdFrom / holdTo / holdUntil are that reordering, and they are what
+ * reaches the strand with no loss at all: while sweep < holdUntil, an
+ * un-annotated (ready, v) from a process in the holdFrom bitmask to holdTo
+ * is deferred one sweep.  It starves holdTo of pre-accept readys, so the
+ * readys that finally carry it past 2t+1 are RETRIES, which announce their
+ * senders' accepts -- and holdTo then records every one of them in the
+ * same drain it accepts in, before its own first announcement can leave.
+ * holdFrom == 0 is the plain honest schedule.
+ *
+ * Returns the number of processes quiescent at exit and writes the sweep
+ * count reached.
+ */
+static unsigned int
+waSweeps(
+  unsigned int n
+ ,unsigned int t
+ ,unsigned int holdFrom
+ ,unsigned int holdTo
+ ,unsigned int holdUntil
+ ,unsigned int cap
+ ,unsigned int *sweepsOut
+){
+  struct bracha87Fig1 *inst[MAX_N];
+  unsigned char val[VLEN];
+  unsigned long sz;
+  unsigned int quiesced;
+  unsigned int sweep;
+  unsigned int i;
+  unsigned int j;
+
+  memcpy(val, "WANT", VLEN);
+  sz = bracha87Fig1Sz(n - 1, VLEN - 1);
+  for (i = 0; i < n; ++i) {
+    inst[i] = (struct bracha87Fig1 *)calloc(1, sz);
+    if (!inst[i]) {
+      fprintf(stderr, "waSweeps OoR\n");
+      return (0);
+    }
+    bracha87Fig1Init(inst[i], (unsigned char)(n - 1), (unsigned char)t,
+                     VLEN - 1);
+  }
+  bracha87Fig1Initiator(inst[0], val);
+
+  WaNCur = WaNNxt = WaNHeld = 0;
+  for (j = 0; j < n; ++j)
+    waPush(BRACHA87_INITIAL, 0, 0, 0, (unsigned char)j, val);
+  memcpy(WaCur, WaNxt, WaNNxt * sizeof (WaNxt[0]));
+  WaNCur = WaNNxt;
+  WaNNxt = 0;
+
+  quiesced = 0;
+  for (sweep = 1; sweep <= cap; ++sweep) {
+    unsigned int k;
+    unsigned int pass;
+    unsigned int nHeldNew;
+    static struct waMsg heldNew[WA_MSGS];
+
+    nHeldNew = 0;
+    /* pass 0 = this sweep's arrivals, pass 1 = the deferred ones. */
+    for (pass = 0; pass < 2; ++pass) {
+      unsigned int cnt;
+      struct waMsg *q;
+
+      q = pass ? WaHeld : WaCur;
+      cnt = pass ? WaNHeld : WaNCur;
+      for (k = 0; k < cnt; ++k) {
+        struct bracha87Fig1 *f;
+        unsigned char out[3];
+        unsigned char ty;
+        unsigned int nout;
+        unsigned int o;
+
+        ty = (unsigned char)(q[k].type & BRACHA87_TYPE_MASK);
+        if (!pass
+         && sweep < holdUntil
+         && ty == BRACHA87_READY
+         && !(q[k].type & WA_ANSWERED)
+         && (holdFrom & (1u << q[k].from))
+         && q[k].to == holdTo) {
+          heldNew[nHeldNew++] = q[k];
+          continue;
+        }
+        /* Pitfall 17: the bare entry cannot bind its own initiator. */
+        if (ty == BRACHA87_INITIAL && q[k].from != 0)
+          continue;
+        f = inst[q[k].to];
+        nout = bracha87Fig1Input(f, ty, q[k].from, q[k].value, out);
+        if (ty == BRACHA87_READY && (q[k].type & WA_ACCEPTED))
+          bracha87Fig1ProcessAccepted(f, q[k].from);
+        if (ty == BRACHA87_READY && !(q[k].type & WA_ANSWERED))
+          bracha87Fig1ProcessWants(f, q[k].from);
+        for (o = 0; o < nout; ++o) {
+          const unsigned char *cv;
+          const unsigned char *sk;
+          const unsigned char *an;
+
+          if (!(cv = bracha87Fig1Value(f)))
+            continue;
+          if (out[o] == BRACHA87_ACCEPT) {
+            bracha87Fig1ProcessAccepted(f, q[k].to);
+            continue;
+          }
+          sk = bracha87Fig1Skip(f, out[o]);
+          an = (out[o] == BRACHA87_READY_ALL)
+               ? bracha87Fig1Answer(f) : 0;
+          for (j = 0; j < n; ++j) {
+            if (sk && BRACHA87_SKIP_TST(sk, j))
+              continue;
+            waPush(out[o] == BRACHA87_ECHO_ALL
+                     ? BRACHA87_ECHO : BRACHA87_READY,
+                   0, an && BRACHA87_SKIP_TST(an, j),
+                   q[k].to, (unsigned char)j, cv);
+          }
+        }
+      }
+    }
+    memcpy(WaHeld, heldNew, nHeldNew * sizeof (heldNew[0]));
+    WaNHeld = nHeldNew;
+
+    quiesced = 0;
+    for (i = 0; i < n; ++i) {
+      struct bracha87Fig1 *arr[1];
+      struct bracha87Retry rt;
+      struct bracha87Fig1Act acts[BRACHA87_FIG1_RETRY_MAX_ACTS];
+      unsigned int na;
+      unsigned int p;
+
+      arr[0] = inst[i];
+      bracha87RetryInit(&rt);
+      na = bracha87Fig1RetryStep(arr, 1, &rt, acts,
+                                 BRACHA87_FIG1_RETRY_MAX_ACTS);
+      if (!na && bracha87Fig1SentCount(arr, 1)) {
+        ++quiesced;
+        continue;
+      }
+      for (p = 0; p < na; ++p)
+        for (j = 0; j < n; ++j) {
+          if (acts[p].skip && BRACHA87_SKIP_TST(acts[p].skip, j))
+            continue;
+          waPush(acts[p].act == BRACHA87_INITIAL_ALL ? BRACHA87_INITIAL
+               : acts[p].act == BRACHA87_ECHO_ALL    ? BRACHA87_ECHO
+               :                                       BRACHA87_READY,
+                 acts[p].accepted,
+                 acts[p].answer && BRACHA87_SKIP_TST(acts[p].answer, j),
+                 (unsigned char)i, (unsigned char)j, acts[p].value);
+        }
+    }
+    if (quiesced == n)
+      break;
+    memcpy(WaCur, WaNxt, WaNNxt * sizeof (WaNxt[0]));
+    WaNCur = WaNNxt;
+    WaNNxt = 0;
+  }
+
+  if (sweepsOut)
+    *sweepsOut = (sweep > cap) ? cap : sweep;
+  for (i = 0; i < n; ++i)
+    free(inst[i]);
+  return (quiesced);
+}
+
+static void
+testFig1WantAnswer(
+  void
+){
+  struct bracha87Fig1 *b;
+  unsigned long sz;
+  unsigned char out[3];
+  unsigned int nout;
+  unsigned int gi;
+  unsigned int sawReady;
+  unsigned int sweeps;
+  unsigned int quiesced;
+  unsigned char val[VLEN];
+  const unsigned char *m;
+
+  printf("\n  Fig1 want / answer tests:\n");
+  memcpy(val, "WANT", VLEN);
+  sz = bracha87Fig1Sz(3, VLEN - 1);
+
+  /* Accessor guards, mirroring bracha87Fig1Skip's. */
+  check("Answer: NULL instance -> 0", bracha87Fig1Answer(0) == 0);
+  bracha87Fig1ProcessWants(0, 0);                /* NULL: no crash */
+
+  /*
+   * Pre-accept a want records nothing: there is no accept to announce,
+   * and an un-announced-to process is not in acFrom to be suppressed
+   * anyway.  Drive to RDSENT but NOT accepted first.
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);   /* t+1 -> Rule 5 */
+  check("Want: setup RDSENT, not accepted",
+        (b->flags & BRACHA87_F1_RDSENT)
+        && !(b->flags & BRACHA87_F1_ACCEPTED));
+  bracha87Fig1ProcessAccepted(b, 1);
+  bracha87Fig1ProcessWants(b, 1);
+  m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+  check("Want: pre-accept want does not arm (bit 1 still suppressed)",
+        BRACHA87_SKIP_TST(m, 1));
+  check("Answer: mask holds the announced accept",
+        BRACHA87_SKIP_TST(bracha87Fig1Answer(b), 1));
+  free(b);
+
+  /*
+   * Post-accept, the two setters are order-independent: one (ready, v)
+   * legitimately carries both facts (its sender accepted, and it lacks
+   * ours), and the caller may route them either way round.  Process 1
+   * takes accept-then-want, process 2 want-then-accept; both must end
+   * un-suppressed and both must stay in the answer mask.
+   */
+  b = (struct bracha87Fig1 *)calloc(1, sz);
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);
+  check("Want: setup ACCEPTED", (b->flags & BRACHA87_F1_ACCEPTED) != 0);
+  bracha87Fig1ProcessAccepted(b, 0);
+  bracha87Fig1ProcessAccepted(b, 1);
+  bracha87Fig1ProcessWants(b, 1);
+  bracha87Fig1ProcessWants(b, 2);
+  bracha87Fig1ProcessAccepted(b, 2);
+  m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+  check("Want: accept-then-want un-suppresses", !BRACHA87_SKIP_TST(m, 1));
+  check("Want: want-then-accept un-suppresses", !BRACHA87_SKIP_TST(m, 2));
+  check("Want: an un-wanted accept stays suppressed",
+        BRACHA87_SKIP_TST(m, 0));
+  m = bracha87Fig1Answer(b);
+  check("Answer: a wanter stays in the answer mask (0,1,2)",
+        BRACHA87_SKIP_TST(m, 0) && BRACHA87_SKIP_TST(m, 1)
+        && BRACHA87_SKIP_TST(m, 2));
+  check("Answer: an unannounced process is not answered",
+        !BRACHA87_SKIP_TST(m, 3));
+  bracha87Fig1ProcessWants(b, 99);         /* out of range: ignored */
+  check("Want: range guard leaves 3 suppressed-state untouched",
+        !BRACHA87_SKIP_TST(bracha87Fig1Skip(b, BRACHA87_READY_ALL), 3));
+
+  /*
+   * The retire gate is the same mask: full coverage retires READY, and a
+   * standing want keeps it alive with the wanter excluded.  Record the
+   * last accept so acFrom is all n and let one tick answer the wants
+   * already standing, so the gate arms below start from full coverage.
+   */
+  bracha87Fig1ProcessAccepted(b, 3);
+  bracha87Fig1Bpr(b, out);
+  bracha87Fig1ProcessWants(b, 3);
+  nout = bracha87Fig1Bpr(b, out);
+  sawReady = 0;
+  for (gi = 0; gi < nout; ++gi)
+    if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
+  check("Gate: a want keeps READY alive at all-n accepted", sawReady);
+  m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+  check("Gate: the emission's mask excludes the wanter only",
+        !BRACHA87_SKIP_TST(m, 3) && BRACHA87_SKIP_TST(m, 0)
+        && BRACHA87_SKIP_TST(m, 1) && BRACHA87_SKIP_TST(m, 2));
+  /* The egress consumed the want; the next tick retires. */
+  nout = bracha87Fig1Bpr(b, out);
+  sawReady = 0;
+  for (gi = 0; gi < nout; ++gi)
+    if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
+  check("Gate: the egress consumes the want and READY retires", !sawReady);
+  check("Gate: retired mask is full coverage",
+        bracha87Fig1Skip(b, BRACHA87_READY_ALL)[0] == 0x0F);
+  /* A later want re-opens it for exactly the tick that answers. */
+  bracha87Fig1ProcessWants(b, 2);
+  nout = bracha87Fig1Bpr(b, out);
+  sawReady = 0;
+  for (gi = 0; gi < nout; ++gi)
+    if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
+  check("Gate: a want after quiescence re-opens READY for one tick",
+        sawReady);
+  nout = bracha87Fig1Bpr(b, out);
+  sawReady = 0;
+  for (gi = 0; gi < nout; ++gi)
+    if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
+  check("Gate: and closes again", !sawReady);
+  free(b);
+
+  /*
+   * The strand, end to end.  n=4 t=1 with a LOSSLESS reordering that
+   * defers process 3's pre-accept readys from 1 and 2: the readys that
+   * carry it past 2t+1 are then retries, which announce, so process 3
+   * records all three accepts in the same drain it accepts in and its
+   * own announcement is suppressed before it is ever sent.  Before the
+   * want/answer pair this quiesced 1 of 4 and stayed there; the other
+   * three retried a READY at process 3 for good.
+   */
+  sweeps = 0;
+  quiesced = waSweeps(4, 1, (1u << 1) | (1u << 2), 3, 12, 400, &sweeps);
+  check("Strand: all 4 quiesce under the phase-offset schedule",
+        quiesced == 4);
+  check("Strand: and inside a small sweep bound", sweeps < 40);
+  printf("    strand schedule: %u of 4 quiescent in %u sweeps\n",
+         quiesced, sweeps);
+
+  /*
+   * Livelock regression.  Answering without a wire discriminator makes an
+   * answer byte-identical to a poke, so every answer re-arms a want and
+   * the honest all-to-all run never falls silent (measured: 0 of 4 at a
+   * 1000-sweep cap).  The annotation is what bounds it; the honest
+   * schedule must still quiesce in a handful of sweeps.
+   */
+  sweeps = 0;
+  quiesced = waSweeps(4, 1, 0, 0, 0, 1000, &sweeps);
+  check("Livelock: honest n=4 quiesces", quiesced == 4);
+  check("Livelock: honest n=4 within a small sweep bound", sweeps <= 8);
+  printf("    honest n=4: %u quiescent in %u sweeps\n", quiesced, sweeps);
+  sweeps = 0;
+  quiesced = waSweeps(7, 2, 0, 0, 0, 1000, &sweeps);
+  check("Livelock: honest n=7 quiesces", quiesced == 7);
+  check("Livelock: honest n=7 within a small sweep bound", sweeps <= 8);
+  printf("    honest n=7: %u quiescent in %u sweeps\n", quiesced, sweeps);
+}
+
+
 /*************************************************************************/
 /*  Main -- sequential test cases                                        */
 /*************************************************************************/
@@ -4877,6 +5260,7 @@ main(
   testFig1ValueSwitch();
   testFig1Bpr();
   testFig1SkipAccept();
+  testFig1WantAnswer();
   testFig1PostAcceptRecord();
   testBprLargeN();
 

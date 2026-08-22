@@ -49,8 +49,40 @@
  *
  * Scope: synchronous in-memory queue, every message delivered, no
  * loss; delivery order is deterministic unless -s is given.
- * Exercises only the Fig 1 state machine; does NOT exercise BPR
- * retry under loss.  See README.md for the full deployment story.
+ * Exercises the Fig 1 state machine and the BPR sweep that carries
+ * it to quiescence; does NOT exercise BPR retry under loss.  See
+ * README.md for the full deployment story.
+ *
+ * How a run ends -- the taxonomy, and which half this demo shows:
+ *
+ *   QUIESCENT   the proof stop, demonstrated here.  Every process
+ *               announces its own accept on the READY it is already
+ *               retrying (the ACCEPTED wire bit below) and confirms
+ *               the ones it has recorded (the ANSWER bit), so each
+ *               instance's suppress mask reaches all n, READY retires
+ *               with it, and a full bracha87Fig1RetryStep pass owes
+ *               nothing -- the 0 return.  The process leaves the
+ *               sweep rotation and the wire falls silent.  Both bits
+ *               are load-bearing: without the second, a process that
+ *               records an accept before announcing its own suppresses
+ *               the very (ready, v) the announcement rides on, and the
+ *               other end waits forever.
+ *   ABANDONED   the policy backstop (README.md "Abandonment").  The
+ *               honest runs never take it.  The `-b split` runs do:
+ *               a Byzantine initiator holds no Fig 1 state, so it
+ *               never announces an accept, the gate can never
+ *               close, and the correct processes retry a READY no
+ *               correct process consumes -- README.md's
+ *               Byzantine-silent scenario.  The sweep cap stands in
+ *               for the policy here.
+ *   sweep cap   a harness guard, not protocol: a bound on the
+ *               rotation, carrying no evidence of anything.
+ *
+ * Deliberately not exercised: loss itself.  A lost announcement no
+ * longer strands the process that missed it -- its next (ready, v)
+ * arrives here without the answer annotation, which is a want, and
+ * the next tick re-answers it -- but every re-answer in this demo is
+ * delivered, so nothing here shows the retry that fair loss needs.
  *
  * Usage:
  *   ./example_bracha87Fig1 [-v] [-s seed] [-o initiator] [-b split] n t value
@@ -68,12 +100,44 @@
 #define MAX_PROCESSES 16
 #define MAX_VLEN  64
 
+/*
+ * Harness guard on the sweep rotation.  A run whose instances can
+ * quiesce needs a handful of sweeps; this only bounds one that
+ * cannot (a `-b split` that stalls the cascade below the echo
+ * threshold).  It is not a protocol quantity.
+ */
+#define SWEEP_CAP 1000
+
+/*
+ * This demo's wire ACCEPTED bit.  bracha87.h fixes the Fig 1 type in
+ * bits 0-1 (BRACHA87_TYPE_MASK) and leaves the higher bits to the
+ * framer; bit 4 is where the ACS packer reserves the same annotation,
+ * so a bare-layer framer that may later carry ACS traffic picks it up
+ * unchanged.  Set on a retried READY whose instance has ACCEPTED
+ * (struct bracha87Fig1Act.accepted), read back into
+ * bracha87Fig1ProcessAccepted on ingress.
+ */
+#define WIRE_ACCEPTED 0x10
+
+/*
+ * This demo's wire ANSWER bit, bit 5 where the ACS packer reserves
+ * BKR94ACS_ANSWERED.  Decided per RECIPIENT, not per sender: set on a
+ * (ready, v) to process j iff bit j is in the instance's answer mask
+ * (bracha87Fig1Answer / struct bracha87Fig1Act.answer), meaning "I have
+ * recorded YOUR accept."  Its ABSENCE is what the receiver acts on --
+ * bracha87Fig1ProcessWants on ingress -- so a framer that drops this bit
+ * turns every answer into a request and the exchange never settles.
+ */
+#define WIRE_ANSWERED 0x20
+
 /*--------------------------------------------------------------------------*/
 /*  Message queue                                                           */
 /*--------------------------------------------------------------------------*/
 
 struct msg {
-  unsigned char type;     /* BRACHA87_INITIAL / ECHO / READY */
+  unsigned char type;     /* wire byte: BRACHA87_INITIAL / ECHO / READY
+                           * in bits 0-1, + WIRE_ACCEPTED / WIRE_ANSWERED
+                           * on a READY */
   unsigned char from;
   unsigned char to;
   unsigned char value[MAX_VLEN];
@@ -108,13 +172,16 @@ qFree(
 static void
 qPush(
   unsigned char type
+ ,unsigned char accepted  /* READY only: act's .accepted -> WIRE_ACCEPTED */
+ ,unsigned char answered  /* READY only: answer mask bit 'to' -> WIRE_ANSWERED */
  ,unsigned char from
  ,unsigned char to
  ,const unsigned char *value
 ){
   if (Qtail >= Qcap)
     return;
-  MsgQ[Qtail].type = type;
+  MsgQ[Qtail].type = (unsigned char)(type | (accepted ? WIRE_ACCEPTED : 0)
+                                          | (answered ? WIRE_ANSWERED : 0));
   MsgQ[Qtail].from = from;
   MsgQ[Qtail].to = to;
   memcpy(MsgQ[Qtail].value, value, Vlen);
@@ -224,6 +291,13 @@ main(
   int lemma4ok;
   unsigned char firstAccVal[MAX_VLEN];
   int haveFirstAcc;
+
+  unsigned char quiescent[MAX_PROCESSES];   /* left the sweep rotation */
+  unsigned int quiesceSweep[MAX_PROCESSES]; /* the sweep it left at */
+  unsigned int inRotation;
+  unsigned int quiesced;
+  unsigned int sweepCount;
+  int wireSilent;
 
   /*----------------------------------------------------------------------*/
   /*  Parse command line                                                  */
@@ -345,8 +419,8 @@ main(
     /* Byzantine initiator equivocates: honestVal to first split processes,
      * byzVal to the rest. */
     for (j = 0; j < n; ++j)
-      qPush(BRACHA87_INITIAL, (unsigned char)initiator, (unsigned char)j,
-            (j < byzSplit) ? honestVal : byzVal);
+      qPush(BRACHA87_INITIAL, 0, 0, (unsigned char)initiator,
+            (unsigned char)j, (j < byzSplit) ? honestVal : byzVal);
     if (verbose) {
       printf("initiator %u (BYZANTINE): sending ", initiator);
       printValue(honestVal);
@@ -358,7 +432,7 @@ main(
     /* Honest initiator: same value to all. */
     bracha87Fig1Initiator(fig1[initiator], honestVal);
     for (j = 0; j < n; ++j)
-      qPush(BRACHA87_INITIAL, (unsigned char)initiator,
+      qPush(BRACHA87_INITIAL, 0, 0, (unsigned char)initiator,
             (unsigned char)j, honestVal);
     if (verbose) {
       printf("initiator %u (honest): broadcasting ", initiator);
@@ -371,160 +445,236 @@ main(
     qShuffle(&shuffleSeed);
 
   /*----------------------------------------------------------------------*/
-  /*  Process message queue                                               */
+  /*  Drive to quiescence: drain ingress, tick the sweep, repeat.         */
+  /*                                                                      */
+  /*  In a real deployment the BPR retry is called once per tick, paced   */
+  /*  by the application's sleep(tickMs).  Looping until idle would       */
+  /*  flood the network -- Bracha BPR retries persist, so every sent      */
+  /*  Fig 1 has actions until its gates close; a tight loop empties the   */
+  /*  cursor as fast as the CPU runs and overruns kernel buffers.  One    */
+  /*  tick per process per pass of this loop is that rate.                */
+  /*                                                                      */
+  /*  Each process's instance space here is a single Fig 1, so ONE        */
+  /*  bracha87Fig1RetryStep call IS a full sweep of it: the 0 return is   */
+  /*  the completed traversal that found nothing owed, and                */
+  /*  bracha87Fig1SentCount separates that from the pre-broadcast idle    */
+  /*  the same 0 also reports.  A process meeting both is QUIESCENT and   */
+  /*  leaves the rotation.  It owes nothing to anyone -- READY, the one   */
+  /*  action with no local retire, retires only once every process has    */
+  /*  announced its accept AND holds this one's -- so no process left     */
+  /*  behind is waiting on it.                                            */
+  /*  Its ingress stays open: quiescence bounds what a process OWES,      */
+  /*  never what it may still be told, and every later delivery to an     */
+  /*  accepted instance is a dedup no-op.                                 */
   /*----------------------------------------------------------------------*/
 
-  while (Qhead < Qtail) {
-    struct msg *m;
-    struct bracha87Fig1 *f1;
-    unsigned char out[3];
-    unsigned int nout;
-    unsigned int k;
-    unsigned int oldTail;
-    const unsigned char *cv;
+  memset(quiescent, 0, sizeof (quiescent));
+  memset(quiesceSweep, 0, sizeof (quiesceSweep));
+  inRotation = 0;
+  for (i = 0; i < n; ++i)
+    if (fig1[i])
+      ++inRotation;
+  quiesced = 0;
+  sweepCount = 0;
+  wireSilent = 0;
 
-    m = &MsgQ[Qhead++];
+  for (;;) {
+    ++sweepCount;
 
-    /* Skip messages to the Byzantine initiator -- it has no state. */
-    if (byzSplit && m->to == initiator)
-      continue;
-    if (m->to >= n || m->from >= n)
-      continue;
+    while (Qhead < Qtail) {
+      struct msg *m;
+      struct bracha87Fig1 *f1;
+      unsigned char out[3];
+      unsigned char type;
+      unsigned int nout;
+      unsigned int k;
+      unsigned int oldTail;
+      const unsigned char *cv;
 
-    /*
-     * INITIAL sender obligation (bracha87Fig1Input header, pitfall
-     * 17): the bare Fig 1 entry does not know its designated
-     * initiator, so the CALLER must drop any INITIAL whose
-     * authenticated sender is not it -- a forged non-initiator INITIAL
-     * would ride the echo cascade to a false ACCEPT.  bkr94acs
-     * enforces this inside its Input entries; a bare-layer caller
-     * filters here.
-     */
-    if (m->type == BRACHA87_INITIAL && m->from != initiator)
-      continue;
+      m = &MsgQ[Qhead++];
 
-    f1 = fig1[m->to];
-    oldTail = Qtail;
-
-    if (verbose) {
-      printf("process %u: recv %s value=", (unsigned)m->to, typeName(m->type));
-      printValue(m->value);
-      printf(" from %u\n", (unsigned)m->from);
-    }
-
-    nout = bracha87Fig1Input(f1, m->type, m->from, m->value, out);
-
-    for (k = 0; k < nout; ++k) {
-      cv = bracha87Fig1Value(f1);
-      if (!cv)
+      /* Skip messages to the Byzantine initiator -- it has no state. */
+      if (byzSplit && m->to == initiator)
+        continue;
+      if (m->to >= n || m->from >= n)
         continue;
 
-      if (out[k] == BRACHA87_ACCEPT) {
-        accepted[m->to] = 1;
-        memcpy(acceptVal[m->to], cv, Vlen);
+      type = (unsigned char)(m->type & BRACHA87_TYPE_MASK);
+
+      /*
+       * INITIAL sender obligation (bracha87Fig1Input header, pitfall
+       * 17): the bare Fig 1 entry does not know its designated
+       * initiator, so the CALLER must drop any INITIAL whose
+       * authenticated sender is not it -- a forged non-initiator INITIAL
+       * would ride the echo cascade to a false ACCEPT.  bkr94acs
+       * enforces this inside its Input entries; a bare-layer caller
+       * filters here.
+       */
+      if (type == BRACHA87_INITIAL && m->from != initiator)
+        continue;
+
+      f1 = fig1[m->to];
+      oldTail = Qtail;
+
+      if (verbose) {
+        printf("process %u: recv %s value=", (unsigned)m->to, typeName(type));
+        printValue(m->value);
+        printf(" from %u\n", (unsigned)m->from);
+      }
+
+      nout = bracha87Fig1Input(f1, type, m->from, m->value, out);
+
+      /*
+       * ACCEPTED-annotation ingress: the bit on a retried READY says
+       * its sender has accepted this instance and consumes no further
+       * (ready, v) from us.  Route it AFTER the matching Input, so
+       * rdFrom is recorded first and acFrom stays a subset of it.
+       */
+      if (type == BRACHA87_READY && (m->type & WIRE_ACCEPTED))
+        bracha87Fig1ProcessAccepted(f1, m->from);
+
+      /*
+       * ANSWER-annotation ingress, the other half of the same retire: a
+       * (ready, v) WITHOUT the bit is its sender saying it has not
+       * recorded our accept -- it would have suppressed us otherwise --
+       * so un-suppress it for the next tick, which answers with the bit
+       * set.  Never route one that HAS the bit: an answer that armed a
+       * want would ping-pong, and the two would never fall silent.
+       */
+      if (type == BRACHA87_READY && !(m->type & WIRE_ANSWERED)) {
+        bracha87Fig1ProcessWants(f1, m->from);
+        /*
+         * Leaving the rotation is PROVISIONAL, and this is the whole
+         * reason ingress stays open: a want is evidence that something
+         * IS still owed, and a process that has stopped ticking can
+         * never answer it.  Re-enter.  Under loss this is the path that
+         * makes quiescence reachable rather than merely hoped for -- a
+         * lost answer is re-requested by the next poke, and the poke is
+         * worthless if nobody is left to hear it.
+         */
+        if (quiescent[m->to]) {
+          quiescent[m->to] = 0;
+          --quiesced;
+        }
+      }
+
+      for (k = 0; k < nout; ++k) {
+        cv = bracha87Fig1Value(f1);
+        if (!cv)
+          continue;
+
+        if (out[k] == BRACHA87_ACCEPT) {
+          accepted[m->to] = 1;
+          memcpy(acceptVal[m->to], cv, Vlen);
+          /* The instance is not told its own index, so the caller
+           * supplies it for the self-accept the all-n gate counts. */
+          bracha87Fig1ProcessAccepted(f1, m->to);
+          if (verbose) {
+            printf("process %u: ACCEPT value=", (unsigned)m->to);
+            printValue(cv);
+            printf("\n");
+          }
+          continue;
+        }
+
+        /* ECHO_ALL or READY_ALL: relay the echoed value to all processes,
+         * minus the BPR per-process suppress set (processes that have already
+         * echoed/readied/accepted no longer consume this action). */
         if (verbose) {
-          printf("process %u: ACCEPT value=", (unsigned)m->to);
+          printf("process %u: -> %s value=", (unsigned)m->to,
+                 (out[k] == BRACHA87_ECHO_ALL) ? "ECHO_ALL" : "READY_ALL");
           printValue(cv);
           printf("\n");
         }
-        continue;
-      }
+        {
+          const unsigned char *skip;
+          const unsigned char *answer;
 
-      /* ECHO_ALL or READY_ALL: relay the echoed value to all processes,
-       * minus the BPR per-process suppress set (processes that have already
-       * echoed/readied/accepted no longer consume this action). */
-      if (verbose) {
-        printf("process %u: -> %s value=", (unsigned)m->to,
-               (out[k] == BRACHA87_ECHO_ALL) ? "ECHO_ALL" : "READY_ALL");
-        printValue(cv);
-        printf("\n");
-      }
-      {
-        const unsigned char *skip;
-
-        skip = bracha87Fig1Skip(f1, out[k]);
-        for (j = 0; j < n; ++j) {
-          if (skip && BRACHA87_SKIP_TST(skip, j))
-            continue;
-          qPush((out[k] == BRACHA87_ECHO_ALL)
-                  ? BRACHA87_ECHO : BRACHA87_READY,
-                m->to, (unsigned char)j, cv);
+          skip = bracha87Fig1Skip(f1, out[k]);
+          answer = (out[k] == BRACHA87_READY_ALL)
+                   ? bracha87Fig1Answer(f1) : 0;
+          for (j = 0; j < n; ++j) {
+            if (skip && BRACHA87_SKIP_TST(skip, j))
+              continue;
+            qPush((out[k] == BRACHA87_ECHO_ALL)
+                    ? BRACHA87_ECHO : BRACHA87_READY,
+                  0,
+                  answer && BRACHA87_SKIP_TST(answer, j),
+                  m->to, (unsigned char)j, cv);
+          }
         }
       }
+
+      if (shuffleSeed && Qtail > oldTail)
+        qShuffle(&shuffleSeed);
     }
 
-    if (shuffleSeed && Qtail > oldTail)
-      qShuffle(&shuffleSeed);
-  }
+    /* The queue is drained (Qhead == Qtail): reset the indices so the
+     * append-only store's capacity bounds one sweep's traffic, not the
+     * whole run's -- a silent qPush drop would fake the silence
+     * quiescence is read from. */
+    Qhead = Qtail = 0;
 
-  /*------------------------------------------------------------------*/
-  /*  Retry tick                                                       */
-  /*                                                                  */
-  /*  In a real deployment, the BPR retry is called once per tick,     */
-  /*  paced by the application's sleep(tickMs).  Looping until idle   */
-  /*  would flood the network -- Bracha BPR retries persist, so       */
-  /*  every sent Fig 1 always has actions; a tight loop empties  */
-  /*  the cursor as fast as the CPU runs and overruns kernel buffers. */
-  /*  The call is shown here as a representative single tick.         */
-  /*------------------------------------------------------------------*/
+    for (i = 0; i < n; ++i) {
+      struct bracha87Fig1 *processArr[1];
+      struct bracha87Retry retry;
+      struct bracha87Fig1Act pacts[BRACHA87_FIG1_RETRY_MAX_ACTS];
+      unsigned int n_pacts;
+      unsigned int p;
 
-  for (i = 0; i < n; ++i) {
-    struct bracha87Fig1 *processArr[1];
-    struct bracha87Retry retry;
-    struct bracha87Fig1Act pacts[BRACHA87_FIG1_RETRY_MAX_ACTS];
-    unsigned int n_pacts;
-    unsigned int p;
+      if (!fig1[i] || quiescent[i])
+        continue;
 
-    if (byzSplit && i == initiator) continue;
-    if (!fig1[i]) continue;
-
-    processArr[0] = fig1[i];
-    bracha87RetryInit(&retry);
-    n_pacts = bracha87Fig1RetryStep(processArr, 1, &retry, pacts,
-                                   BRACHA87_FIG1_RETRY_MAX_ACTS);
-    for (p = 0; p < n_pacts; ++p)
-      for (j = 0; j < n; ++j) {
-        if (pacts[p].skip && BRACHA87_SKIP_TST(pacts[p].skip, j))
-          continue;
-        qPush(pacts[p].act == BRACHA87_INITIAL_ALL ? BRACHA87_INITIAL
-            : pacts[p].act == BRACHA87_ECHO_ALL    ? BRACHA87_ECHO
-            :                                        BRACHA87_READY,
-              (unsigned char)i, (unsigned char)j, pacts[p].value);
-      }
-  }
-
-  /*----------------------------------------------------------------------*/
-  /*  Drain the post-retry queue.  Receivers dedup at Fig1Input,          */
-  /*  so under perfect delivery these retries produce no new state -- the */
-  /*  drain mirrors what a deployment loop does on every tick.            */
-  /*----------------------------------------------------------------------*/
-
-  while (Qhead < Qtail) {
-    struct msg *m;
-    struct bracha87Fig1 *f1;
-    unsigned char out[3];
-    unsigned int nout;
-    unsigned int k;
-    const unsigned char *cv;
-
-    m = &MsgQ[Qhead++];
-    if (byzSplit && m->to == initiator) continue;
-    if (m->to >= n || m->from >= n) continue;
-    /* Same caller-side INITIAL filter as the main loop (pitfall 17). */
-    if (m->type == BRACHA87_INITIAL && m->from != initiator) continue;
-    f1 = fig1[m->to];
-    nout = bracha87Fig1Input(f1, m->type, m->from, m->value, out);
-    for (k = 0; k < nout; ++k) {
-      cv = bracha87Fig1Value(f1);
-      if (!cv) continue;
-      if (out[k] == BRACHA87_ACCEPT) {
-        /* already accepted; dedup at Fig1Input prevents re-trigger */
+      processArr[0] = fig1[i];
+      bracha87RetryInit(&retry);
+      n_pacts = bracha87Fig1RetryStep(processArr, 1, &retry, pacts,
+                                     BRACHA87_FIG1_RETRY_MAX_ACTS);
+      if (!n_pacts && bracha87Fig1SentCount(processArr, 1)) {
+        quiescent[i] = 1;
+        quiesceSweep[i] = sweepCount;
+        ++quiesced;
+        if (verbose)
+          printf("process %u: QUIESCENT (sweep %u)\n", i, sweepCount);
         continue;
       }
-      /* ECHO_ALL / READY_ALL retries from this receiver do not propagate
-       * further in the demo -- they are equivalent to the ones already in
-       * flight.  Under loss this is where new echoes/readys would
-       * help processes below threshold. */
+      for (p = 0; p < n_pacts; ++p)
+        for (j = 0; j < n; ++j) {
+          if (pacts[p].skip && BRACHA87_SKIP_TST(pacts[p].skip, j))
+            continue;
+          qPush(pacts[p].act == BRACHA87_INITIAL_ALL ? BRACHA87_INITIAL
+              : pacts[p].act == BRACHA87_ECHO_ALL    ? BRACHA87_ECHO
+              :                                        BRACHA87_READY,
+                pacts[p].accepted,
+                pacts[p].answer
+                  && BRACHA87_SKIP_TST(pacts[p].answer, j),
+                (unsigned char)i, (unsigned char)j,
+                pacts[p].value);
+        }
+    }
+
+    if (quiesced == inRotation) {
+      /* Nothing was output by the sweep that emptied the rotation, so
+       * the wire is silent at the exit -- the observable half of the
+       * claim the 0 returns make. */
+      wireSilent = (Qtail == Qhead);
+      break;
+    }
+    if (sweepCount >= SWEEP_CAP) {
+      /*
+       * The cap stands in for the abandonment policy a deployment
+       * would run here.  A Byzantine initiator holds no Fig 1 state,
+       * so it never announces an accept and the all-n gate can never
+       * close -- README.md's Byzantine-silent scenario, where the
+       * retry tail is correct and only abandonment ends it.  With an
+       * honest initiator every process announces, so reaching the cap
+       * is a real failure of the run.
+       */
+      fprintf(stderr,
+              "sweep cap (%u) reached: %u of %u processes quiescent\n",
+              (unsigned)SWEEP_CAP, quiesced, inRotation);
+      if (!byzSplit)
+        exitCode = 1;
+      break;
     }
   }
 
@@ -574,9 +724,13 @@ main(
     } else if (accepted[i]) {
       printf("Process %u: accepted ", i);
       printValue(acceptVal[i]);
-      printf("\n");
+      if (quiescent[i])
+        printf(", quiescent at sweep %u\n", quiesceSweep[i]);
+      else
+        printf(", not quiescent (sweep cap)\n");
     } else {
-      printf("Process %u: did not accept\n", i);
+      printf("Process %u: did not accept%s\n", i,
+             quiescent[i] ? ", quiescent" : ", not quiescent (sweep cap)");
     }
   }
   printf("Accept count: %u of %u correct processes\n",
@@ -587,6 +741,9 @@ main(
   if (!byzSplit)
     printf("Lemma 4 (correct initiator -> all accept): %s\n",
            lemma4ok ? "ok" : "FAIL");
+  printf("Ending: %u of %u processes QUIESCENT in %u sweeps%s\n",
+         quiesced, inRotation, sweepCount,
+         wireSilent ? ", wire silent" : "");
 
   if (!lemma2ok || !lemma4ok)
     exitCode = 1;

@@ -128,6 +128,19 @@ Key properties from the paper:
   Termination: probability of not terminating is
   lim_{r->inf} (1 - p)^r = 0, where p > 2^{-(n-1)}.
 
+Protocol halting -- the paper's entire treatment (Section 4, page
+138, verbatim): "For notational convenience, the protocol in Fig. 4
+does not terminate once a decision is made. However, this can be
+easily accomplished."  One clause, no construction, no proof, never
+revisited.  Every other "termination" in the paper is DECISION
+termination (the probabilistic property above); Figure 1's broadcast
+has no halting discussion at all.  When a process may stop SENDING
+is therefore outside the paper's theorems entirely: the model's
+reliable channels make single sends suffice, so the paper never
+faces message retirement, and any halting mechanism built over
+fair loss (retry retire gates, quiescence) is engineering below
+the theorems, carrying no paper cover and owing its own proof.
+
 Lemma/Theorem to test mapping:
 
   Lemma 1   Composed simulation: inline check on every honest rdSent instance
