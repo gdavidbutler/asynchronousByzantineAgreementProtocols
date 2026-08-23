@@ -645,11 +645,18 @@ bkr94acsRetry(
  *   the cursor length -- bkr94acsSentFig1Count grows as the BAs
  *     advance, so a budget priced in calls shrinks in real terms
  *     over a run while one priced in passes does not;
- *   the caller's own abandonment budget -- waiting is not progress,
+ *   the caller's own abandonment gate -- waiting is not progress,
  *     so a patience clock and a barren clock advance on the same
  *     boundaries, and patience that does not expire strictly
  *     before the abandon gate fires the decision into a caller that
- *     is already leaving.
+ *     is already leaving.  Size that gate above the patience and
+ *     the FANOUT's ordering is structural: its window opens on a
+ *     BA output of 1, an act the caller counts as progress, so the
+ *     barren count stands at zero on the boundary that first
+ *     charges the patience.  The ROUND TURN's window opens with no
+ *     acts at all, so there the ordering stays a caller obligation.
+ *     BPR.md (The Abandon Boundary) carries the sizing: one knob,
+ *     the patience, with the gate derived from it.
  */
 #define BKR94ACS_DUTY_HELD      0
 #define BKR94ACS_DUTY_TOLERANCE 1
@@ -734,14 +741,14 @@ bkr94acsFanout(
  * per process after banking new evidence.  Cascaded validation can
  * make several successive rounds turnable at once; each turn is
  * its own call, and nothing here re-arms the caller's clock when
- * one fires, so a paced caller spends ONE budget crossing a whole
+ * one fires, so a paced caller spends ONE patience crossing a whole
  * cascade rather than one per round.  Re-arming per round is the
  * caller's to add and is not advised: it prices a catch-up the
  * cohort has already earned.
  * Scope patience to UNDECIDED BAs (bkr94acsBaDecision == 0xFF):
  * post-decide continuation rounds carry the pinned value and their
  * sample no longer chooses anything, while their turn feeds the
- * NEXT process's round -- holding them to the budget convoys the
+ * NEXT process's round -- holding them to the patience convoys the
  * cohort, since one process's stall holds everyone else at n-t.
  * The bundled example's sweep loop is the reference discipline.
  */

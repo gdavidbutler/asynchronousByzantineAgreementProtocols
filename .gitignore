@@ -65,3 +65,7 @@ test_bracha87
 test_bracha87_blackbox
 test_bkr94acs
 test_bkr94acs_blackbox
+test_schedules
+
+# mutants.sh's scratch trees, builds, and logs; removed by `make clean`
+mutantWork/

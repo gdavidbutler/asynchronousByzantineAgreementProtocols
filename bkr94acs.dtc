@@ -206,12 +206,16 @@ no,"Q(j) = 1",
 #
 # bkr94acsRetry walks per-process A-Cast Fig1 instances and
 # decides whether to output retries based on the local BA
-# decision state ({ undecided, decided 0, decided 1 }):
+# decision state ({ undecided, decided 0, decided 1,
+# exhausted }):
 #   - undecided  -> retry  (Q(j)=1 may still be learned by
 #                          other honest processes; their Fig1(j)
 #                          needs our echoes / readys)
 #   - decided 0  -> skip  (j excluded from SubSet; Step 2's
 #                          fanout already conveyed our enter)
+#   - exhausted  -> retry  (no decision was made; other
+#                          processes may still benefit from
+#                          earlier-round echoes / readys)
 #   - decided 1  -> retry  (Bracha post-decide continuation:
 #                          processes that have not yet observed
 #                          Fig1 ACCEPT for j still need our
@@ -220,7 +224,7 @@ no,"Q(j) = 1",
 #                          via Step 2, violating cross-process
 #                          agreement on SubSet)
 #
-# Three-rule single-input single-output guard with no
+# Four-arm single-input single-output guard with no
 # interaction with the Rules 1-3 dispatch and no test ordering
 # to optimize; captured in C as a switch over the BA decision
 # byte rather than a sub-table (same call as the Fig1 initiator

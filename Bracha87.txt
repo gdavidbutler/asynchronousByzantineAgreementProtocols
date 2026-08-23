@@ -21,6 +21,10 @@ On asynchrony (same section):
   bounds on message delays or relative speeds of processes. In such a
   system, it is impossible to detect missing messages; there is no way
   to distinguish between a "slow" message and a message not sent.
+  Protocols for asynchronous systems can also be viewed as a sequence
+  of rounds. In each round, every process sends messages to all
+  others, waits for only n - t messages of that round, and changes
+  state.
 
 Figure 1 -- The broadcast primitive. Pure mechanics.
 

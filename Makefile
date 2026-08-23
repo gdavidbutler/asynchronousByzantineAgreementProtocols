@@ -73,17 +73,42 @@ test_bracha87_blackbox: test/test_bracha87_blackbox.c bracha87.o bracha87.h
 test_bkr94acs_blackbox: test/test_bkr94acs_blackbox.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) -I. -o $@ test/test_bkr94acs_blackbox.c bkr94acs.o bracha87.o
 
-check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox
+test_schedules: test/test_schedules.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
+	$(CC) $(CFLAGS) -I. -o $@ test/test_schedules.c bkr94acs.o bracha87.o
+
+check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules
 	./test_bracha87
 	./test_bkr94acs
 	./test_predicates
 	./test_bracha87_blackbox
 	./test_bkr94acs_blackbox
+	./test_schedules smoke
+
+# The schedule explorer is a DELIBERATE act, like `rules` above, and for
+# the same reason: cost.  `check` runs only its measured-subsecond smoke
+# subset; the configs that walk a whole state graph run minutes and are
+# asked for by name.  Their bounds are printed on every run -- exhaustive
+# means exhaustive WITHIN those bounds and nothing more.
+schedules: test_schedules
+	./test_schedules all
+
+# A suite that passes proves something only if it would FAIL on a
+# machine that is wrong.  This applies single anchored defects to
+# scratch copies of bracha87.c and bkr94acs.c and asks whether a NAMED
+# check in the battery goes red -- or records, with the argument, that
+# the defect is invisible to the battery's power.  It builds and runs a
+# whole battery per defect, so it is a deliberate act like `rules` and
+# `schedules` above, run by name, never from `check`.  It writes only
+# under mutantWork and leaves the sources byte-identical, which it
+# checksums and prints on both sides of the run.
+mutants: test/mutants.sh
+	sh test/mutants.sh
 
 clean:
 	rm -f bracha87.o bkr94acs.o
 	rm -f example_bracha87Fig1 example_bkr94acs
-	rm -f test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox
+	rm -f test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules
+	rm -rf mutantWork
 
 # the .psu are dtc's intermediate output, left behind by `make rules`;
 # nothing reads them afterward, and removing them regenerates nothing

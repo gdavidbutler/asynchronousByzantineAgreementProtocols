@@ -789,7 +789,14 @@ runWithRetry(
 /*  from the turn's acts), zero banks without turning (Section G,      */
 /*  which must read a duty class over a round the caller has not yet   */
 /*  consumed).                                                        */
+/*                                                                    */
+/*  FeedLastActs holds the act count of the LAST bkr94acsBaInput this  */
+/*  helper made -- the delivery that carried the round to ACCEPT.      */
+/*  Section N2 reads it to witness that the delivery which moves       */
+/*  TurnDuty HELD -> TOLERANCE returns no acts of its own.             */
 /* ------------------------------------------------------------------ */
+
+static unsigned int FeedLastActs = 0;
 
 static unsigned int
 feedBAAccept(
@@ -809,6 +816,7 @@ feedBAAccept(
   n = bkr94acsBaInput(a, process, round, initiator,
                              BRACHA87_INITIAL, initiator, value, out);
   CHECK(n <= 2, "feedBAAccept: BA input outputs at most 2 acts");
+  FeedLastActs = n;
   total += n;
   if (turned)
     while ((n = bkr94acsTurn(a, process, 1, out)) > 0) {
@@ -826,6 +834,7 @@ feedBAAccept(
     n = bkr94acsBaInput(a, process, round, initiator,
                                BRACHA87_READY, sender, value, out);
     CHECK(n <= 2, "feedBAAccept: BA input outputs at most 2 acts");
+    FeedLastActs = n;
     total += n;
     if (turned)
       while ((n = bkr94acsTurn(a, process, 1, out)) > 0) {
@@ -1039,6 +1048,208 @@ spTick(
     sp->progress = 0;
   }
   return (done);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Section F4 driver -- the two sweep clocks running side by side.   */
+/*                                                                    */
+/*  F1/F2/F3 pace the fanout alone.  This driver runs the SAME        */
+/*  delayed-A-Cast schedule with the barren-sweep policy above        */
+/*  running beside it, so the patience the fanout charges and the     */
+/*  barren count the abandon gate reads advance on the same           */
+/*  boundary -- the premise the ordering rests on.                    */
+/*                                                                    */
+/*  Per tick, per process: drain, retry, drain the turns at zero      */
+/*  patience (only the FANOUT's pacing is the variable, the same      */
+/*  isolation Section F takes), CLOSE THE SWEEP, then read the duty.  */
+/*  Closing after the turns is what banks a turn's decision in the    */
+/*  sweep it happened in, which is the granularity the ordering is    */
+/*  stated at.                                                        */
+/*                                                                    */
+/*    patience      G, in completed sweeps; the fanout fires once the */
+/*                  charged count exceeds it                          */
+/*    abandonS      S, in consecutive barren sweeps                   */
+/*    releaseSweep  the delayed A-Cast is submitted once process 0    */
+/*                  has charged this many patience sweeps; 0 = never  */
+/*                                                                    */
+/*  Returns 0 when all four processes completed, -1 otherwise (a      */
+/*  process reached S consecutive barren sweeps, or the tick cap).    */
+/* ------------------------------------------------------------------ */
+
+static int
+fbDrive(
+  unsigned int patience
+ ,unsigned int abandonS
+ ,unsigned int releaseSweep
+ ,unsigned int maxTicks
+ ,unsigned int *patienceMaxOut   /* out: highest patience charged */
+ ,unsigned int *barrenMaxOut     /* out: highest barren count reached */
+ ,unsigned int *includedOut      /* out: delayed process in the subset? */
+ ,unsigned int *fanoutActsOut    /* out: total fanout acts */
+ ,unsigned int *abandonedOut     /* out: 1 + the first process to abandon */
+){
+  struct bkr94acs *processes[4];
+  struct processObs obs[4];
+  struct bracha87Retry cursors[4];
+  struct sweepPolicy pol[4];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+  struct bkr94acsAct acastOut[1];
+  struct wire w;
+  unsigned char acast[4];
+  unsigned char subset[4];
+  unsigned char prevDuty[4];
+  unsigned char duty;
+  unsigned int spent[4];
+  unsigned int opening[4];
+  unsigned int delayed = 3;
+  unsigned int tick, p, b, j, n, sz;
+  unsigned int retryActs, sweepDone, decidedTick, released;
+  int done;
+
+  *patienceMaxOut = 0;
+  *barrenMaxOut = 0;
+  *includedOut = 0;
+  *fanoutActsOut = 0;
+  *abandonedOut = 0;
+  if (allocCluster(processes, 4, 1, 0, 8))
+    return (-1);
+  qReset();
+  for (p = 0; p < 4; ++p) {
+    obsInit(&obs[p]);
+    bracha87RetryInit(&cursors[p]);
+    memset(&pol[p], 0, sizeof (pol[p]));
+    spent[p] = 0;
+    opening[p] = 0;
+    prevDuty[p] = bkr94acsFanoutDuty(processes[p]);
+    acast[p] = (unsigned char)(0xB0 + p);
+  }
+  /* The same schedule F1/F2 run: 0-2 A-Cast now, 3 is the laggard
+   * whose OUTBOUND A-Cast is held.  The process itself participates. */
+  for (p = 0; p < 3; ++p) {
+    n = bkr94acsAcast(processes[p], &acast[p], acastOut);
+    observeAndOutput(&obs[p], (unsigned char)p, 4, acastOut, n, 1, 0, -1);
+  }
+
+  released = 0;
+  done = 0;
+  for (tick = 0; tick < maxTicks && !done && !*abandonedOut; ++tick) {
+    while (qSize() > 0) {
+      qPopHead(&w);
+      if (w.cls == BKR94ACS_CLS_ACAST) {
+        n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                  w.from, w.value, out);
+        if (w.accepted)
+          bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
+        if (w.type == BRACHA87_READY && !w.answered)
+          bkr94acsAcastWants(processes[w.to], w.process, w.from);
+      } else {
+        n = bkr94acsBaInput(processes[w.to], w.process, w.round,
+                                   w.initiator, w.type, w.from,
+                                   w.baValue, out);
+        if (w.accepted)
+          bkr94acsBaAccepted(processes[w.to], w.process, w.round,
+                                    w.initiator, w.from);
+        if (w.type == BRACHA87_READY && !w.answered)
+          bkr94acsBaWants(processes[w.to], w.process, w.round,
+                                 w.initiator, w.from);
+      }
+      if (n)
+        ++pol[w.to].progress;
+      observeAndOutput(&obs[w.to], w.to, 4, out, n, 1, 0, -1);
+    }
+
+    for (p = 0; p < 4; ++p) {
+      retryActs = bkr94acsRetry(processes[p], &cursors[p], out);
+      observeAndOutput(&obs[p], (unsigned char)p, 4, out, retryActs, 1, 0,
+                       -1);
+
+      decidedTick = 0;
+      for (b = 0; b < 4; ++b)
+        while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out))
+               > 0) {
+          for (j = 0; j < n; ++j)
+            if (out[j].act == BKR94ACS_ACT_BA_DECIDED) {
+              ++decidedTick;
+              ++pol[p].progress;
+            } else if (out[j].act == BKR94ACS_ACT_COMPLETE)
+              ++pol[p].progress;
+          observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
+        }
+
+      sweepDone = spTick(&pol[p], retryActs,
+                         bkr94acsSentFig1Count(processes[p]), 0);
+      if (pol[p].barren > *barrenMaxOut)
+        *barrenMaxOut = pol[p].barren;
+
+      duty = bkr94acsFanoutDuty(processes[p]);
+      if (prevDuty[p] == BKR94ACS_DUTY_HELD
+       && duty != BKR94ACS_DUTY_HELD) {
+        /* The window's opening carries an act.  The only way out of
+         * HELD is the n-t'th BA output of 1, and the decision byte is
+         * recorded in the same straight-line block that outputs the
+         * act -- so the caller was handed a progress event in the
+         * very tick the duty moved. */
+        CHECK(decidedTick > 0,
+              "F4: the fanout's window opens on a BA_DECIDED act");
+        opening[p] = 1;
+      }
+      prevDuty[p] = duty;
+      if (opening[p] && sweepDone) {
+        /* Stated at the boundary, not at the instant: the barren
+         * count resets at the COMPLETION of the opening sweep. */
+        CHECK(pol[p].barren == 0, "F4: the opening sweep is not barren");
+        opening[p] = 0;
+      }
+
+      if (duty == BKR94ACS_DUTY_TOLERANCE) {
+        if (sweepDone) {
+          ++spent[p];
+          if (spent[p] > *patienceMaxOut)
+            *patienceMaxOut = spent[p];
+          /* Both clocks take this boundary; the patience takes every
+           * one of them and the barren count only the ones without
+           * progress, and the opening sweep had progress -- so the
+           * barren count trails the patience for as long as the
+           * window stands. */
+          CHECK(pol[p].barren < spent[p],
+                "F4: the barren count trails the patience at every"
+                " sweep boundary");
+        }
+        if (spent[p] > patience) {
+          n = bkr94acsFanout(processes[p], out);
+          *fanoutActsOut += n;
+          observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
+        }
+      } else
+        spent[p] = 0;
+
+      /* Reaching COMPLETE first is the success flavor of the same
+       * question, so only a process still running can abandon. */
+      if (!processes[p]->complete && pol[p].barren >= abandonS)
+        *abandonedOut = p + 1;
+    }
+
+    if (!released && releaseSweep && spent[0] >= releaseSweep) {
+      released = 1;
+      n = bkr94acsAcast(processes[delayed], &acast[delayed], acastOut);
+      observeAndOutput(&obs[delayed], (unsigned char)delayed, 4, acastOut,
+                       n, 1, 0, -1);
+    }
+
+    done = 1;
+    for (p = 0; p < 4; ++p)
+      if (!processes[p]->complete)
+        done = 0;
+  }
+
+  if (done) {
+    sz = bkr94acsSubset(processes[0], subset);
+    for (j = 0; j < sz; ++j)
+      if (subset[j] == (unsigned char)delayed)
+        *includedOut = 1;
+  }
+  freeCluster(processes, 4);
+  return (done ? 0 : -1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -3218,7 +3429,9 @@ main(
   /*  and patience (F2) includes it -- the pair is the WAN            */
   /*  starvation seed and its remedy.  F3 is the liveness half: a     */
   /*  dead slot holds TOLERANCE forever, patience bounds the tax,   */
-  /*  and firing after it completes the instance.                     */
+  /*  and firing after it completes the instance.  F4 adds the       */
+  /*  second sweep clock beside the first: the barren count an       */
+  /*  abandonment policy reads, and the sizing that orders the two.  */
   /* ---------------------------------------------------------------- */
 
   /* ---------------------------------------------------------------- */
@@ -3581,6 +3794,70 @@ main(
       }
       freeCluster(processes, 4);
     }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("F4: the fanout's patience elapses before the abandon gate");
+  /* ---------------------------------------------------------------- */
+  /*  Grounding: bkr94acs.h's two-sizings block -- "a patience clock  */
+  /*  and a barren clock advance on the same boundaries, and patience */
+  /*  that does not expire strictly before the abandon gate fires the */
+  /*  decision into a caller that is already leaving ... Size that    */
+  /*  gate above the patience and the FANOUT's ordering is            */
+  /*  structural: its window opens on a BA output of 1, an act the    */
+  /*  caller counts as progress" -- and BPR.md's Budget discipline    */
+  /*  and Abandon Boundary.                                           */
+  /*                                                                  */
+  /*  fbDrive runs the harness's barren-sweep policy beside the       */
+  /*  fanout's patience on F1's schedule, charging both at the same   */
+  /*  boundary, and checks the two structural halves there: the       */
+  /*  window opens on a BA_DECIDED act, and the barren count trails   */
+  /*  the patience at every boundary the window stands.  What is left */
+  /*  for this block is the SIZING -- the paired endings.             */
+  /* ---------------------------------------------------------------- */
+  {
+    unsigned int pMax[2], bMax[2], incl[2], fan[2], aband[2];
+    int rc[2];
+
+    /* The derived sizing: a patience of 12 passes with the gate at
+     * twice that, and the delayed A-Cast released inside the window.
+     * The patience is never spent out here -- the recovery it was
+     * bought for arrives first -- and the gate stays far from
+     * firing throughout. */
+    rc[0] = fbDrive(12, 24, 6, 200000,
+                    &pMax[0], &bMax[0], &incl[0], &fan[0], &aband[0]);
+
+    /* The control: the same schedule and the same patience with the
+     * gate sized AT OR BELOW it.  Nothing about the machine changed;
+     * the caller's own two numbers did, and the run ends the other
+     * way. */
+    rc[1] = fbDrive(12, 3, 6, 200000,
+                    &pMax[1], &bMax[1], &incl[1], &fan[1], &aband[1]);
+
+    CHECK(rc[0] == 0,
+          "F4: at abandon = 2 x patience every process completes");
+    CHECK(aband[0] == 0, "F4: and none of them abandons");
+    CHECK(incl[0] == 1,
+          "F4: the delayed honest process keeps its participation");
+    CHECK(fan[0] == 0, "F4: no enter-0 -- the recovery landed first");
+    CHECK(bMax[0] < pMax[0],
+          "F4: the barren count never caught the patience");
+    CHECK(bMax[0] < 24, "F4: and never came near the derived gate");
+
+    CHECK(rc[1] != 0,
+          "F4 control: at abandon <= patience the run does not complete");
+    CHECK(aband[1] != 0, "F4 control: a process reached S barren sweeps");
+    CHECK(bMax[1] >= 3, "F4 control: the gate fired at its own S");
+    CHECK(pMax[1] <= 12,
+          "F4 control: with the patience still unelapsed");
+    CHECK(fan[1] == 0, "F4 control: so the fanout never fired");
+    CHECK(incl[1] == 0, "F4 control: no subset was ever agreed there");
+
+    printf("      F4: derived rc %d patience %u barren %u included %u"
+           " fanout %u abandoned %u; control rc %d patience %u barren %u"
+           " included %u fanout %u abandoned %u\n",
+           rc[0], pMax[0], bMax[0], incl[0], fan[0], aband[0],
+           rc[1], pMax[1], bMax[1], incl[1], fan[1], aband[1]);
   }
 
   /* ---------------------------------------------------------------- */
@@ -5282,6 +5559,16 @@ main(
     feedBAAccept(a, 0, 0, 2, 1, out, 0, &dummy);
     CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_TOLERANCE,
           "N2: the n-t'th validated message moves it HELD -> TOLERANCE");
+    /* And that delivery returned NOTHING.  The header states the
+     * arrival path only banks -- an accept is stored, validated and
+     * cascaded, and BA_DECIDED / COMPLETE / BA_EXHAUSTED emerge only
+     * from a turn -- so the turn's patience window opens with no act
+     * for a caller to count.  That is why the turn's ordering against
+     * the abandon gate is caller discipline and not structure: unlike
+     * the fanout's, this window's opening is invisible in the act
+     * stream a progress counter reads. */
+    CHECK(FeedLastActs == 0,
+          "N2: the delivery opening the turn's window returns 0 acts");
     feedBAAccept(a, 0, 0, 3, 1, out, 0, &dummy);
     CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_MET,
           "N2: the n'th moves it TOLERANCE -> MET");
