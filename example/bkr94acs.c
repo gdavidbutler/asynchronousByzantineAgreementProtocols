@@ -61,10 +61,41 @@
  *   (from project root) make example_bkr94acs
  *
  * Usage:
- *   ./example_bkr94acs [-v] [-s seed] [-d process] [-g budget] n t acast0 ...
+ *   ./example_bkr94acs [-v] [-s seed] [-d process] [-g budget]
+ *                      [-b mode] n t acast0 ...
  *
  * Example:
  *   ./example_bkr94acs 4 1 joe sam sally tim
+ *
+ * The Byzantine mode (-b) designates PROCESS 0 as the one faulty
+ * process -- the same slot example/bracha87Fig1.c's -b uses, and the
+ * one the equivocation splits are written around -- and gives it one
+ * of three behaviors.  It composes with -s and -v and REFUSES to
+ * compose with -d / -g: those demonstrate a sweep-counted grace, and
+ * a grace's demonstration collapses when the run cannot end by
+ * quiescence.  Under -b the tick cap IS the expected ending, and the
+ * exit code reports whether the honest assertions held:
+ *   ./example_bkr94acs -b silent 4 1 joe sam sally tim
+ *     process 0 runs no state machine and sends nothing.  The honest
+ *     processes complete with its A-Cast excluded and agree; every
+ *     gate that needs all n stands one bit short forever.
+ *   ./example_bkr94acs -b equiv2 4 1 joe sam sally tim
+ *     process 0 submits INITIAL with its value to processes [0..2)
+ *     and with the first byte's case bit flipped to [2..n), then runs
+ *     no state machine.  The honest camps are 1 and 2, both below the echo
+ *     threshold of 3: nobody accepts, and Lemma 2's conditional is
+ *     vacuous.
+ *   ./example_bkr94acs -b equiv1 4 1 joe sam sally tim
+ *     the same behavior split 1/3, so all three honest processes echo
+ *     the same value, cross the threshold, and accept it -- the
+ *     equivocator's A-Cast is INCLUDED.
+ *   ./example_bkr94acs -b poke 4 1 joe sam sally tim
+ *     process 0 participates honestly through COMPLETE, then forever
+ *     re-sends READYs stripped of the ANSWERED annotation.  Each poke
+ *     re-arms an answer aimed only at the poker, and is a duplicate
+ *     READY that Input returns 0 acts for: it defeats the quiescence
+ *     ending without touching the progress evidence a barren-sweep
+ *     policy reads.
  *
  * The sweep-side pacing pair (-d names the WAN laggard, -g the grace,
  * in COMPLETED BPR SWEEPS -- full passes of the Retry cursor, the
@@ -96,6 +127,19 @@
 #define MAX_PROCESSES  16
 #define MAX_PHASES 10
 #define MAX_VLEN   256  /* max A-Cast bytes (including \0); bracha87 vLen encoding 255 */
+
+/*
+ * The -b behaviors.  BYZ_PROCESS is the designated faulty slot: process
+ * 0, matching example/bracha87Fig1.c's default initiator, so the
+ * equivocation splits below read as the paper's do -- [0..split) gets
+ * one value, [split..n) the other, and the honest camps are what is
+ * left after the equivocator's own slot is taken out.
+ */
+#define BYZ_NONE    0
+#define BYZ_SILENT  1
+#define BYZ_EQUIV   2
+#define BYZ_POKE    3
+#define BYZ_PROCESS 0
 
 /*--------------------------------------------------------------------------*/
 /*  Message queue -- simulated network                                      */
@@ -384,6 +428,9 @@ main(
   unsigned int vLen;
   int dproc;                /* -d: the delayed (WAN laggard) process, -1 none */
   unsigned int graceBudget; /* -g: tolerance budget in sweeps, 0 = eager */
+  unsigned int graceGiven;  /* -g appeared on the command line */
+  unsigned int byzMode;     /* -b: BYZ_NONE / SILENT / EQUIV / POKE */
+  unsigned int byzSplit;    /* -b equiv<S>: recipients [0..S) get the value */
 
   /* Per-process BKR94 ACS state */
   struct bkr94acs *processes[MAX_PROCESSES];
@@ -415,6 +462,18 @@ main(
   unsigned int quiesceTick[MAX_PROCESSES];
   unsigned int quiesced;
 
+  /* Byzantine-mode observation.  The POKE assertions are read off the
+   * live run: a poke's Input return (the barren evidence stream), and
+   * the two READY masks at the one stable point where they diverge --
+   * right after a poke's delivery has armed the want and before the
+   * egress that answers it consumes it again. */
+  unsigned int pokeArmed;
+  unsigned int pokeSent;
+  unsigned int pokeActs;
+  unsigned int pokeSampled;
+  unsigned int pokeInstances;
+  unsigned int pokeAimed;
+
   /* A-Cast strings */
   char acasts[MAX_PROCESSES][MAX_VLEN];
 
@@ -433,6 +492,9 @@ main(
   exitCode = 0;
   dproc = -1;
   graceBudget = 0;
+  graceGiven = 0;
+  byzMode = BYZ_NONE;
+  byzSplit = 0;
 
   arg = 1;
   while (arg < argc && argv[arg][0] == '-') {
@@ -453,6 +515,20 @@ main(
       ++arg;
       if (arg >= argc) goto usage;
       graceBudget = (unsigned int)atoi(argv[arg]);
+      graceGiven = 1;
+      ++arg;
+    } else if (argv[arg][1] == 'b' && argv[arg][2] == '\0') {
+      ++arg;
+      if (arg >= argc) goto usage;
+      if (!strcmp(argv[arg], "silent"))
+        byzMode = BYZ_SILENT;
+      else if (!strcmp(argv[arg], "poke"))
+        byzMode = BYZ_POKE;
+      else if (!strncmp(argv[arg], "equiv", 5)) {
+        byzMode = BYZ_EQUIV;
+        byzSplit = (unsigned int)atoi(argv[arg] + 5);
+      } else
+        goto usage;
       ++arg;
     } else {
       goto usage;
@@ -483,6 +559,26 @@ main(
      */
     if (t < 1) {
       fprintf(stderr, "-d needs t >= 1\n");
+      return (1);
+    }
+  }
+  if (byzMode != BYZ_NONE) {
+    /*
+     * The -d / -g pair demonstrates a sweep-counted grace, and a grace
+     * is demonstrated by the ENDING it changes.  With a Byzantine
+     * process the run cannot end by quiescence at all, so the pair
+     * would be measuring nothing.  Refuse rather than mislead.
+     */
+    if (dproc >= 0 || graceGiven) {
+      fprintf(stderr, "-b does not compose with -d / -g\n");
+      return (1);
+    }
+    if (t < 1) {
+      fprintf(stderr, "-b needs t >= 1 (one faulty process to tolerate)\n");
+      return (1);
+    }
+    if (byzMode == BYZ_EQUIV && byzSplit > n) {
+      fprintf(stderr, "-b equiv split must be <= n\n");
       return (1);
     }
   }
@@ -563,6 +659,42 @@ main(
      * else; its INITIAL releases in the tick loop below. */
     if (dproc >= 0 && i == (unsigned int)dproc)
       continue;
+
+    /*
+     * The Byzantine process's own submission.  SILENT sends nothing at
+     * all.  EQUIV sends (initial, v) to [0..split) and (initial, v')
+     * to [split..n), v' being v with its first byte inverted, and then
+     * runs no state machine: an equivocator that went on to echo would
+     * change the n=4 outcome, so this one stops at the split.  POKE
+     * A-Casts honestly and is handled by the ordinary path below.
+     */
+    if (byzMode != BYZ_NONE && byzMode != BYZ_POKE
+     && i == (unsigned int)BYZ_PROCESS) {
+      if (byzMode == BYZ_EQUIV) {
+        unsigned char split[MAX_VLEN];
+
+        memcpy(split, acasts[i], vLen);
+        /* A different value, and one that stays printable: this demo
+         * renders its A-Casts as text, so flipping the case bit shows
+         * the equivocation in the output instead of hiding it behind a
+         * byte the terminal cannot draw. */
+        split[0] = (unsigned char)(split[0] ^ 0x20);
+        printf("process %u: Byzantine initiator equivocates -- \"%s\" to"
+               " processes [0..%u), \"%s\" to [%u..%u)\n",
+               i, acasts[i], byzSplit, split, byzSplit, n);
+        for (j = 0; j < n; ++j)
+          qPush(BKR94ACS_CLS_ACAST, (unsigned char)i, 0, 0,
+                BRACHA87_INITIAL, 0, 0,
+                (unsigned char)i, (unsigned char)j,
+                (j < byzSplit)
+                  ? (const unsigned char *)acasts[i]
+                  : (const unsigned char *)split,
+                vLen);
+      } else
+        printf("process %u: Byzantine SILENT -- no state machine, no"
+               " messages\n", i);
+      continue;
+    }
     nActs = bkr94acsAcast(processes[i],
                             (const unsigned char *)acasts[i],
                             &acastAct);
@@ -595,6 +727,12 @@ main(
   memset(turnSweeps, 0, sizeof (turnSweeps));
   memset(fanoutSweeps, 0, sizeof (fanoutSweeps));
   memset(retryCalls, 0, sizeof (retryCalls));
+  pokeArmed = 0;
+  pokeSent = 0;
+  pokeActs = 0;
+  pokeSampled = 0;
+  pokeInstances = 0;
+  pokeAimed = 0;
 
   for (;;) {
     unsigned int progress;
@@ -618,6 +756,11 @@ main(
       unsigned char baValue;
 
       m = &MsgQ[Qhead++];
+      /* A process that runs no state machine has nothing to deliver
+       * to; the wire is simply lost at its end. */
+      if (byzMode != BYZ_NONE && byzMode != BYZ_POKE
+       && m->to == (unsigned char)BYZ_PROCESS)
+        continue;
       st = processes[m->to];
 
       /* Unpack the wire byte back into class and Bracha87 type. */
@@ -716,6 +859,12 @@ main(
        * invariant that makes the progress gate below sound. */
       if (nacts)
         progress = 1;
+      /* A poke is a duplicate READY.  Its Input return is what the
+       * barren-sweep policy would read, and it is the whole reason a
+       * poke costs the evidence stream nothing. */
+      if (pokeArmed && m->from == (unsigned char)BYZ_PROCESS
+       && type == BRACHA87_READY)
+        pokeActs += nacts;
       qActs(acts, nacts, m->to, n, vLen, verbose, "");
 
       if (shuffleSeed && Qtail > oldTail)
@@ -727,6 +876,54 @@ main(
      * whole run's -- without this a long retirement tail fills the
      * queue and qPush's silent drop would fake quiescence. */
     Qhead = Qtail = 0;
+
+    /*--------------------------------------------------------------------*/
+    /*  THE AIMED-ANSWER READING, taken once and only here.  A poke has   */
+    /*  just been delivered and has armed its want; the egress that       */
+    /*  answers it has not run yet.  This is the single configuration     */
+    /*  where the two READY masks diverge: the poker announced its own    */
+    /*  accept, so its ANSWER bit is set, while its want has taken it     */
+    /*  back out of SKIP -- and every other process is still suppressed.  */
+    /*  The reply therefore reaches the poker and nobody else.            */
+    /*                                                                    */
+    /*  The stable point is the poker's OWN quiescence: its masks fill    */
+    /*  only once every process has announced its accept and answered     */
+    /*  the poker's, so the honest exchange has settled by then and the   */
+    /*  only arm left standing anywhere is the one this tick's poke just  */
+    /*  placed.                                                           */
+    /*--------------------------------------------------------------------*/
+
+    if (byzMode == BYZ_POKE && pokeArmed && quiescent[BYZ_PROCESS]
+     && !pokeSampled) {
+      pokeSampled = 1;
+      for (i = 0; i < n; ++i) {
+        if (i == (unsigned int)BYZ_PROCESS)
+          continue;
+        for (j = 0; j < n; ++j) {
+          const struct bracha87Fig1 *f1;
+          const unsigned char *sk;
+          const unsigned char *an;
+          unsigned int q;
+
+          if (!(f1 = bkr94acsAcastFig1(processes[i], (unsigned char)j))
+           || !bkr94acsAcastValue(processes[i], (unsigned char)j))
+            continue;
+          sk = bracha87Fig1Skip(f1, BRACHA87_READY_ALL);
+          an = bracha87Fig1Answer(f1);
+          if (!sk || !an)
+            continue;
+          ++pokeInstances;
+          if (BRACHA87_SKIP_TST(sk, BYZ_PROCESS)
+           || !BRACHA87_SKIP_TST(an, BYZ_PROCESS))
+            continue;
+          for (q = 0; q < n; ++q)
+            if (q != (unsigned int)BYZ_PROCESS && !BRACHA87_SKIP_TST(sk, q))
+              break;
+          if (q == n)
+            ++pokeAimed;
+        }
+      }
+    }
 
     /*--------------------------------------------------------------------*/
     /*  The delayed A-Cast releases at the first tick its own process     */
@@ -769,6 +966,12 @@ main(
       unsigned int p;
       unsigned int sweepDone;
       unsigned char duty;
+
+      /* A SILENT or equivocating process runs no state machine: it
+       * takes no tick, so nothing here is called on its behalf. */
+      if (byzMode != BYZ_NONE && byzMode != BYZ_POKE
+       && i == (unsigned int)BYZ_PROCESS)
+        continue;
 
       /* One retry call per process per TICK -- looping until idle
        * would flood the network; see bracha87.h's flood warning.  A
@@ -900,12 +1103,55 @@ main(
     /*  here and is a harness guard, not protocol.                        */
     /*--------------------------------------------------------------------*/
 
+    /*--------------------------------------------------------------------*/
+    /*  THE POKE.  Once the poker has completed it re-sends, every tick,  */
+    /*  a READY for every A-Cast instance it accepted, stripped of the    */
+    /*  ANSWERED annotation -- the framer's own bit, cleared.  Each one   */
+    /*  is a duplicate the receiver's Input dedups to 0 acts, and each    */
+    /*  one re-arms an answer that costs one masked READY per poked       */
+    /*  instance per sweep, aimed back at the poker alone.  The price is  */
+    /*  bounded by the poked instance count; what it buys is that no      */
+    /*  gate needing all n ever closes.                                   */
+    /*--------------------------------------------------------------------*/
+
+    if (byzMode == BYZ_POKE && processes[BYZ_PROCESS]->complete) {
+      pokeArmed = 1;
+      for (j = 0; j < n; ++j) {
+        const unsigned char *pv;
+        unsigned int q;
+
+        if (!(pv = bkr94acsAcastValue(processes[BYZ_PROCESS],
+                                      (unsigned char)j)))
+          continue;
+        for (q = 0; q < n; ++q) {
+          if (q == (unsigned int)BYZ_PROCESS)
+            continue;
+          qPush(BKR94ACS_CLS_ACAST, (unsigned char)j, 0, 0,
+                BRACHA87_READY, 1 /* the poker did accept */,
+                0 /* ANSWERED stripped -- this READY asks */,
+                (unsigned char)BYZ_PROCESS, (unsigned char)q, pv, vLen);
+          ++pokeSent;
+        }
+      }
+    }
+
     (void)progress;
     if (quiesced == n)
       break;
     if (tickCount > 100000) {
-      fprintf(stderr, "no convergence within the tick cap\n");
-      exitCode = 1;
+      /*
+       * The cap is a harness guard on the rotation, in TICKS -- not the
+       * abandonment policy's unit and carrying no evidence of anything.
+       * Without -b a run that reaches it failed to converge and says
+       * so.  With -b it is the EXPECTED ending: a Byzantine process
+       * holds every all-n gate open, so quiescence is unreachable by
+       * construction and the exit code reports the honest assertions
+       * instead.
+       */
+      if (!byzMode) {
+        fprintf(stderr, "no convergence within the tick cap\n");
+        exitCode = 1;
+      }
       break;
     }
   }
@@ -931,6 +1177,12 @@ main(
       unsigned char subset[MAX_PROCESSES];
       unsigned int cnt;
       const char *sorted[MAX_PROCESSES];
+
+      /* The designated Byzantine process is not part of the honest
+       * outcome: agreement and completion are claims about the
+       * processes the protocol is required to carry. */
+      if (byzMode != BYZ_NONE && i == (unsigned int)BYZ_PROCESS)
+        continue;
 
       if (!processes[i]->complete) {
         /*
@@ -1016,6 +1268,83 @@ main(
          quiesced, n, tickCount);
 
   /*----------------------------------------------------------------------*/
+  /*  The Byzantine mode's own verdict.  Each behavior states what the     */
+  /*  honest processes are owed under it, and the checks below are what    */
+  /*  the exit code reports.  The tick cap is the expected ending here --  */
+  /*  every gate that needs all n stands one bit short for good -- so a    */
+  /*  run that reached it is not a failure and does not say it is.         */
+  /*----------------------------------------------------------------------*/
+
+  if (byzMode != BYZ_NONE) {
+    unsigned char subset[MAX_PROCESSES];
+    unsigned int cnt;
+    unsigned int byzInSubset;
+    unsigned int accepted;
+    unsigned int agreed;
+    const unsigned char *ref;
+
+    printf("\n--- Byzantine mode (process %d) ---\n", BYZ_PROCESS);
+
+    cnt = 0;
+    byzInSubset = 0;
+    if (processes[1]->complete) {
+      cnt = bkr94acsSubset(processes[1], subset);
+      for (j = 0; j < cnt; ++j)
+        if (subset[j] == (unsigned char)BYZ_PROCESS)
+          byzInSubset = 1;
+    }
+
+    /* Bracha Lemma 2, composed: whichever value any honest process
+     * accepts for the faulty A-Cast, every honest process that accepts
+     * agrees with it -- or nobody accepts and the conditional is
+     * vacuous.  A disjunction, checked as one. */
+    accepted = 0;
+    agreed = 1;
+    ref = 0;
+    for (i = 1; i < n; ++i) {
+      const unsigned char *pv;
+
+      if (!(pv = bkr94acsAcastValue(processes[i], (unsigned char)BYZ_PROCESS)))
+        continue;
+      ++accepted;
+      if (!ref)
+        ref = pv;
+      else if (memcmp(ref, pv, vLen))
+        agreed = 0;
+    }
+    printf("Lemma 2 disjunction (all acceptors agree XOR nobody accepts): "
+           "%s -- %u of %u honest processes accepted\n",
+           agreed ? "ok" : "FAIL", accepted, n - 1);
+    if (!agreed)
+      exitCode = 1;
+    printf("Faulty A-Cast in the agreed subset: %s (%u of %u members)\n",
+           byzInSubset ? "INCLUDED" : "excluded", cnt, n);
+
+    if (byzMode == BYZ_POKE) {
+      printf("Poker: %u pokes sent, %u acts returned by them; "
+             "barren evidence stream %s\n",
+             pokeSent, pokeActs,
+             pokeActs ? "DISTURBED -- FAIL" : "unaffected");
+      if (pokeActs)
+        exitCode = 1;
+      printf("Aimed answers: %u of %u poked instances suppress every "
+             "process but the poker: %s\n",
+             pokeAimed, pokeInstances,
+             (pokeInstances && pokeAimed == pokeInstances) ? "ok" : "FAIL");
+      if (!pokeInstances || pokeAimed != pokeInstances)
+        exitCode = 1;
+    }
+
+    printf("Quiescence: %s (%u of %u) -- an all-n gate one bit short: %s\n",
+           quiesced < n ? "DEFEATED" : "reached", quiesced, n,
+           quiesced < n ? "ok" : "FAIL");
+    if (quiesced >= n)
+      exitCode = 1;
+    printf("Ending: tick cap at %u ticks -- the expected ending under -b\n",
+           tickCount);
+  }
+
+  /*----------------------------------------------------------------------*/
   /*  The -d demonstration's verdict: included under grace, excluded      */
   /*  under the eager schedule -- and in the eager case the value still   */
   /*  arrived everywhere, pinning that exclusion is participation loss,   */
@@ -1062,7 +1391,8 @@ cleanup:
 
 usage:
   fprintf(stderr,
-    "usage: example_bkr94acs [-v] [-s seed] [-d process] [-g budget] n t acast0 acast1 ...\n"
+    "usage: example_bkr94acs [-v] [-s seed] [-d process] [-g budget]"
+    " [-b mode] n t acast0 acast1 ...\n"
     "  n            total processes (1-%d)\n"
     "  t            max Byzantine faults\n"
     "  acast*      per-process A-Cast strings\n"
@@ -1076,5 +1406,19 @@ usage:
     "               in completed BPR sweeps -- full Retry-cursor\n"
     "               passes (0 = eager; with -d, -g 1 includes the\n"
     "               laggard in SubSet)\n");
+  fprintf(stderr,
+    "  -b mode      process %d is Byzantine (needs t >= 1; does not\n"
+    "               compose with -d / -g).  The tick cap is then the\n"
+    "               expected ending and the exit code reports the\n"
+    "               honest assertions.  mode is one of:\n",
+    BYZ_PROCESS);
+  fprintf(stderr,
+    "                 silent    runs no state machine, sends nothing\n"
+    "                 equiv<S>  sends (initial, v) to processes\n"
+    "                           [0..S) and v with its first byte's\n"
+    "                           case bit flipped to [S..n), then stops\n"
+    "                 poke      participates honestly through\n"
+    "                           COMPLETE, then re-sends READYs with\n"
+    "                           the ANSWERED annotation stripped\n");
   return (1);
 }
