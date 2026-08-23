@@ -61,7 +61,7 @@
  *   (from project root) make example_bkr94acs
  *
  * Usage:
- *   ./example_bkr94acs [-v] [-s seed] [-d process] [-g budget]
+ *   ./example_bkr94acs [-v] [-s seed] [-d process] [-g patience]
  *                      [-b mode] n t acast0 ...
  *
  * Example:
@@ -71,8 +71,8 @@
  * process -- the same slot example/bracha87Fig1.c's -b uses, and the
  * one the equivocation splits are written around -- and gives it one
  * of three behaviors.  It composes with -s and -v and REFUSES to
- * compose with -d / -g: those demonstrate a sweep-counted grace, and
- * a grace's demonstration collapses when the run cannot end by
+ * compose with -d / -g: those demonstrate sweep-counted patience, and
+ * a patience demonstration collapses when the run cannot end by
  * quiescence.  Under -b the tick cap IS the expected ending, and the
  * exit code reports whether the honest assertions held:
  *   ./example_bkr94acs -b silent 4 1 joe sam sally tim
@@ -97,17 +97,17 @@
  *     ending without touching the progress evidence a barren-sweep
  *     policy reads.
  *
- * The sweep-side pacing pair (-d names the WAN laggard, -g the grace,
+ * The sweep-side pacing pair (-d names the WAN laggard, -g the patience,
  * in COMPLETED BPR SWEEPS -- full passes of the Retry cursor, the
  * unit bkr94acs.h ratifies):
  *   ./example_bkr94acs -d 3 4 1 joe sam sally tim
- *     the eager schedule (budget 0) excludes the delayed honest
+ *     the eager schedule (patience 0) excludes the delayed honest
  *     process: SubSet = 3 of 4, its value accepted everywhere but
  *     excluded -- participation loss, not value loss
  *   ./example_bkr94acs -d 3 -g 1 4 1 joe sam sally tim
- *     the identical schedule under a ONE-sweep grace includes it:
- *     SubSet = 4 of 4, step 2 never fires.  One sweep is what a
- *     grace is worth by construction: a pass re-offers every sent
+ *     the identical schedule under ONE sweep of patience includes it:
+ *     SubSet = 4 of 4, step 2 never fires.  One sweep is what
+ *     patience is worth by construction: a pass re-offers every sent
  *     instance once, so the released INITIAL reaches everyone
  *     within it.
  * What the pair deliberately shows the eager run giving up is the
@@ -427,8 +427,8 @@ main(
   unsigned int origSeed;
   unsigned int vLen;
   int dproc;                /* -d: the delayed (WAN laggard) process, -1 none */
-  unsigned int graceBudget; /* -g: tolerance budget in sweeps, 0 = eager */
-  unsigned int graceGiven;  /* -g appeared on the command line */
+  unsigned int patience;    /* -g: patience in sweeps, 0 = eager */
+  unsigned int patienceGiven; /* -g appeared on the command line */
   unsigned int byzMode;     /* -b: BYZ_NONE / SILENT / EQUIV / POKE */
   unsigned int byzSplit;    /* -b equiv<S>: recipients [0..S) get the value */
 
@@ -491,8 +491,8 @@ main(
   shuffleSeed = 0;
   exitCode = 0;
   dproc = -1;
-  graceBudget = 0;
-  graceGiven = 0;
+  patience = 0;
+  patienceGiven = 0;
   byzMode = BYZ_NONE;
   byzSplit = 0;
 
@@ -514,8 +514,8 @@ main(
     } else if (argv[arg][1] == 'g' && argv[arg][2] == '\0') {
       ++arg;
       if (arg >= argc) goto usage;
-      graceBudget = (unsigned int)atoi(argv[arg]);
-      graceGiven = 1;
+      patience = (unsigned int)atoi(argv[arg]);
+      patienceGiven = 1;
       ++arg;
     } else if (argv[arg][1] == 'b' && argv[arg][2] == '\0') {
       ++arg;
@@ -564,12 +564,12 @@ main(
   }
   if (byzMode != BYZ_NONE) {
     /*
-     * The -d / -g pair demonstrates a sweep-counted grace, and a grace
-     * is demonstrated by the ENDING it changes.  With a Byzantine
+     * The -d / -g pair demonstrates sweep-counted patience, and
+     * patience is demonstrated by the ENDING it changes.  With a Byzantine
      * process the run cannot end by quiescence at all, so the pair
      * would be measuring nothing.  Refuse rather than mislead.
      */
-    if (dproc >= 0 || graceGiven) {
+    if (dproc >= 0 || patienceGiven) {
       fprintf(stderr, "-b does not compose with -d / -g\n");
       return (1);
     }
@@ -714,7 +714,7 @@ main(
   /*  Drive to completion: drain ingress, tick, repeat -- the            */
   /*  bkr94acs.h application loop.  A tick is one Retry call per          */
   /*  process plus the two sweep-side protocol decisions, each paced      */
-  /*  by -g's tolerance budget in COMPLETED SWEEPS (0 = fire whenever     */
+  /*  by -g's patience in COMPLETED SWEEPS (0 = fire whenever             */
   /*  enabled, the eager schedule).                                       */
   /*----------------------------------------------------------------------*/
 
@@ -927,8 +927,8 @@ main(
 
     /*--------------------------------------------------------------------*/
     /*  The delayed A-Cast releases at the first tick its own process     */
-    /*  observes step 2 leave HELD: the WAN knife edge.  Under a budget   */
-    /*  that is TOLERANCE -- the grace clock is counting completed        */
+    /*  observes step 2 leave HELD: the WAN knife edge.  Under patience   */
+    /*  at TOLERANCE -- the patience clock is counting completed          */
     /*  sweeps and the next drain delivers the INITIAL, so step 1 wins.   */
     /*  At -g 0 the verdict elapses within the same tick that decides     */
     /*  the n-t'th BA (it is evaluated on every tick), so the first       */
@@ -1021,21 +1021,21 @@ main(
        * BA round turns, paced per (ACS state, BA): count COMPLETED
        * SWEEPS while bkr94acsTurnDuty holds TOLERANCE, pass the
        * elapsed signal once the count reaches -g -- evaluated on
-       * every tick, so a zero budget recovers the eager schedule
+       * every tick, so zero patience recovers the eager schedule
        * exactly (bkr94acs.h: a clock that only advances at a sweep
        * boundary fires one boundary late even at zero).  MET fires
        * free -- the full sample is in hand and waiting buys
-       * nothing.  The grace is
+       * nothing.  Patience is
        * scoped to UNDECIDED BAs: once bkr94acsBaDecision reports a
        * decision, post-decide continuation rounds carry the pinned
        * value and their sample no longer chooses anything, so
-       * holding them to the budget would only convoy the cohort
+       * holding them to the patience would only convoy the cohort
        * (each process's round-k INITIAL waits on its own turn of
        * k-1, and one process's stall holds everyone at n-t).  One
        * turn per BA per tick, and the clock re-arms only when duty
        * leaves TOLERANCE: a cascade that holds it continuously
-       * spends ONE budget across all of its rounds, one round per
-       * tick past the elapse; a later round pays its own grace
+       * spends ONE patience across all of its rounds, one round per
+       * tick past the elapse; a later round pays its own patience
        * only after a HELD dip (an evidence gap) resets the count.
        */
       for (p = 0; p < n; ++p) {
@@ -1046,7 +1046,7 @@ main(
         } else
           turnSweeps[i][p] = 0;
         nacts = bkr94acsTurn(processes[i], (unsigned char)p,
-                             turnSweeps[i][p] >= graceBudget
+                             turnSweeps[i][p] >= patience
                              || bkr94acsBaDecision(processes[i],
                                   (unsigned char)p) != 0xFF, acts);
         if (nacts) {
@@ -1072,7 +1072,7 @@ main(
           ++fanoutSweeps[i];
       } else
         fanoutSweeps[i] = 0;
-      if (fanoutSweeps[i] >= graceBudget) {
+      if (fanoutSweeps[i] >= patience) {
         nacts = bkr94acsFanout(processes[i], acts);
         if (nacts) {
           fanoutFires += nacts;
@@ -1345,7 +1345,7 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
-  /*  The -d demonstration's verdict: included under grace, excluded      */
+  /*  The -d demonstration's verdict: included under patience, excluded      */
   /*  under the eager schedule -- and in the eager case the value still   */
   /*  arrived everywhere, pinning that exclusion is participation loss,   */
   /*  never value loss.                                                   */
@@ -1366,10 +1366,10 @@ main(
     for (i = 0; i < n; ++i)
       if (!bkr94acsAcastValue(processes[i], (unsigned char)dproc))
         acceptedEverywhere = 0;
-    printf("\nDelayed process %d (grace budget %u sweeps, %u ticks): %s\n",
-           dproc, graceBudget, tickCount,
+    printf("\nDelayed process %d (patience %u sweeps, %u ticks): %s\n",
+           dproc, patience, tickCount,
            inSubset
-             ? "INCLUDED -- the grace let step 1 win"
+             ? "INCLUDED -- patience let step 1 win"
              : "EXCLUDED -- the eager schedule shut the door");
     printf("step 2 fired %u enter-0 act(s); the delayed value was %s"
            "accepted at every process%s\n",
@@ -1391,7 +1391,7 @@ cleanup:
 
 usage:
   fprintf(stderr,
-    "usage: example_bkr94acs [-v] [-s seed] [-d process] [-g budget]"
+    "usage: example_bkr94acs [-v] [-s seed] [-d process] [-g patience]"
     " [-b mode] n t acast0 acast1 ...\n"
     "  n            total processes (1-%d)\n"
     "  t            max Byzantine faults\n"
@@ -1402,7 +1402,7 @@ usage:
     "  -s seed      shuffle seed (0 = ordered delivery)\n"
     "  -d process   hold that process's A-Cast until step 2 first\n"
     "               enables (the WAN laggard; needs t >= 1)\n"
-    "  -g budget    tolerance budget for the sweep-side decisions,\n"
+    "  -g patience  patience for the sweep-side decisions,\n"
     "               in completed BPR sweeps -- full Retry-cursor\n"
     "               passes (0 = eager; with -d, -g 1 includes the\n"
     "               laggard in SubSet)\n");

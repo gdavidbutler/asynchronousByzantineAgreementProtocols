@@ -124,7 +124,7 @@ qShuffle(
 }
 
 /*
- * BKR94 Step 2 at zero tolerance budget: fire the enter-0 fanout
+ * BKR94 Step 2 at zero patience: fire the enter-0 fanout
  * the moment it is enabled -- the eager schedule bkr94acsBaInput
  * hardwired before the firing moved to the BPR sweep -- and
  * broadcast its BA_SEND acts from 'self' to all n processes.
@@ -191,7 +191,7 @@ vacProbe(
 }
 
 /*
- * Bracha Fig4's round turn at zero tolerance budget: turn every
+ * Bracha Fig4's round turn at zero patience: turn every
  * turnable round of every BA of one instance -- the eager schedule
  * bkr94acsBaInput hardwired before the turn moved to the BPR sweep --
  * and broadcast the next-round INITIALs from 'self' to all n
@@ -917,7 +917,7 @@ testPostDecideContinuation(
 
   /*
    * Feed more messages to drive Fig3 round 0 to n-t validated, so the
-   * zero-budget turn drain runs Fig4Round round 0 in the
+   * zero-patience turn drain runs Fig4Round round 0 in the
    * already-decided branch and outputs a BROADCAST action for round 1
    * without DECIDE.  Deliver INITIALs for enough initiators for Fig1
    * to accept via echoes between them.  Easiest: INITIAL from every
@@ -1947,7 +1947,7 @@ testBaEnteredGetValid(
   /* An exhausted BA has no next round.  testExhausted's drive shape,
    * inlined because feedFig1Accept is declared below this point:
    * maxPhases = 1, split values across all three sub-rounds, turns
-   * drained at a zero budget so the round space runs out. */
+   * drained at zero patience so the round space runs out. */
   sz = bkr94acsSz(3, 0, 1);
   a = calloc(1, sz);
   if (!a) {
@@ -2380,7 +2380,7 @@ testBprHighDrop(
 /*  Setup: n=4, t=1, maxPhases=1, vLen=0, self=0.  We drive only one BA     */
 /*  (process=0) directly via bkr94acsBaInput, bypassing the                 */
 /*  A-Cast layer.  Arrivals bank evidence only; each is followed by the     */
-/*  zero-budget turn drain, which is where BA_EXHAUSTED emerges.            */
+/*  zero-patience turn drain, which is where BA_EXHAUSTED emerges.          */
 /*                                                                          */
 /*  Per round, each of the 4 initiators' Fig1 is driven to ACCEPT at        */
 /*  process 0 by feeding INITIAL + 3 distinct READYs (>= 2t+1=3 readys =>   */

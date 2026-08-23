@@ -21,15 +21,15 @@
  *      MAX_ACTS bound, SentFig1Count monotone, barren-sweep
  *      signal, drop convergence, silent-Byzantine canary, Input
  *      dedup (retried wire returns 0 acts).
- *   D. EXHAUSTED -- single output (read off the zero-budget turn
+ *   D. EXHAUSTED -- single output (read off the zero-patience turn
  *      drain, the only place the act can appear) + 0xFE sentinel +
  *      permanent !complete + HELD forever after; Retry continues
  *      post-EXHAUSTED.
  *   E. Byzantine -- equivocating A-Caster (Bracha Lemma 2 inheritance).
  *   F. Step 2 pacing -- the same delayed-A-Cast schedule under two
- *      budgets: eager excludes the delayed honest process (F1), the
- *      grace includes it (F2); a dead slot holds TOLERANCE forever
- *      and the budgeted fanout completes past it (F3).  Duty
+ *      patience values: eager excludes the delayed honest process (F1),
+ *      patience includes it (F2); a dead slot holds TOLERANCE forever
+ *      and finite patience completes past it (F3).  Duty
  *      trichotomy monotone (MET absorbing, TOLERANCE never back to
  *      HELD) at every fDrive sweep.
  *   G. Round-turn pacing -- deliveries bank and decide nothing (G1),
@@ -67,7 +67,7 @@
  * Caller discipline (bkr94acs.h): the arrival path only banks
  * evidence.  BKR94 step 2 (bkr94acsFanout) and the BA round turn
  * (bkr94acsTurn) fire from the caller's sweep, so every driver here
- * bridges at a ZERO tolerance budget -- the eager schedule -- except
+ * bridges at ZERO patience -- the eager schedule -- except
  * where a section makes one of the two the isolated variable.
  *
  * Header encoding convention (CRITICAL):
@@ -365,7 +365,7 @@ observeAndOutput(
   }
 }
 
-/* BA round turns at a ZERO tolerance budget -- the bridge bkr94acs.h
+/* BA round turns at ZERO patience -- the bridge bkr94acs.h
  * prescribes for a caller that wants the eager schedule: after any
  * delivery or retry that may have banked evidence, turn every BA that
  * became turnable.  The while() is required (cascaded validation can
@@ -419,7 +419,7 @@ deliverWire(
   }
   observeAndOutput(obs, w->to, nAct, out, n, vBytes, 0, -1);
 
-  /* Sweep-side decisions at zero tolerance budget, turns first
+  /* Sweep-side decisions at zero patience, turns first
    * (only a turn produces the decisions the fanout counts; a fanout
    * cannot make a round turnable -- it writes only entered[] and
    * round-0 initiator state, which no turn duty reads). */
@@ -710,7 +710,7 @@ runWithRetry(
       }
       observeAndOutput(&obs[w.to], w.to, nAct, out, n, vLen,
                      dropPercent, silentProcess);
-      /* Sweep-side decisions at zero budget, turns first (see
+      /* Sweep-side decisions at zero patience, turns first (see
        * deliverWire).  The wires ride the same lossy output path; a
        * dropped INITIAL is BPR-retried like any other, so firing
        * here stays loss-safe. */
@@ -784,7 +784,7 @@ runWithRetry(
 /*  The inputs only BANK evidence -- per bkr94acs.h an accept can      */
 /*  produce nothing but echo/ready acts.  BA_EXHAUSTED (like DECIDED   */
 /*  and COMPLETE) emerges from bkr94acsTurn, so 'turned' selects the   */
-/*  caller's schedule: nonzero drains turns at a zero budget after     */
+/*  caller's schedule: nonzero drains turns at zero patience after     */
 /*  every input (the eager schedule D1/D2 want, counting EXHAUSTED     */
 /*  from the turn's acts), zero banks without turning (Section G,      */
 /*  which must read a duty class over a round the caller has not yet   */
@@ -843,10 +843,10 @@ feedBAAccept(
 /*  Section F driver: drain + retry sweeps with CALLER-PACED step 2   */
 /*  per the bkr94acs.h discipline -- count completed sweeps while     */
 /*  bkr94acsFanoutDuty holds TOLERANCE, call bkr94acsFanout when the  */
-/*  count exceeds the budget.  n = 4, no loss.                        */
+/*  count exceeds the patience.  n = 4, no loss.                      */
 /*                                                                    */
-/*    budget < 0   never fire the fanout                              */
-/*    budget >= 0  per process, fire after budget TOLERANCE sweeps    */
+/*    patience < 0 never fire the fanout                              */
+/*    patience >= 0 per process, fire after patience TOLERANCE sweeps */
 /*    silent >= 0  that process is dead: never receives, never        */
 /*                 retries, excluded from pacing and completion       */
 /*                                                                    */
@@ -861,7 +861,7 @@ fDrive(
   struct bkr94acs **processes
  ,struct processObs *obs
  ,struct bracha87Retry *cursors
- ,int budget
+ ,int patience
  ,int silent
  ,unsigned int maxIters
  ,unsigned int *toleranceSweepsMax  /* out: max per-process TOLERANCE sweeps */
@@ -918,7 +918,7 @@ fDrive(
       n = bkr94acsRetry(processes[p], &cursors[p], out);
       observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, silent);
 
-      /* The round turn is drained at a ZERO budget before the
+      /* The round turn is drained at ZERO patience before the
        * fanout: the decisions a turn produces are what enables
        * step 2, so only the FANOUT's pacing is the variable this
        * section isolates.  No drain after it -- a fanout writes
@@ -940,7 +940,7 @@ fDrive(
         ++sweeps[p];
         if (sweeps[p] > *toleranceSweepsMax)
           *toleranceSweepsMax = sweeps[p];
-        if (budget >= 0 && sweeps[p] > (unsigned int)budget) {
+        if (patience >= 0 && sweeps[p] > (unsigned int)patience) {
           n = bkr94acsFanout(processes[p], out);
           *fanoutActsTotal += n;
           observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0,
@@ -1307,7 +1307,7 @@ kDeliver(
 }
 
 /* One tick of the honest cluster: drain, one Retry per process, the
- * zero-budget turn drain, the fanout.  Wires addressed to the trickler
+ * zero-patience turn drain, the fanout.  Wires addressed to the trickler
  * are discarded -- it holds no state to deliver them to. */
 static void
 kTick(
@@ -1571,22 +1571,22 @@ mTick(
 /*  once every k ticks while the rest tick every tick.  The delayed    */
 /*  A-Cast's own direct egress is LOST, so the only thing that can     */
 /*  carry it is that process's BPR re-offer -- which arrives at ITS    */
-/*  cursor rate, while the grace that would wait for it is counted in  */
-/*  the FIRING process's own completed sweeps.  Those are two          */
+/*  cursor rate, while the patience that would wait for it is counted  */
+/*  in the FIRING process's own completed sweeps.  Those are two       */
 /*  different clocks, and the lane is what happens when they run at    */
 /*  different rates.                                                  */
 /*                                                                    */
-/*  Budgets are in COMPLETED SWEEPS (the shared boundary), loop counts */
-/*  in ticks, and the budget compare is >=.  Turns are drained at a    */
-/*  zero budget so only the fanout's pacing is the variable, the same  */
-/*  isolation Section F takes.                                        */
+/*  Patience is in COMPLETED SWEEPS (the shared boundary), loop counts */
+/*  in ticks, and the patience compare is >=.  Turns are drained at    */
+/*  zero patience so only the fanout's pacing is the variable, the     */
+/*  same isolation Section F takes.                                   */
 /* ------------------------------------------------------------------ */
 
 static int
 nDrive(
   unsigned int slow          /* the k-slow process */
  ,unsigned int k             /* it ticks once every k ticks */
- ,unsigned int budget        /* tolerance budget, in completed sweeps */
+ ,unsigned int patience      /* in completed sweeps */
  ,unsigned int releaseTick   /* submission, in the delayed process's OWN ticks */
  ,unsigned int maxTicks
  ,unsigned int *ticksOut
@@ -1602,7 +1602,7 @@ nDrive(
   struct wire w;
   unsigned char acast[4];
   unsigned char subset[4];
-  unsigned int grace[4];
+  unsigned int spent[4];
   unsigned int delayed = 3;
   unsigned int tick, p, b, n, j, sz, sweepDone, released, ownTicks;
   int done;
@@ -1617,7 +1617,7 @@ nDrive(
     obsInit(&obs[p]);
     bracha87RetryInit(&cursors[p]);
     memset(&pol[p], 0, sizeof (pol[p]));
-    grace[p] = 0;
+    spent[p] = 0;
     acast[p] = (unsigned char)(0xA0 + p);
   }
   for (p = 0; p < 3; ++p) {
@@ -1684,10 +1684,10 @@ nDrive(
 
       if (bkr94acsFanoutDuty(processes[p]) == BKR94ACS_DUTY_TOLERANCE) {
         if (sweepDone)
-          ++grace[p];
+          ++spent[p];
       } else
-        grace[p] = 0;
-      if (grace[p] >= budget) {
+        spent[p] = 0;
+      if (spent[p] >= patience) {
         n = bkr94acsFanout(processes[p], out);
         *fanoutActsOut += n;
         observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
@@ -2931,7 +2931,7 @@ main(
      * and never sets complete (no unilateral substitute is safe --
      * Part C of Lemma 2 agreement would break).
      *
-     * The arrival path banks; the act comes from the zero-budget turn
+     * The arrival path banks; the act comes from the zero-patience turn
      * drain feedBAAccept runs after every input, and the last round's
      * turn is the one that carries it (after it TurnDuty is HELD
      * forever -- the round space is consumed). */
@@ -3213,11 +3213,11 @@ main(
   /* ---------------------------------------------------------------- */
   /*  Section F -- Step 2 pacing (bkr94acsFanoutDuty / bkr94acsFanout)*/
   /*                                                                  */
-  /*  The same delayed-A-Cast schedule under two budgets: the eager   */
+  /*  The same delayed-A-Cast schedule under two patience values: the eager   */
   /*  schedule (F1) excludes the delayed honest process every time    */
-  /*  and the grace (F2) includes it -- the pair is the WAN           */
+  /*  and patience (F2) includes it -- the pair is the WAN            */
   /*  starvation seed and its remedy.  F3 is the liveness half: a     */
-  /*  dead slot holds TOLERANCE forever, the budget bounds the tax,   */
+  /*  dead slot holds TOLERANCE forever, patience bounds the tax,   */
   /*  and firing after it completes the instance.                     */
   /* ---------------------------------------------------------------- */
 
@@ -3265,7 +3265,7 @@ main(
        * everywhere (the value is not lost) but the subset is fixed --
        * the paper's per-instance honest-exclusion allowance.  Under a
        * persistent latency spread the SAME process re-suffers this
-       * every instance; that compounding is what F2's grace removes. */
+       * every instance; that compounding is what F2's patience removes. */
       acasts[3] = 0xE3;
       n = bkr94acsAcast(processes[3], &acasts[3], acastOut);
       observeAndOutput(&obs[3], 3, 4, acastOut, n, 1, 0, -1);
@@ -3480,7 +3480,7 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("F2: grace includes the same delayed honest A-Cast");
+  BANNER("F2: patience includes the same delayed honest A-Cast");
   /* ---------------------------------------------------------------- */
   {
     struct bracha87Retry cursors[4];
@@ -3494,7 +3494,7 @@ main(
       for (p = 0; p < 4; ++p) bracha87RetryInit(&cursors[p]);
       qReset();
 
-      /* Identical schedule to F1 -- but the budget never elapses. */
+      /* Identical schedule to F1 -- but the patience never elapses. */
       for (p = 0; p < 3; ++p) {
         acasts[p] = (unsigned char)(0xE0 + p);
         n = bkr94acsAcast(processes[p], &acasts[p], acastOut);
@@ -3506,21 +3506,21 @@ main(
        * and the sweep keeps retrying (BPR gate: undecided -> retry). */
       CHECK(fDrive(processes, obs, cursors, -1, -1, 30,
                    &tolSweeps, &fanActs) != 0,
-            "F2: incomplete while the budget holds");
+            "F2: incomplete while patience holds");
       CHECK(fanActs == 0, "F2: fanout never fired");
       CHECK(tolSweeps >= 5, "F2: TOLERANCE held across the sweeps");
       for (p = 0; p < 4; ++p)
         CHECK(bkr94acsFanoutDuty(processes[p]) == BKR94ACS_DUTY_TOLERANCE,
               "F2: duty TOLERANCE at every process while waiting");
 
-      /* The delayed A-Cast arrives INSIDE the grace: step 1 enters 1,
+      /* The delayed A-Cast arrives INSIDE the patience window: step 1 enters 1,
        * BA_3 decides 1, and the fanout is never needed. */
       acasts[3] = 0xE3;
       n = bkr94acsAcast(processes[3], &acasts[3], acastOut);
       observeAndOutput(&obs[3], 3, 4, acastOut, n, 1, 0, -1);
       CHECK(fDrive(processes, obs, cursors, -1, -1, 500,
                    &tolSweeps, &fanActs) == 0,
-            "F2: all four complete inside the grace");
+            "F2: all four complete inside the patience window");
       CHECK(fanActs == 0, "F2: completion without any enter-0");
       for (p = 0; p < 4; ++p) {
         unsigned char subset[4];
@@ -3539,7 +3539,7 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("F3: budgeted fanout completes past a dead slot");
+  BANNER("F3: finite patience completes past a dead slot");
   /* ---------------------------------------------------------------- */
   {
     struct bracha87Retry cursors[4];
@@ -3554,9 +3554,9 @@ main(
 
       /* Process 3 is DEAD, not delayed: it never A-Casts and never
        * runs.  TOLERANCE cannot resolve on its own -- nothing can
-       * enter BA_3 with 1 -- so the budget is a pure tax here, and
+       * enter BA_3 with 1 -- so the patience is a pure tax here, and
        * firing after it is what completes the instance.  This is why
-       * the budget must be bounded: slow and dead are locally
+       * the patience must be bounded: slow and dead are locally
        * indistinguishable, and only the fanout ends the wait. */
       for (p = 0; p < 3; ++p) {
         acasts[p] = (unsigned char)(0xE0 + p);
@@ -3567,7 +3567,7 @@ main(
       CHECK(fDrive(processes, obs, cursors, 3, 3, 500,
                    &tolSweeps, &fanActs) == 0,
             "F3: three live processes complete past the dead slot");
-      CHECK(tolSweeps > 3, "F3: the full budget was waited out");
+      CHECK(tolSweeps > 3, "F3: the full patience was waited out");
       CHECK(fanActs == 3, "F3: one enter-0 act per live process");
       for (p = 0; p < 3; ++p) {
         unsigned char subset[4];
@@ -3577,7 +3577,7 @@ main(
         CHECK(bkr94acsBaDecision(processes[p], 3) == 0,
               "F3: dead slot decided 0");
         CHECK(bkr94acsFanoutDuty(processes[p]) == BKR94ACS_DUTY_MET,
-              "F3: duty MET after the budgeted fanout");
+              "F3: duty MET after the patience-elapsed fanout");
       }
       freeCluster(processes, 4);
     }
@@ -3591,7 +3591,7 @@ main(
   /*  nothing (G1); a round complete at n-t validated waits for the   */
   /*  caller's elapsed signal (G2); a round complete at all n --      */
   /*  the full sample, nothing left to wait for -- fires without it   */
-  /*  (G3); and a zero-budget drained instance is turn-quiescent      */
+  /*  (G3); and a zero-patience drained instance is turn-quiescent      */
   /*  (G4).                                                           */
   /* ---------------------------------------------------------------- */
 
@@ -3678,7 +3678,7 @@ main(
      * value: the round is complete at n-t = 3 validated but the sample
      * can still grow to n, so the turn is enabled and waiting is still
      * worth something -- TOLERANCE.  It fires only on the caller's
-     * budget verdict. */
+     * patience verdict. */
     unsigned long sz;
     struct bkr94acs *a;
     struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
@@ -3709,7 +3709,7 @@ main(
     CHECK(a->complete == 0, "G2: not complete");
 
     n = bkr94acsTurn(a, 0, 1, out);
-    CHECK(n > 0, "G2: turn fires once the caller's budget elapses");
+    CHECK(n > 0, "G2: turn fires once the caller's patience elapses");
     CHECK(n <= 3, "G2: turn outputs at most 3 acts");
     for (k = 0; k < n; ++k)
       if (out[k].act == BKR94ACS_ACT_BA_SEND
@@ -3730,7 +3730,7 @@ main(
   {
     /* Same construction with the fourth Fig1 accepted too: the round is
      * complete with ALL n validated, so waiting buys nothing and the
-     * turn is free -- it fires with toleranceElapsed == 0. */
+     * turn is free -- it fires with patienceElapsed == 0. */
     unsigned long sz;
     struct bkr94acs *a;
     struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
@@ -3766,7 +3766,7 @@ main(
   BANNER("G4: turns are quiescent at completion");
   /* ---------------------------------------------------------------- */
   {
-    /* A zero-budget drained convergence (runHonest turns after every
+    /* A zero-patience drained convergence (runHonest turns after every
      * delivery).  Post-decide continuation runs the turns past DECIDE
      * to the end of the round space, so at quiescence every BA is
      * either out of rounds or has no complete round left: HELD
@@ -3784,7 +3784,7 @@ main(
       runHonest(nAct, vLen, mp, acasts, 0 /*ordered*/, processes, obs);
 
       for (p = 0; p < nAct; ++p) {
-        CHECK(processes[p]->complete, "G4: the zero-budget drain converged");
+        CHECK(processes[p]->complete, "G4: the zero-patience drain converged");
         /* The same exchange G1 ran, with turns: the acts G1 never saw
          * are all here, so the HELD reading below is quiescence and
          * not an inert machine. */
@@ -4107,7 +4107,7 @@ main(
       /* THE HEAL.  The returner runs the whole application-loop
        * discipline from here: retry, turns, fanout under its own duty.
        * Its own step 2 is held only until its own A-Cast comes back
-       * accepted -- a grace that has not elapsed -- so its entry into
+       * accepted -- patience that has not elapsed -- so its entry into
        * its OWN BA is step 1's 1 and not step 2's 0.  That is the
        * interesting case for the decision check below. */
       for (tick = 0; tick < 20000; ++tick) {
@@ -5175,13 +5175,13 @@ main(
   BANNER("N1: the fairness non-invariant under a sustained rate skew");
   /* ---------------------------------------------------------------- */
   {
-    /* The SAME schedule and the SAME budget, with only the RATE of one
-     * process changed.  A budget that includes the delayed honest
+    /* The SAME schedule and the SAME patience, with only the RATE of one
+     * process changed.  A patience that includes the delayed honest
      * A-Cast when everyone runs at one rate excludes it when the
-     * cohort runs faster: the grace is spent in the FIRING process's
+     * cohort runs faster: the patience is spent in the FIRING process's
      * own completed sweeps, while the recovery it buys -- the delayed
      * instance's re-offer -- arrives at the DELAYED process's cursor
-     * rate.  Two clocks, and the budget prices only one of them.
+     * rate.  Two clocks, and the patience prices only one of them.
      *
      * The skewed process must be the delayed A-Cast's initiator.
      * Skewing an unrelated process changes neither clock and produces
@@ -5207,7 +5207,7 @@ main(
 
     /* Regression facts, per lane direction and per k.  Nothing in the
      * contract forces them, which is the point -- a sweep-denominated
-     * budget is not a fairness guarantee, and the process the skew
+     * patience is not a fairness guarantee, and the process the skew
      * lands on is the one that loses its participation. */
     CHECK(included[0] == 1,
           "N1: k=1, the delayed initiator is INCLUDED (frozen fact)");

@@ -58,7 +58,7 @@ struct bkr94acsAct out[BKR94ACS_RETRY_MAX_ACTS];           /* Retry out[] */
 struct bkr94acsAct acastAct;
 struct bracha87Retry retry;
 unsigned int retriesThisSweep = 0;
-unsigned int graceSweeps = 0;
+unsigned int patienceSpent = 0;
 int sweepDone;
 
 bracha87RetryInit(&retry);
@@ -97,7 +97,7 @@ while (!terminate) {
   for (k = 0; k < n; ++k) broadcast_action(out[k]);
 
   /* A SWEEP is one full pass of that cursor -- every sent Fig 1
-   * re-offered once -- and it is the unit the tolerance budgets
+   * re-offered once -- and it is the unit the patience
    * below and the barren-sweep abandon gate both count in, never
    * the tick.  Recompute the length each pass: it grows as the BAs
    * advance, so a budget priced in ticks would shrink in real terms
@@ -111,11 +111,11 @@ while (!terminate) {
   /* BA round turns, paced here: "wait until validate n-t
    * k-messages" is enabling evidence over a still-growing sample,
    * so the Input calls above only BANK evidence and each BA's next
-   * round is computed from the sweep.  Zero budget shown -- the
+   * round is computed from the sweep.  Zero patience shown -- the
    * literal 1 passes the verdict on every attempt, which is what
    * makes it eager; a deployment counts sweeps per BA while
    * bkr94acsTurnDuty holds TOLERANCE and passes the elapsed signal
-   * only when its budget lapses -- a fuller sample can only turn
+   * only when its patience lapses -- a fuller sample can only turn
    * coin phases into deterministic decides.  Drain, so a cascade's
    * already-earned rounds are not metered out one per tick. */
   for (p = 0; p < N; ++p)
@@ -124,18 +124,18 @@ while (!terminate) {
 
   /* BKR94 step 2, paced the same way: the n-t count is enabling
    * evidence, not a moment.  Count sweeps while the fanout is
-   * enabled and fire when the tolerance budget elapses.  The count
+   * enabled and fire when patience elapses.  The count
    * is a clock, not a latch: it re-arms whenever the duty leaves
    * TOLERANCE.  Advancing it only at a boundary costs one boundary
-   * of lag, so even TOLERANCE_BUDGET 0 here is a boundary later
-   * than the turn loop's literal 1 above.  During the grace the
+   * of lag, so even PATIENCE 0 here is a boundary later
+   * than the turn loop's literal 1 above.  While patience is consumed, the
    * retry is still re-carrying the delayed A-Casts -- the wait is
    * spent on the recovery that can make the firing unnecessary. */
   if (bkr94acsFanoutDuty(a) != BKR94ACS_DUTY_TOLERANCE)
-    graceSweeps = 0;
+    patienceSpent = 0;
   else if (sweepDone)
-    ++graceSweeps;
-  if (graceSweeps > TOLERANCE_BUDGET) {
+    ++patienceSpent;
+  if (patienceSpent > PATIENCE) {
     n = bkr94acsFanout(a, acts);   /* guarded: 0 outside TOLERANCE */
     for (k = 0; k < n; ++k) broadcast_action(acts[k]);
   }
@@ -195,12 +195,12 @@ The low-level Fig 3 and Fig 4 entry points have no dedicated examples -- they ex
 ./example_bkr94acs 4 0 joe sam sally tim        # t=0: all A-Casts included
 ./example_bkr94acs -v 7 2 alpha bravo charlie delta echo foxtrot golf
 ./example_bkr94acs -d 3 4 1 joe sam sally tim   # WAN laggard, eager: EXCLUDED (3/4) -- its value still accepted
-./example_bkr94acs -d 3 -g 8 4 1 joe sam sally tim  # same schedule, 8-sweep grace: INCLUDED (4/4), step 2 never fires
+./example_bkr94acs -d 3 -g 8 4 1 joe sam sally tim  # same schedule, 8 sweeps of patience: INCLUDED (4/4), step 2 never fires
 ```
 
-The `-d`/`-g` pair is the sweep-side pacing demonstration (`BPR.md`, *The Sweep-Side Decisions*): one delayed honest A-Cast, released at the knife edge where step 2 first enables, excluded by the eager schedule and included by the grace -- and in the eager run the late value still accepts everywhere, pinning that exclusion is participation loss, never value loss.
+The `-d`/`-g` pair is the sweep-side pacing demonstration (`BPR.md`, *The Sweep-Side Decisions*): one delayed honest A-Cast, released at the knife edge where step 2 first enables, excluded by the eager schedule and included by patience -- and in the eager run the late value still accepts everywhere, pinning that exclusion is participation loss, never value loss.
 
-The `8` is not a transferable number, and the demo is deliberately narrow about which half it exercises. The delayed A-Cast is *released* by a direct `bkr94acsAcast` onto a lossless queue, so it reaches every process at once: the budget here measures only sweeps-to-enablement, never the rate at which a Retry cursor re-carries a delayed instance. A deployment's budget has to span that rate instead -- one full cursor pass per re-offer of any particular instance -- which on a real transport is a much larger number of ticks and a much smaller number of sweeps. Size it against `bkr94acsSentFig1Count(a)`, as the *Abandonment* section sizes S, not against this example.
+The `8` is not a transferable number, and the demo is deliberately narrow about which half it exercises. The delayed A-Cast is *released* by a direct `bkr94acsAcast` onto a lossless queue, so it reaches every process at once: the patience here measures only sweeps-to-enablement, never the rate at which a Retry cursor re-carries a delayed instance. A deployment's patience has to span that rate instead -- one full cursor pass per re-offer of any particular instance -- which on a real transport is a much larger number of ticks and a much smaller number of sweeps. Size it against `bkr94acsSentFig1Count(a)`, as the *Abandonment* section sizes S, not against this example.
 
 ## Coin Choice -- Caller Responsibility
 
@@ -314,7 +314,7 @@ N A-Casts -> N Fig1(n,t,vLen) -> accept -> enter 1 in BA
 
 Per-figure contracts -- rule tables, thresholds, state, and action semantics -- are in the section banners and function documentation of `bracha87.h`; the ACS composition's are in `bkr94acs.h`. Two facts of the ACS composition are kept here:
 
-The step-2 trigger is "n-t BAs decided with output 1," not "n-t Fig 1 ACCEPTs." The two coincide in benign runs but diverge under asynchrony or Byzantine scheduling, and only the decide-1 trigger satisfies Part A case (i) of the BKR94 Lemma 2 proof. The trigger, like Fig 4's "wait until", is enabling evidence rather than a moment: the arrival paths only bank evidence, and both the step-2 fanout and each BA round turn fire from the BPR sweep under a caller-paced tolerance budget (`bkr94acsFanoutDuty` / `bkr94acsFanout`, `bkr94acsTurnDuty` / `bkr94acsTurn`; the paced loop above), a zero budget recovering the eager schedule. The reading, the two seams' different cost classes -- exclusion at the fanout, coin luck at the turn -- and the safety license are `BPR.md`'s (*The Sweep-Side Decisions*).
+The step-2 trigger is "n-t BAs decided with output 1," not "n-t Fig 1 ACCEPTs." The two coincide in benign runs but diverge under asynchrony or Byzantine scheduling, and only the decide-1 trigger satisfies Part A case (i) of the BKR94 Lemma 2 proof. The trigger, like Fig 4's "wait until", is enabling evidence rather than a moment: the arrival paths only bank evidence, and both the step-2 fanout and each BA round turn fire from the BPR sweep under caller-paced patience (`bkr94acsFanoutDuty` / `bkr94acsFanout`, `bkr94acsTurnDuty` / `bkr94acsTurn`; the paced loop above), zero patience recovering the eager schedule. The reading, the two seams' different cost classes -- exclusion at the fanout, coin luck at the turn -- and the safety license are `BPR.md`'s (*The Sweep-Side Decisions*).
 
 Every message's per-message discriminator -- the Bracha87 type, the class, and (for a BA message) the binary value plus decision flag -- packs bit-disjoint into a single byte, so an application's wire framer carries the whole discriminator in one byte and a BA message carries no payload at all. It matters because ACS is message-dense -- N reliable broadcasts plus N binary BAs, each O(phases) of O(n^2) Fig 1 traffic -- so a byte saved per message compounds across the run. The canonical bit layout (a packer contract, not a library serialization) is documented at the message-class defines in `bkr94acs.h`; the example framer, `example/bkr94acs.c`, follows it.
 
@@ -328,7 +328,7 @@ Every message's per-message discriminator -- the Bracha87 type, the class, and (
 | `test_bracha87` | Protocol white-box (bracha87) | Per-rule units, composed simulation, inline lemma/theorem assertions, Byzantine equivocation, post-decide preservation, BPR retirement invariants, the n >> 3t regime; reads internal flags directly. |
 | `test_bracha87_blackbox` | Protocol black-box (bracha87) | Header-contract drift: validity/agreement/totality, precise echo thresholds, the BPR retirement contract, array Retry -- derived from `bracha87.h` and `Bracha87.txt` only. |
 | `test_bkr94acs` | Protocol white-box (bkr94acs) | All-to-all simulation, step-2 trigger and post-decide-continuation regressions, BPR drop-convergence and Byzantine-silent canaries, EXHAUSTED handling (decide/exhaust acts drained from the sweep-side turn, as deployed); reaches into internal layout. |
-| `test_bkr94acs_blackbox` | Protocol black-box (bkr94acs) | Header-contract drift: Lemma 2 Parts A-D, Input dedup (the invariant a progress counter rests on), Retry/quiescence under drop, EXHAUSTED, equivocating A-Cast initiator, step-2 pacing (the eager schedule excludes a delayed honest A-Cast, the grace includes it, a budgeted fanout completes past a dead slot), turn pacing (deliveries alone decide nothing; TOLERANCE needs the elapsed signal, MET fires free; turns quiescent at completion) -- no `.c` reads. |
+| `test_bkr94acs_blackbox` | Protocol black-box (bkr94acs) | Header-contract drift: Lemma 2 Parts A-D, Input dedup (the invariant a progress counter rests on), Retry/quiescence under drop, EXHAUSTED, equivocating A-Cast initiator, step-2 pacing (the eager schedule excludes a delayed honest A-Cast, patience includes it, finite patience completes past a dead slot), turn pacing (deliveries alone decide nothing; TOLERANCE needs the elapsed signal, MET fires free; turns quiescent at completion) -- no `.c` reads. |
 
 The white-box / black-box pairing surfaces a different class of bug at each layer. White-box catches internal-invariant regressions (a state-machine flag set wrong, a count left unbumped). Black-box catches API contract drift -- header text and code behavior pulling apart over time. Recent contract-drift fix caught by the black-box suite: `bkr94acsAcastValue`'s ACCEPT-gate (header documented "0 if not yet accepted" but pre-fix returned ECHOED-stored bytes, exposing pre-Lemma-2 values to callers).
 

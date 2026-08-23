@@ -32,7 +32,7 @@
  * Step 2 lives on the BPR sweep: bkr94acsFanoutDuty classifies
  *   (HELD / TOLERANCE / MET) and bkr94acsFanout enters 0 into every
  *   unentered BA once the 2t+1-BAs-with-output-1 count holds and
- *   the caller's tolerance budget elapses.  The paper's "upon" is
+ *   the caller's patience elapses.  The paper's "upon" is
  *   enabling evidence, not a moment; see the bkr94acs.dtc Step 2
  *   section.
  * The BA round turn lives on the same sweep: bkr94acsBaInput only
@@ -937,8 +937,8 @@ bkr94acsRetry(
 /*  "upon" / "wait until" names the evidence that enables an action, not    */
 /*  a moment; both decisions consume evidence that is still growing when    */
 /*  it first suffices, so the caller paces each from its sweep tick,        */
-/*  counting sweeps against its tolerance budget while TOLERANCE holds.     */
-/*  A zero budget (fire whenever enabled) is the eager schedule an          */
+/*  counting sweeps against its patience while TOLERANCE holds.             */
+/*  Zero patience (fire whenever enabled) is the eager schedule an          */
 /*  earlier revision hardwired into the arrival paths.                      */
 /*--------------------------------------------------------------------------*/
 
@@ -1040,7 +1040,7 @@ unsigned int
 bkr94acsTurn(
   struct bkr94acs *a
  ,unsigned char process
- ,unsigned char toleranceElapsed
+ ,unsigned char patienceElapsed
  ,struct bkr94acsAct *out
 ){
   struct bracha87Fig4 *f4;
@@ -1064,7 +1064,7 @@ bkr94acsTurn(
   duty = bkr94acsTurnDuty(a, process);
   if (duty == BKR94ACS_DUTY_HELD)
     return (0);
-  if (duty == BKR94ACS_DUTY_TOLERANCE && !toleranceElapsed)
+  if (duty == BKR94ACS_DUTY_TOLERANCE && !patienceElapsed)
     return (0);
 
   mr = maxRounds(a);

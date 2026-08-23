@@ -58,7 +58,7 @@
  * model (unbounded finite delay, no clocks), not a moment: the
  * count makes the fanout SOUND; the caller decides WHEN, pacing it
  * from the BPR sweep (bkr94acsFanoutDuty / bkr94acsFanout).
- * Firing at the instant the count holds -- a zero tolerance budget
+ * Firing at the instant the count holds -- zero patience
  * -- closes SubSet against every honest process whose A-Cast is
  * still in flight, and under a persistent latency spread that
  * excludes the same honest processes every ACS instance.
@@ -70,7 +70,7 @@
  * the arrival path only BANKS evidence (bkr94acsBaInput stores,
  * validates, cascades); the turn fires from the BPR sweep
  * (bkr94acsTurnDuty / bkr94acsTurn), caller-paced under the same
- * tolerance discipline, and BA_DECIDED / COMPLETE / BA_EXHAUSTED
+ * patience discipline, and BA_DECIDED / COMPLETE / BA_EXHAUSTED
  * emerge from turns, never from inputs.
  *
  * Pure state machine: no I/O, no threads, no dynamic allocation.
@@ -617,14 +617,14 @@ bkr94acsRetry(
  *                            time is irrelevant -- wait.
  *   BKR94ACS_DUTY_TOLERANCE  enabled, and waiting could still
  *                            improve the outcome; the caller
- *                            counts sweeps against its tolerance
- *                            budget and fires when it elapses.
+ *                            counts sweeps against its patience
+ *                            and fires when it elapses.
  *   BKR94ACS_DUTY_MET        enabled with nothing left to wait
  *                            for; firing is free.
  *
  * Caller discipline: per decision, count completed sweeps while
  * duty is TOLERANCE; fire when the count exceeds the deployment's
- * budget.  A zero budget recovers the eager schedule an earlier
+ * patience.  Zero patience recovers the eager schedule an earlier
  * revision hardwired into the arrival paths -- provided the caller
  * evaluates the verdict on EVERY attempt, since a clock that only
  * advances at a sweep boundary fires one boundary late even at zero.
@@ -632,7 +632,7 @@ bkr94acsRetry(
  * THE UNIT IS THE FULL SWEEP -- one complete pass of the Retry
  * cursor over every sent Fig 1 instance, bkr94acsSentFig1Count(a)
  * calls, the same unit an abandonment policy counts barren sweeps
- * in.  That is what makes a grace worth anything: a pass re-offers
+ * in.  That is what makes patience worth anything: a pass re-offers
  * each sent instance exactly once, so a delayed A-Cast's INITIAL
  * goes back on the wire once per sweep.  While TOLERANCE holds, the
  * same sweeps are re-carrying that traffic, so the wait is spent on
@@ -641,13 +641,13 @@ bkr94acsRetry(
  * calls rather than passes re-offers only its own count out of
  * bkr94acsSentFig1Count and can buy nothing at all.
  *
- * Two sizings follow, neither independent of the budget:
+ * Two sizings follow, neither independent of the patience:
  *   the cursor length -- bkr94acsSentFig1Count grows as the BAs
  *     advance, so a budget priced in calls shrinks in real terms
  *     over a run while one priced in passes does not;
  *   the caller's own abandonment budget -- waiting is not progress,
- *     so a tolerance clock and a barren clock advance on the same
- *     boundaries, and a tolerance that does not expire strictly
+ *     so a patience clock and a barren clock advance on the same
+ *     boundaries, and patience that does not expire strictly
  *     before the abandon gate fires the decision into a caller that
  *     is already leaving.
  */
@@ -671,15 +671,15 @@ bkr94acsRetry(
  *   HELD       BA-output-1 count < n-t: entering 0 is unsound
  *              (Lemma 2 Part A).
  *   TOLERANCE  count holds and unentered BAs remain: each delayed
- *              A-Cast that completes during the grace enters 1 by
- *              Step 1 and leaves the unentered set.
+ *              A-Cast that completes inside the patience window
+ *              enters 1 by Step 1 and leaves the unentered set.
  *   MET        nothing unentered: moot.
  *
  * bkr94acsFanout enters 0 into every BA still unentered at the
  * call, outputting one BKR94ACS_ACT_BA_SEND per entry.  Returns 0
  * -- and changes nothing -- unless duty is TOLERANCE, so an
  * unconditional call per sweep is safe and is the simplest
- * zero-budget caller.  Firing empties the unentered set, so
+ * zero-patience caller.  Firing empties the unentered set, so
  * once-per-instance is structural.
  */
 unsigned char
@@ -721,16 +721,16 @@ bkr94acsFanout(
  *   MET        complete with all n validated: the full sample is
  *              in hand, waiting buys nothing.
  *
- * bkr94acsTurn(a, process, toleranceElapsed, out) performs at most
+ * bkr94acsTurn(a, process, patienceElapsed, out) performs at most
  * ONE round turn: fires iff duty is MET, or duty is TOLERANCE and
- * toleranceElapsed is nonzero (MET needs no elapsed signal --
+ * patienceElapsed is nonzero (MET needs no elapsed signal --
  * firing is free).  Returns acts written, 0 when it did not fire.
  * Acts: BKR94ACS_ACT_BA_SEND (the next round's INITIAL, self as
  * initiator), BKR94ACS_ACT_BA_DECIDED or BKR94ACS_ACT_BA_EXHAUSTED,
  * and BKR94ACS_ACT_COMPLETE -- at most 3; these acts emerge ONLY
  * here, never from bkr94acsBaInput.  Post-decide continuation:
  * turns continue past DECIDE until the round space is exhausted.
- * A zero-budget caller drains: while (bkr94acsTurn(a, p, 1, out))
+ * A zero-patience caller drains: while (bkr94acsTurn(a, p, 1, out))
  * per process after banking new evidence.  Cascaded validation can
  * make several successive rounds turnable at once; each turn is
  * its own call, and nothing here re-arms the caller's clock when
@@ -738,7 +738,7 @@ bkr94acsFanout(
  * cascade rather than one per round.  Re-arming per round is the
  * caller's to add and is not advised: it prices a catch-up the
  * cohort has already earned.
- * Scope the grace to UNDECIDED BAs (bkr94acsBaDecision == 0xFF):
+ * Scope patience to UNDECIDED BAs (bkr94acsBaDecision == 0xFF):
  * post-decide continuation rounds carry the pinned value and their
  * sample no longer chooses anything, while their turn feeds the
  * NEXT process's round -- holding them to the budget convoys the
@@ -755,7 +755,7 @@ unsigned int
 bkr94acsTurn(
   struct bkr94acs *
  ,unsigned char            /* process: which process's BA */
- ,unsigned char            /* toleranceElapsed: caller's budget verdict */
+ ,unsigned char            /* patienceElapsed: caller's patience verdict */
  ,struct bkr94acsAct *     /* out: room for 3 entries (BKR94ACS_MAX_ACTS covers it) */
 );
 
