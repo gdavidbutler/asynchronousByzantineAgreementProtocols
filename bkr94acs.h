@@ -547,7 +547,7 @@ bkr94acsAcast(
  * Bracha Phase Retry retry tick.
  *
  * End-to-end argument applied to BKR94 ACS (Saltzer/Reed/Clark
- * 1984; see SRC84.txt and the BPR section of README.md): the
+ * 1984; see SRC84.txt and BPR.md, the governing statement): the
  * "still owed" predicate combines Bracha's sent flags with
  * this layer's per-process BA-decided state, all of which live
  * at the BKR endpoint.
@@ -570,7 +570,7 @@ bkr94acsAcast(
  * later re-opens one instance's READY retry for the tick that
  * answers it -- so a caller that leaves the rotation on the 0
  * return must re-enter it at bkr94acs{Acast,Ba}Wants.  Termination is an application choice; the library
- * prescribes no policy (see README.md "Abandonment").
+ * prescribes no policy (see BPR.md).
  *
  * Replaces the application-layer retry bookkeeping entirely.  Per-instance
  * destination masks, per-process evidence tracking, and retry

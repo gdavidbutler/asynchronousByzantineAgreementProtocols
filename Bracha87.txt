@@ -3,6 +3,25 @@ Information and Computation 75, 130-143
 
 Four figures, three layers of abstraction.
 
+The model (Section 1, Introduction, p. 131):
+
+  We consider the following model of a distributed system. The system
+  consists of n processes that communicate by sending messages through a
+  message system. We assume a reliable message system in which no
+  messages are lost or generated. Each process can directly send
+  messages to any other process, and can identify the sender of every
+  message it receives. Up to t of the processes are faulty and may
+  deviate from the protocol. A protocol is called t-resilient if it
+  satisfies the agreement and validity requirements in the presence of
+  up to t faulty processes.
+
+On asynchrony (same section):
+
+  The other extreme is an asynchronous system in which there are no
+  bounds on message delays or relative speeds of processes. In such a
+  system, it is impossible to detect missing messages; there is no way
+  to distinguish between a "slow" message and a message not sent.
+
 Figure 1 -- The broadcast primitive. Pure mechanics.
 
   in                        condition                                     out

@@ -266,7 +266,7 @@ bracha87Fig1Value(
  * BPR - Bracha Phase Retry.
  *
  * End-to-end argument applied to Bracha (Saltzer/Reed/Clark
- * 1984; see SRC84.txt and the BPR section of README.md): the
+ * 1984; see SRC84.txt and BPR.md, the governing statement): the
  * "still owed" predicate lives at the Bracha endpoint, so
  * retransmission is placed here.
  *
@@ -939,9 +939,9 @@ bracha87Fig4Round(
 /*  retry for the one tick that answers it.                              */
 /*                                                                       */
 /*  Termination is the application's policy, not the library's,          */
-/*  which prescribes none -- see README.md "Abandonment."  Count Retry    */
-/*  calls across ticks if a policy needs sweep coverage; one sweep        */
-/*  covers every currently-sent instance once.                            */
+/*  which prescribes none -- see BPR.md.  Count Retry calls across       */
+/*  ticks if a policy needs sweep coverage; one sweep covers every       */
+/*  currently-sent instance once.                                        */
 /*                                                                       */
 /*************************************************************************/
 

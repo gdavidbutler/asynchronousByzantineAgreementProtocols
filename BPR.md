@@ -1,0 +1,178 @@
+# BPR -- Bracha Phase Retry
+
+Reliable delivery for counting-threshold broadcast over fair-loss channels, placed at the protocol endpoint.
+
+This document is the governing statement for the stratum beneath the papers' reliable-channel assumption: BPR itself, its retire gates and suppress masks, the announcements and the want/answer exchange, the sweep-side pacing of the composition's two duty seams, and the abandonment-policy shape. No published paper covers this machinery, so this document stands in for one, at the papers' own abstraction level: the mechanism is stated in protocol vocabulary, each gate carries its argument, and the code bridges to this document the way it bridges to Bracha87.txt and BKR94ACS.txt. The headers remain the API reference; *Realization in This Library* at the end maps each concept to its entry points.
+
+The posture is stated up front and never exceeded: nothing here is theorem-grade. Each gate stands on its own argument, and this repository weighs exactly two sources -- the papers, and its own testing. For what the papers cannot see, the test batteries are the review of record (*The Review of Record* below), and every claim is bounded by *The Scoped-Claim Registry*.
+
+## The Gap
+
+Bracha's correctness proofs presume a reliable message system (Section 1, the model; extracted in Bracha87.txt):
+
+> "We assume a reliable message system in which no messages are lost or generated. Each process can directly send messages to any other process, and can identify the sender of every message it receives."
+
+That assumption decomposes into three obligations. Two remain the transport's: no fabrication (the transport must not invent messages a process never sent) and sender identification (a Byzantine process must not impersonate a correct one) -- in practice, authenticated point-to-point channels. The third -- every message sent between correct processes eventually arrives -- is not satisfied by fair-loss datagrams, where a message may be silently dropped any finite number of times in transit. BPR closes exactly that third obligation: it converts "each send may be lost finitely often" into "each owed send is re-offered until retired." A transport that drops a message infinitely often is outside the model and outside every claim in this document.
+
+The closure preserves asynchrony. No wall-clock predicate appears anywhere in the mechanism: the application's retry tick IS the event, silent ticks output nothing, and the rate of retry calls bounds retry volume. The papers' correctness claims -- safety, and probabilistic termination -- are proven under arbitrary asynchrony, and BPR adds no timing assumption to them.
+
+## Placement
+
+BPR is the end-to-end argument (Saltzer/Reed/Clark 1984; SRC84.txt) applied to Bracha. The reliability function -- "deliver INITIAL/ECHO/READY despite a fair-loss network until the protocol no longer owes them" -- depends on a "still owed" predicate, and the complete knowledge behind that predicate lives only at the protocol endpoint: the sent-action flags (echoed, ready-sent), the initiator bit, the announcement evidence READY's retire reads (*Suppression and the Announcements*), and -- at the composition layer -- the per-process BA-decided state. A separate stubborn-link layer below cannot decide when to retire without being told by the protocol, which folds the function back into the endpoint anyway (SRC84's E1 correctness argument; P3(b), the lower layer has less information). So the retry runs over exactly the protocol's own state, and the application maintains no parallel structure of its own -- no destination masks, no per-process receipt tracking, no per-instance clocks; the masks and evidence the broadcast consults are library-owned protocol state, carried on messages the protocol already sends and surfaced for the caller to honor.
+
+Two boundary facts about the citation:
+
+- **SRC84 licenses placement only.** It argues where the retry lives and nothing else; no retire gate's soundness follows from it. Each gate stands on its own argument below.
+- **Lower-layer optimizations remain admissible** under SRC84's performance carve-outs (P1, P2): wire FEC, batching, inter-shard delay are tunables that bound retry frequency, never substitutes for the correctness obligation.
+
+## The Retry
+
+**State.** Retry state is intrinsic to the protocol: the sent flags (echoed, ready-sent) plus a one-bit initiator flag naming this process as the broadcast's designated initiator, and at the composition layer the per-process BA decision byte. Everything below is derived from these.
+
+**Event model.** The retry is reactive: rules fire only when called. One Retry call per tick is the caller discipline -- retrying on every delivered message floods the wire at message rate, and retrying only on idle starves under a steady honest trickle; the tick is a wire rate limit, paced in wall time precisely because correctness does not depend on its accuracy.
+
+**Units.** A *tick* is one Retry call per process. A *sweep* is one full pass of the retry cursor over every sent Fig 1 instance -- the sent-instance count of calls, recomputed each pass because the count grows as the BAs advance. The sweep is the budget unit for everything deliberate in this stratum -- the tolerance budgets at the duty seams and the barren-sweep abandon gate -- because a sweep is what re-offers every sent instance exactly once: a budget denominated in calls re-offers only its own count out of the sweep length and shrinks in real terms over a run.
+
+**Composition with the paper rules.** BPR rules consume the paper rules' outputs and sent-state flags as inputs and produce distinct retry outputs; the chain is one-directional -- BPR cannot affect a paper decision -- so an audit of paper fidelity reads only the paper rules without considering any retry rule.
+
+## Retirement
+
+The retirement principle is *minimal retry*: each sent action retires at the soonest point it is provably no longer owed to ANY correct process. The gates follow from the three message types' roles.
+
+**Roles.** INITIAL and ECHO are bootstrap-only: they exist to drive t+1 correct processes to send READY, after which ready-amplification (t+1 readys induce a ready; 2t+1 readys accept) is self-sustaining and consumes neither. READY is the amplification carrier: it is exactly what the amplification tail consumes, and retry is the only delivery mechanism the protocol has for getting it there under loss. The load-bearing amplification fact: ACCEPTED witnesses 2t+1 readys, of which at least t+1 are correct and retried forever, so every correct process eventually reaches accept on readys alone.
+
+**INITIAL** (initiator only) retires at ACCEPTED, or at all-echoed (an echo observed from every one of the n processes). ACCEPTED establishes the t+1 correct readys that finish the protocol without any INITIAL; all-echoed leaves nothing for an INITIAL to induce, since INITIAL only induces echoes.
+
+**ECHO** retires at ACCEPTED, by the same amplification argument: past t+1 correct readys, no process consumes an echo.
+
+**The forbidden weaker gate** is "stop INITIAL once locally echoed." At the n = 3t+1 boundary the echo threshold (n+t)/2 + 1 equals the count of honest processes, so at local-echo time no readys may exist yet -- the rescue set is not established -- and an honest process that missed the bootstrap can be left one echo short forever; only the initiator can break it. Both retained stops are strictly stronger than local echo. Under up to t silent processes all-echoed is unreachable, so that path self-disables and ACCEPTED alone carries the retirement.
+
+**READY never retires on local state.** An accepted process still owes its READY to processes below the 2t+1 threshold -- local accept is evidence about this process, and the carrier is owed to the others. The "ACCEPTED, so stop retrying READY" optimization strands slow processes; it is the asymmetry with the bootstrap gates: ACCEPTED retires INITIAL and ECHO but must never retire READY.
+
+**READY retires only on a remote pair of facts, held for every process:** it has accepted, AND it holds this instance's accept. "q has accepted" and "q holds my accept" are different facts, and only the READY this process is already retrying carries the second one. Suppressing on the first alone silences the announcement q is waiting for, so q's own gate stands one bit short forever -- a state reachable with no loss at all, by nothing more than a cursor phase offset. When the pair holds for all n, no process consumes a ready anywhere and no process is owed an announcement: genuine quiescence, the retry's success-side ending. Below all n, the same evidence drops READY per process.
+
+## Suppression and the Announcements
+
+The whole-action retires above are all-or-nothing across n recipients. Each retry action also carries a per-process suppress mask naming the processes that provably no longer consume it, so the broadcast drops a fast process the moment IT crosses, not when the last process does:
+
+- INITIAL is suppressed to processes that have echoed (nothing left to induce there);
+- ECHO is suppressed to processes that have sent READY -- readied, not merely echoed, because an echoed-but-not-readied process still consumes echoes toward its ready threshold;
+- READY is suppressed to processes for which the remote pair of facts holds: accepted, and holding this instance's accept.
+
+READY's per-process retire point is wire-silent in base Bracha -- nothing in the paper's messages says "I have accepted" -- so the mechanism adds two annotations that ride the READY the protocol is already retrying, costing no additional messages:
+
+**The accept announcement.** An accepted process marks its outgoing READYs; the receiver records the announcing sender as accepted. The announcement is recorded after the READY's normal input processing, so the accepted set stays a subset of the readied set. A process also records its own accept locally, so the quiescence count can reach n.
+
+**The answer annotation and the want.** A READY carrying the answer annotation says "I have recorded YOUR accept"; one arriving without it is a *want* -- its sender would have suppressed this process had it recorded the accept, so its absence is the sender saying "I have not." A want un-suppresses that sender for the next READY egress, which answers it with the annotation set. Answers never arm a want in return -- the annotation is the discriminator that keeps the exchange from ping-ponging; without it an answer is byte-identical to a request and the honest run never falls silent. A want cannot ride the normal input path: a wanter's re-sent READY is a duplicate, which input dedup consumes before any post-accept region -- so the want is read off the arriving message by the caller, exactly as the accept announcement is.
+
+**Caller obligation.** A caller that drops an instance from its retry rotation on the quiescent 0 return must put it back when a want arrives. Only a tick can answer, and a want is exactly the evidence that something is still owed; skipping the re-entry costs nothing while nothing is lost, and forfeits the whole fair-loss recovery the moment an answer is dropped -- the wanter then re-asks forever into a process that has stopped listening.
+
+**Byzantine safety of the annotations.** A forged accept announcement marks only its own sender: it retires this process's retry toward the liar -- which harms only the liar -- and can never strand a correct laggard, whose bit is set solely by its own true announcement. The all-n quiescence gate requires every CORRECT process's true accept regardless of what up to t Byzantine processes claim. No count-threshold shortcut ("2t+1 announced, stop") is admissible: up to t forgeries plus a partial correct set could trip it while a correct process is still below its ready threshold. A forged want is equally contained: an arm only un-suppresses its own sender, so the forger buys one masked READY per tick aimed at itself -- the same standing an announcement it never sends already has -- and can neither delay nor displace anything owed to a correct process.
+
+## Quiescence
+
+Quiescence is the state where every process has accepted and none is owed an announcement -- the READY suppress evidence covering all n -- at which point the retry owes nothing to anyone and a full sweep returns 0. It is the success-side retire of the retry itself, distinct from the protocol's success signals (which are not stops) and from abandonment (which is the policy's exit).
+
+Under fair loss quiescence is REACHABLE, not guaranteed: a lost answer leaves the wanter's evidence unchanged, so its re-asks persist at its own tick rate, each re-arms, each is re-answered, and fair loss delivers one eventually. What can block the gate forever is a residue no annotation can reach. The honest class is the process that leaves before its accept announcement ever goes out -- one that abandons early, or never announces at all; it is safe, because it can persist only once every correct process has accepted, and its cost is an unconsumed READY retry, not a correctness loss. A Byzantine process that announced and then keeps re-arming holds the gate open at the price already named in *Suppression and the Announcements* -- one masked READY per tick aimed at itself, nothing owed to a correct process delayed. The scope matters in both directions: a process that announces its accept and THEN leaves lets the others quiesce -- their evidence fills on the announcement and no want ever arms -- so the honest residue class is exactly the never-announcer. The application's abandonment policy remains the backstop for it.
+
+Quiescence is per-instance evidence, not a return value. The ending claim -- this instance has retired READY -- is its announcement-and-answer evidence covering all n, and the sweep's 0 return is a weaker derived fact: a machine carrying the forbidden local-accept retire produces the same 0. A checker reads the evidence; it does not infer it.
+
+## The Composition Layer
+
+The ACS composition owns all its Fig 1 instances (n A-Cast instances; BAs by process x round x initiator), and its retry walks them with a single cursor, outputting one instance's retries per call -- which is what makes the sweep a well-defined unit there.
+
+The composition adds one gate of its own, the **per-process verdict gate**, decided from the local BA state for the A-Cast instance being walked:
+
+- *undecided* -> retry: other honest processes may still learn Q(j) = 1, and their Fig 1 needs these echoes and readys;
+- *decided 1* -> retry: post-decide continuation -- processes that have not yet observed the accept still need the traffic, else their BA can go to 0 via step 2 and cross-process SubSet agreement breaks;
+- *exhausted* -> retry: no decision was made; other processes may still benefit from earlier-round traffic;
+- *decided 0* -> skip: the process is excluded from SubSet and step 2 has already conveyed this process's enter. The gate itself is the retire: completion of the announcement evidence is not owed for a gated instance, and its evidence may stay short for good. The gate outranks the want/answer exchange.
+
+The "still owed" predicate at this layer therefore combines Bracha's sent flags with the BA-decided state -- both live at this endpoint, which is the placement argument applied a second time.
+
+## The Sweep-Side Decisions
+
+In the papers' asynchronous model (unbounded finite delay, no clocks) a rule's "upon" / "wait until" names the evidence that ENABLES an action, never the moment it is taken -- the model has no moments. Two of the composition's decisions consume evidence that is still growing when it first suffices, so their firing is paced by the caller from the retry sweep, the deployment's only time-like notion. Both classify with one trichotomy:
+
+- **HELD** -- not enabled: firing now would be unsound or is impossible; elapsed time is irrelevant.
+- **TOLERANCE** -- enabled, and waiting could still improve the outcome; the caller counts completed sweeps against its tolerance budget and fires when it elapses.
+- **MET** -- enabled with nothing left to wait for; firing is free.
+
+A zero budget recovers the eager schedule, provided the verdict is evaluated on every attempt -- a clock advanced only at sweep boundaries fires one boundary late even at zero.
+
+**Seam 1 -- the step-2 fanout.** BKR94's rule: upon n-t BA outputs of 1, enter 0 into every unentered BA. (The trigger is BA-outputs-1, never "n-t accepts" -- the two diverge under asynchrony and only the former satisfies the paper's Lemma 2 Part A case (i).) Fired at the instant the local count crosses, the fastest n-t processes close SubSet against every honest process whose A-Cast is still in flight, and under a persistent latency spread the SAME honest processes are excluded from every ACS instance -- a cost invisible in the paper's own one-shot use and real in a deployment that runs ACS round after round over the same cohort. During the grace, the same sweeps are re-carrying the delayed A-Casts, so the wait is spent on exactly the recovery that can make the firing unnecessary.
+
+**Seam 2 -- the BA round turn.** Bracha's Fig 4 steps read "wait until validate n-t k-messages" and then compute over the validated set, which keeps growing past n-t; the proofs hold for ANY sample of at least n-t, so the sample a round consumes is purely a function of when the turn fires. The arrival path only banks evidence; each BA's next round is computed from the sweep. The eager cost here is coin luck, not exclusion -- a late message still validates the next round -- which is why the turn's budget is pure tuning while the fanout's guards fairness. At the decide step the gain is one-directional (the decide/adopt counts are monotone thresholds; a fuller sample can only convert coin phases into deterministic decides); the phase-opening majority is a comparison a fuller sample can flip, and both outcomes are proof-covered, so the flip trades between sound broadcasts, never against safety.
+
+**The safety license, and its one-sidedness.** Deferring an enabled firing costs liveness only, never safety -- on each seam's own ground. The turn's ground is the sample: a paced turn consumes a superset of the eager sample, and the proofs hold for any sample of at least n-t. The fanout's ground is the paper's own reading: the proof consumes only that the 0-inputs are eventually entered once the count holds, and the count is monotone. The license covers exactly these two seams: step-1 enter-1 remains arrival-eager, and no pacing claim attaches to it.
+
+**Budget discipline.** Budgets are sweep-denominated (the unit definitions are under *The Retry*). A tolerance must elapse strictly before the abandonment gate would fire, or the decision lands in a caller that is already leaving -- the two clocks advance on the same boundaries and waiting is not progress. The grace is scoped to undecided BAs: post-decide continuation rounds choose nothing while their turns feed the next process's round, so holding them to a budget convoys the whole cohort.
+
+**The unit is local.** A sweep-denominated grace counts the FIRING process's completed passes while a delayed instance is re-carried at the cursor's rate, so it is not fairness-invariant across sustained rate skew: the same honest A-Cast a budget includes at matched rates is excluded when the firing processes sweep faster, their budget elapsing inside less recovery. Claimed: a grace buys one re-offer of every sent instance per counted sweep. Not claimed: that a fixed budget admits the same processes across heterogeneous sweep rates.
+
+## Termination and Abandonment
+
+Under arbitrary asynchrony the protocol can give the application evidence of progress; it can never give evidence of death or evidence that stopping is safe. A dead process and a slow one present the same evidence stream, and under unbounded latency no process can know that another no longer needs its messages. What remains is exactly one sound policy shape: watch the evidence of progress and give up -- **abandon** -- after enough consecutive protocol steps without any.
+
+A run has exactly one exit -- abandon -- and the markers on the way there are not stops. EXHAUSTED (a BA consumed its round encoding) means that BA will never decide and completion is unreachable; the loop keeps draining and ticking, no unilateral substitute decision is permitted, and the event is surfaced as the failure cause when the gate fires. COMPLETE is the success marker; post-decide continuation requires broadcasting past it, so even a successful run leaves through the gate -- or through quiescence, where the retry itself has nothing left to owe.
+
+**Progress is narrow, and the narrowness is load-bearing.** Progress is an input that returns actions (duplicate deliveries -- including every retransmission -- return nothing, which is what makes a progress counter stable under retry noise), a decision, or a completion, plus any application-level first-arrivals the deployment chooses to count. Never the retry egress, and never the sweep-side machinery's routine sends: post-decide continuation outputs BA sends every sweep until the round space is spent, so a wider definition holds the gate open against a correct machine.
+
+**The gate counts sweeps, never wall time.** A sweep that ends with no progress observed is *barren*; the policy is one knob -- abandon after S consecutive barren sweeps -- and reaching COMPLETE first is the success flavor of the same question. Wall time has exactly one legitimate role, pacing the tick; driving abandonment off wall time encodes a synchrony bound the protocol does not assume and silently converts a high-latency deployment into a failing one. Counting sweeps makes the policy commensurate with the protocol: a slow run takes more wall time per sweep but the same number of sweeps. Worst-case time to the gate is computable in advance -- S x sweep length x tick -- and the sweep length is bounded by the instance space.
+
+**Evidence is local by construction.** The policy reads only the local stream, and asynchrony makes opposite local outcomes simultaneously correct. A partitioned process sees exactly what an arbitrarily slow one sees -- nothing fresh, barren count climbing -- so the policy must not try to distinguish them; the side still holding n-t correct processes runs to completion without it -- its A-Cast included or excluded by how far it had spread before the cut, the survivors agreeing either way -- and if the cut heals while survivors still tick, their never-retired READY carries the returner to the same subset (READY alone suffices: the value rides with it and the t+1-readys rule re-bootstraps the missed INITIAL and ECHO). Under an asymmetric cut, a receive-only process can run to COMPLETE with the agreed subset -- its own unheard A-Cast excluded everywhere, including at itself -- while everyone else counts it silent, and a send-only process feeds everyone -- its A-Cast possibly agreed on by all -- while itself observing pure barrenness and abandoning; both behaved correctly, and no protocol signal exists to reconcile them.
+
+**The Byzantine stretch is bounded.** Up to t silent processes cost only the retry tail -- every all-n gate stays open toward them until abandonment, which is correct, since a silent process is indistinguishable from a laggard that still needs the traffic and per-process suppression has already dropped everyone who crossed. The mirror threat aims at the gate itself: a Byzantine process feeding genuinely fresh acts that lead nowhere, each resetting the barren count. Its supply is finite -- per-sender dedup admits one echo and one ready per sender per instance, and the instance space is finite -- so up to t such processes stretch the gate but cannot hold it open. The bound rests on dedup being value-blind: a repeated sender registers nothing regardless of content bytes, so a same-sender echo carrying different content contributes nothing; a dedup keyed on (sender, content) reopens the supply. Budget S knowing the stretch is part of the adversary's allowance; the threat lands in the policy, never in agreement.
+
+**Staggered start is the realistic case, not an edge.** A process that starts late is, until its first message, byte-identical to a dead one -- and the others' retries are precisely the bootstrap it missed. The only thing that can kill a legitimately late run is the abandon gate itself; patience costs wall time only, while a too-tight gate converts a slow deployment into a failed one.
+
+## The Review of Record
+
+For the stratum this document governs, the papers cannot review -- the machinery lives below their floor -- and this repository weighs only the papers and its own testing. Four instrument classes therefore stand behind the claims below, and their division of labor is part of each claim's meaning:
+
+- **Paired white-box / black-box suites per module.** White-box arms witness internal invariants; black-box arms derive every case from the header and paper extract alone, so header text and code behavior cannot drift apart silently. Where a claim names a detector, black-box means the claim is a contract; white-box means it is an implementation invariant.
+- **The schedule explorer** (`test/test_schedules.c`): bounded reachability over the two example loops' state graphs under adversarial delivery order and delay, with a per-transition oracle and a terminal battery. Its frozen state and edge counts are regression constants -- sensitivity to change, never proof of order-independence; no configuration closes its graph.
+- **The mutant tier** (`test/mutants.sh`): anchored single defects, each graded against one designated printed check label with the kill path argued in the entry before the grade is trusted. Grades are reported separately and never folded -- a crash is not a kill, an identical binary is not a survivor, and INVISIBLE is a recorded fact, not a gap papered over.
+- **The examples**, which demonstrate the caller discipline the claims assume. They define nothing (the headers do), and their run caps are harness guards carrying no evidence: one caps sweeps, one caps ticks, and neither cap is the abandonment policy -- harmless precisely because neither is a claim.
+
+A detection claim below means a designated arm goes red against a machine carrying that defect, and that red has been witnessed against a defective machine rather than assumed. An invisibility declaration means the battery, at the configurations it actually runs, cannot distinguish the defective machine from the correct one -- and the declaration is scoped to exactly that reach, never lifted to configurations the battery does not run.
+
+## The Scoped-Claim Registry
+
+Each entry: the claim, the scope it holds at, and where its teeth are. The scope sentences are load-bearing: some exist because the unscoped form of the claim fails against the correct machine; the rest name the dependency the claim rests on -- drop the scope and the claim stated is no longer the one the review established.
+
+**Quiescence is per-instance evidence, not a return value.** The ending claim -- a sent instance has retired READY -- is its announcement-and-answer evidence covering all n, readable through the const accessors; the sweep's 0 return is the weaker derived fact a machine with the forbidden local-accept retire also produces. Scope: the evidence claim covers the instances the retry still serves. Under the decided-0 verdict gate an excluded A-Cast's evidence can stay permanently short while its value is accepted everywhere -- ratified design, since the gate outranks the want/answer exchange -- so a checker asserting full evidence over gated instances reds against the correct machine.
+
+**Deferral at the duty seams is safety-free, and the license is one-sided.** Deferral costs liveness only, never safety -- the turn because a paced firing consumes a superset of the eager sample and any sample of at least n-t is proof-covered, the fanout because the proof consumes only that the 0-inputs are eventually entered once the count holds. Scope: the license covers exactly the two duty seams; step-1 enter-1 remains arrival-eager, and no pacing claim attaches to it. At the phase-opening majority a fuller sample can flip a comparison rather than tighten a threshold -- both outcomes proof-covered, the flip trading between sound broadcasts.
+
+**The Byzantine fresh-act supply is bounded, and the bound rests on value-blind dedup.** Scope: the bound depends on a repeated sender registering nothing regardless of content bytes; a dedup keyed on (sender, content) reopens the supply. The derived act ceiling is a bound, not a count; its regression teeth are the frozen observed counts in the black-box suite.
+
+**The barren gate is reachable on a correct machine only under the narrow progress definition.** Scope: progress excludes the retry egress and the sweep-side machinery's routine sends; post-decide continuation outputs BA sends every sweep until the round space is spent, so a wider definition holds the gate open against a correct machine.
+
+**An exhausted BA never counts as decided -- and the claim is standing, not momentary.** The exhaustion sentinel is excluded from the completion count, so completion is unreachable past exhaustion, permanently, re-checkable after any further input. Scope: the exclusion is separable from the rest of the machine's behavior only in the state where the sentinel is the last entry missing from the count; a drive that exhausts one BA while others remain undecided witnesses nothing about it.
+
+**The after-COMPLETE residue is the never-announcer.** The residue sentence: a process that abandons early, or one that never announces at all, holds every other process's gate open forever. Scope: the sentence holds only when the leaving precedes the accept announcement -- a process that announces its accept and then leaves lets the others quiesce, their evidence filling on the announcement with no want ever armed.
+
+**Threshold correctness is a unit property; the lowered direction is invisible end-to-end.** A raised echo threshold breaks convergence and is visible everywhere. A lowered one is invisible to every end-to-end arm and every equivocation arm under honest operation: all correct processes cross on the same value, so the defect is a false accept of the right value. Scope: detection in the lowered direction belongs solely to the both-sided unit threshold arms (`testFig1Thresholds` in the white-box suite; the precise echo-threshold contract arms in the black-box suite), and any future battery must keep them.
+
+## Declared Invisible
+
+Defect classes the battery cannot see, declared so their absence from the grade sheet is a recorded fact rather than silence. Each declaration is scoped to the battery's actual reach.
+
+- **Counter-width narrowing at the 256-process ceiling.** A count compared against the actual process count must hold 256 -- one past a byte -- so narrowing such a count to a byte makes its comparison unfirable at 256 processes. No oracle reaches it: the battery's largest configuration is 37 processes, and at battery sizes the narrowed machine is behaviorally identical, so even frozen-count sensitivity is silent. The guard is the standing design rule -- store such counts wider or, better, derive them by scan -- enforced in review, not by a test.
+- **The containment half of the annotation discipline.** That a forged announcement or want buys the forger only its own suppression or one aimed reply, and can never strand or displace what is owed to a correct process, stands on the argument at the gate (*Suppression and the Announcements*). No arm forges an annotation against a machine weakened only in containment; the property is argued, not battery-detected.
+
+## The Abandon Boundary
+
+Abandonment is the single exit, and everything deliberate this stratum does about time sits strictly inside it. The tolerance windows at the two duty seams are proceed-without decisions taken before abandon, denominated in the same sweeps the barren gate counts, and covered by the one-sided safety license; a tolerance that has not elapsed strictly before the abandon gate fires its decision into a caller that is already leaving. Quiescence is the retry's own success-side retire, not a policy exit. Any further deliberate deferral this stratum ever takes owes the same three things before it exists: a place strictly before abandon, the sweep as its unit, and its own deferral-costs-liveness-only argument on the grade of the two above -- a superset of the eager sample, or a proof that consumes only eventual firing -- or it gets no safety license at all.
+
+## Realization in This Library
+
+The bridge from this document to the code, in the same spirit as the paper extracts' theorem-to-test mappings. The headers carry the per-function contracts; the `.dtc` text sections record the design intent of the rules kept out of the merged dispatch.
+
+- The retry and its gates: `bracha87Fig1Bpr` (per-instance), `bracha87Fig1RetryStep` (caller-owned array), `bkr94acsRetry` (the composition's cursor) -- the retry banner in `bracha87.h` states the retire gates; the BPR text sections in `bracha87Fig1.dtc` and `bkr94acs.dtc` record why the initiator INITIAL rule and the verdict gate live as C guards outside the dispatch.
+- Suppression and the annotations: `bracha87Fig1Skip` / `bracha87Fig1Answer` and the `.skip` / `.answer` act fields; the accept announcement via `bracha87Fig1ProcessAccepted` and `bkr94acs{Acast,Ba}Accepted`; the want via `bracha87Fig1ProcessWants` and `bkr94acs{Acast,Ba}Wants`; the wire bits are the packer contract at the message-class defines in `bkr94acs.h`.
+- Quiescence evidence: the const instance accessors (`bkr94acsAcastFig1` / `bkr94acsBaFig1` composed with the `bracha87Fig1` readers).
+- The sweep-side seams: `bkr94acsFanoutDuty` / `bkr94acsFanout`, `bkr94acsTurnDuty` / `bkr94acsTurn`, and the sweep-side banner in `bkr94acs.h` -- the duty trichotomy and budget discipline stated there are this document's *The Sweep-Side Decisions*.
+- The application loop shape and the abandonment policy's deployment framing: README.md (*Bracha Phase Retry*, *Abandonment*); the examples demonstrate both endings -- quiescence, and a cap ending the run in the policy's place (a harness guard, not the policy).
+- The review instruments: `test/` -- the paired suites, `test/test_schedules.c`, `test/mutants.sh`.
