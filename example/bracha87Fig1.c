@@ -55,10 +55,11 @@
  *
  * How a run ends -- the taxonomy, and which half this demo shows:
  *
- *   QUIESCENT   the proof stop, demonstrated here.  Every process
+ *   QUIESCENT   the owing ending (BPR.md Quiescence), demonstrated
+ *               here -- no exit decision at all.  Every process
  *               announces its own accept on the READY it is already
  *               retrying (the ACCEPTED wire bit below) and confirms
- *               the ones it has recorded (the ANSWER bit), so each
+ *               the ones it has recorded (the RECEIVED bit), so each
  *               instance's suppress mask reaches all n, READY retires
  *               with it, and a full bracha87Fig1RetryStep pass owes
  *               nothing -- the 0 return.  The process leaves the
@@ -80,8 +81,8 @@
  *
  * Deliberately not exercised: loss itself.  A lost announcement no
  * longer strands the process that missed it -- its next (ready, v)
- * arrives here without the answer annotation, which is a want, and
- * the next tick re-answers it -- but every re-answer in this demo is
+ * arrives here unmarked, un-suppressing it for the next tick's
+ * marked re-send -- but every marked re-send in this demo is
  * delivered, so nothing here shows the retry that fair loss needs.
  *
  * Usage:
@@ -103,8 +104,9 @@
 /*
  * Harness guard on the sweep rotation.  A run whose instances can
  * quiesce needs a handful of sweeps; this only bounds one that
- * cannot (a `-b split` that stalls the cascade below the echo
- * threshold).  It is not a protocol quantity.
+ * cannot (a `-b split` that leaves the echo count below threshold,
+ * so no correct process ever accepts).  It is not a protocol
+ * quantity.
  */
 #define SWEEP_CAP 1000
 
@@ -120,15 +122,16 @@
 #define WIRE_ACCEPTED 0x10
 
 /*
- * This demo's wire ANSWER bit, bit 5 where the ACS packer reserves
- * BKR94ACS_ANSWERED.  Decided per RECIPIENT, not per sender: set on a
- * (ready, v) to process j iff bit j is in the instance's answer mask
- * (bracha87Fig1Answer / struct bracha87Fig1Act.answer), meaning "I have
+ * This demo's wire RECEIVED bit, bit 5 where the ACS packer reserves
+ * BKR94ACS_RECEIVED.  Decided per RECIPIENT, not per sender: set on a
+ * (ready, v) to process j iff bit j is in the instance's RECEIVED mask
+ * (bracha87Fig1Received / struct bracha87Fig1Act.received), meaning "I have
  * recorded YOUR accept."  Its ABSENCE is what the receiver acts on --
- * bracha87Fig1ProcessWants on ingress -- so a framer that drops this bit
- * turns every answer into a request and the exchange never settles.
+ * bracha87Fig1ProcessResend on ingress -- so a framer that drops this bit
+ * makes every READY unmarked, every receiver re-arms, and the honest
+ * run never falls silent.
  */
-#define WIRE_ANSWERED 0x20
+#define WIRE_RECEIVED 0x20
 
 /*--------------------------------------------------------------------------*/
 /*  Message queue                                                           */
@@ -136,7 +139,7 @@
 
 struct msg {
   unsigned char type;     /* wire byte: BRACHA87_INITIAL / ECHO / READY
-                           * in bits 0-1, + WIRE_ACCEPTED / WIRE_ANSWERED
+                           * in bits 0-1, + WIRE_ACCEPTED / WIRE_RECEIVED
                            * on a READY */
   unsigned char from;
   unsigned char to;
@@ -173,7 +176,7 @@ static void
 qPush(
   unsigned char type
  ,unsigned char accepted  /* READY only: act's .accepted -> WIRE_ACCEPTED */
- ,unsigned char answered  /* READY only: answer mask bit 'to' -> WIRE_ANSWERED */
+ ,unsigned char received  /* READY only: RECEIVED mask bit 'to' -> WIRE_RECEIVED */
  ,unsigned char from
  ,unsigned char to
  ,const unsigned char *value
@@ -181,7 +184,7 @@ qPush(
   if (Qtail >= Qcap)
     return;
   MsgQ[Qtail].type = (unsigned char)(type | (accepted ? WIRE_ACCEPTED : 0)
-                                          | (answered ? WIRE_ANSWERED : 0));
+                                          | (received ? WIRE_RECEIVED : 0));
   MsgQ[Qtail].from = from;
   MsgQ[Qtail].to = to;
   memcpy(MsgQ[Qtail].value, value, Vlen);
@@ -401,7 +404,7 @@ main(
   /*  Allocate message queue                                              */
   /*                                                                      */
   /*  One broadcast round is 3 * n^2 messages (INITIAL/ECHO/READY from    */
-  /*  n processes to n processes); the retry tick re-offers un-retired    */
+  /*  n processes to n processes); the retry tick re-sends un-retired     */
   /*  actions, so size the queue with headroom for those sweeps.          */
   /*----------------------------------------------------------------------*/
 
@@ -534,23 +537,25 @@ main(
         bracha87Fig1ProcessAccepted(f1, m->from);
 
       /*
-       * ANSWER-annotation ingress, the other half of the same retire: a
-       * (ready, v) WITHOUT the bit is its sender saying it has not
+       * RECEIVED-annotation ingress, the other half of the same retire:
+       * a (ready, v) WITHOUT the bit is its sender showing it has not
        * recorded our accept -- it would have suppressed us otherwise --
-       * so un-suppress it for the next tick, which answers with the bit
-       * set.  Never route one that HAS the bit: an answer that armed a
-       * want would ping-pong, and the two would never fall silent.
+       * so un-suppress it for the next tick, whose re-send goes out
+       * marked.  Never route one that HAS the bit: a marked READY that
+       * re-armed its receiver would ping-pong, and the two would never
+       * fall silent.
        */
-      if (type == BRACHA87_READY && !(m->type & WIRE_ANSWERED)) {
-        bracha87Fig1ProcessWants(f1, m->from);
+      if (type == BRACHA87_READY && !(m->type & WIRE_RECEIVED)) {
+        bracha87Fig1ProcessResend(f1, m->from);
         /*
          * Leaving the rotation is PROVISIONAL, and this is the whole
-         * reason ingress stays open: a want is evidence that something
-         * IS still owed, and a process that has stopped ticking can
-         * never answer it.  Re-enter.  Under loss this is the path that
-         * makes quiescence reachable rather than merely hoped for -- a
-         * lost answer is re-requested by the next poke, and the poke is
-         * worthless if nobody is left to hear it.
+         * reason ingress stays open: an unmarked READY is evidence that
+         * something IS still owed, and a process that has stopped
+         * ticking can never re-send marked.  Re-enter.  Under loss this
+         * is the path that makes quiescence reachable rather than
+         * merely hoped for -- a lost marked re-send is drawn again by
+         * the next unmarked one, and the unmarked one is worthless if
+         * nobody is left to hear it.
          */
         if (quiescent[m->to]) {
           quiescent[m->to] = 0;
@@ -588,18 +593,18 @@ main(
         }
         {
           const unsigned char *skip;
-          const unsigned char *answer;
+          const unsigned char *received;
 
           skip = bracha87Fig1Skip(f1, out[k]);
-          answer = (out[k] == BRACHA87_READY_ALL)
-                   ? bracha87Fig1Answer(f1) : 0;
+          received = (out[k] == BRACHA87_READY_ALL)
+                   ? bracha87Fig1Received(f1) : 0;
           for (j = 0; j < n; ++j) {
             if (skip && BRACHA87_SKIP_TST(skip, j))
               continue;
             qPush((out[k] == BRACHA87_ECHO_ALL)
                     ? BRACHA87_ECHO : BRACHA87_READY,
                   0,
-                  answer && BRACHA87_SKIP_TST(answer, j),
+                  received && BRACHA87_SKIP_TST(received, j),
                   m->to, (unsigned char)j, cv);
           }
         }
@@ -645,8 +650,8 @@ main(
               : pacts[p].act == BRACHA87_ECHO_ALL    ? BRACHA87_ECHO
               :                                        BRACHA87_READY,
                 pacts[p].accepted,
-                pacts[p].answer
-                  && BRACHA87_SKIP_TST(pacts[p].answer, j),
+                pacts[p].received
+                  && BRACHA87_SKIP_TST(pacts[p].received, j),
                 (unsigned char)i, (unsigned char)j,
                 pacts[p].value);
         }

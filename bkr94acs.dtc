@@ -19,9 +19,11 @@
 #
 # In this deployment Q(j) = 1 means P_j has broadcast a value,
 # realized by Bracha87's Figure 1 accepting the reliable
-# broadcast of P_j's A-Cast.  Bracha's Lemma 4 makes this
+# broadcast of P_j's A-Cast.  Bracha's Lemma 3 makes this
 # realization satisfy BKR94's assumption (2) on Q (if any honest
-# accepts, every honest eventually accepts).  Q is application-
+# accepts, every honest eventually accepts), and Lemma 4 makes
+# it satisfy assumption (1) (an honest P_j's broadcast is
+# accepted at every honest process).  Q is application-
 # supplied and BKR94's own MPC construction instantiated it
 # differently, so this choice is recorded in bkr94acsToC.dtc and
 # is not a paper concern.
@@ -71,8 +73,8 @@
 # ================================================================
 
 # Rule 1.  When Q(j) = 1 becomes known to me, if I have not
-# entered a value to BA_j, input 1 to BA_j.  BKR94 Lemma 4 (via
-# the underlying reliable broadcast) guarantees that every
+# entered a value to BA_j, input 1 to BA_j.  Bracha's Lemma 3
+# (via the underlying reliable broadcast) guarantees that every
 # honest process eventually learns Q(j) = 1 if any does, so
 # every honest process eventually executes Rule 1 for j.
 @"input 1 to BA_j","kind of ACS event","input to BA_j"
@@ -98,7 +100,7 @@ no,"BA_j outputs 1",
 # honest process whose A-Cast is still in flight, and under a
 # persistent latency spread the same honest processes are excluded
 # every ACS instance.  Nothing in the model compels that
-# eagerness; the deployment's answer to unbounded latency is the
+# eagerness; the deployment's remedy for unbounded latency is the
 # BPR sweep, so the firing lives there, beside the retry/retire
 # decisions that already do.
 #

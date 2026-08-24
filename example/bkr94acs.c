@@ -40,19 +40,21 @@
  *
  * How a run ends -- the taxonomy, and which half this demo shows:
  *
- *   QUIESCENT   the proof stop, demonstrated here, per process on
+ *   QUIESCENT   the owing ending (BPR.md Quiescence -- no exit
+ *               decision at all), demonstrated here, per process on
  *               its OWN evidence: a bkr94acsRetry pass past its
  *               A-Cast owes nothing, so it leaves the retry
  *               rotation.  Completion is then an assertion the
  *               results section checks, not the gate.  Reaching it
  *               needs both READY annotations round-tripped below --
- *               ACCEPTED for "I have accepted", ANSWERED for "I have
+ *               ACCEPTED for "I have accepted", RECEIVED for "I have
  *               yours" -- since suppressing on the first alone
  *               silences the announcement the other end waits for.
  *   ABANDONED   the policy backstop (README.md "Abandonment"), which
  *               reads the ABSENCE of progress and therefore cannot
- *               tell a laggard from a corpse.  Under loss it is the
- *               only exit a process that never hears an answer has.
+ *               tell a laggard from a dead process.  Under loss it
+ *               is the only exit a process whose owed evidence
+ *               never arrives has.
  *               This demo loses nothing, so it never takes it.
  *   tick cap    a harness guard, not protocol: a bound on the
  *               rotation, carrying no evidence of anything.
@@ -91,11 +93,11 @@
  *     equivocator's A-Cast is INCLUDED.
  *   ./example_bkr94acs -b poke 4 1 joe sam sally tim
  *     process 0 participates honestly through COMPLETE, then forever
- *     re-sends READYs stripped of the ANSWERED annotation.  Each poke
- *     re-arms an answer aimed only at the poker, and is a duplicate
- *     READY that Input returns 0 acts for: it defeats the quiescence
- *     ending without touching the progress evidence a barren-sweep
- *     policy reads.
+ *     re-sends READYs stripped of the RECEIVED annotation.  Each poke
+ *     re-arms one marked re-send aimed only at the poker, and is a
+ *     duplicate READY that Input returns 0 acts for: it defeats the
+ *     quiescence ending without touching the progress evidence a
+ *     barren-sweep policy reads.
  *
  * The sweep-side pacing pair (-d names the WAN laggard, -g the patience,
  * in COMPLETED BPR SWEEPS -- full passes of the Retry cursor, the
@@ -107,7 +109,7 @@
  *   ./example_bkr94acs -d 3 -g 1 4 1 joe sam sally tim
  *     the identical schedule under ONE sweep of patience includes it:
  *     SubSet = 4 of 4, step 2 never fires.  One sweep is what
- *     patience is worth by construction: a pass re-offers every sent
+ *     patience is worth by construction: a pass re-sends every sent
  *     instance once, so the released INITIAL reaches everyone
  *     within it.
  * What the pair deliberately shows the eager run giving up is the
@@ -155,15 +157,15 @@
 /*  clsType and leaves value[] unused.  A READY also carries the two        */
 /*  class-independent BPR annotations: BKR94ACS_ACCEPTED (bit 4) from the   */
 /*  act's .accepted flag, one fact about the sender, routed on ingress to   */
-/*  bkr94acs*Accepted; and BKR94ACS_ANSWERED (bit 5) from the act's         */
-/*  .answer mask, decided per RECIPIENT, whose ABSENCE routes to            */
-/*  bkr94acs*Wants.  Together they are the READY retire: the first says     */
+/*  bkr94acs*Accepted; and BKR94ACS_RECEIVED (bit 5) from the act's         */
+/*  .received mask, decided per RECIPIENT, whose ABSENCE routes to          */
+/*  bkr94acs*Resend.  Together they are the READY retire: the first says    */
 /*  "I have accepted," the second "I have yours," and quiescence needs      */
-/*  both in every direction.                                               */
+/*  both in every direction.                                                */
 /*--------------------------------------------------------------------------*/
 
 struct msg {
-  unsigned char clsType;     /* class|type; +ACCEPTED,+ANSWERED on a READY;
+  unsigned char clsType;     /* class|type; +ACCEPTED,+RECEIVED on a READY;
                               * +cv,D_FLAG for BA (see above) */
   unsigned char process;      /* which process */
   unsigned char round;       /* BA round (class=BA only) */
@@ -206,7 +208,7 @@ qPush(
  ,unsigned char initiator
  ,unsigned char type
  ,unsigned char accepted /* READY only: act's .accepted -> wire bit 4 */
- ,unsigned char answered /* READY only: act's .answer bit 'to' -> wire bit 5 */
+ ,unsigned char received /* READY only: act's .received bit 'to' -> wire bit 5 */
  ,unsigned char from
  ,unsigned char to
  ,const unsigned char *value
@@ -229,7 +231,7 @@ qPush(
     MsgQ[Qtail].clsType = (unsigned char)
       (cls | type
        | (accepted ? BKR94ACS_ACCEPTED : 0)
-       | (answered ? BKR94ACS_ANSWERED : 0)
+       | (received ? BKR94ACS_RECEIVED : 0)
        | ((value[0] & 1) << 3)
        | (value[0] & BRACHA87_D_FLAG));
   else {
@@ -237,7 +239,7 @@ qPush(
     MsgQ[Qtail].clsType = (unsigned char)
       (cls | type
        | (accepted ? BKR94ACS_ACCEPTED : 0)
-       | (answered ? BKR94ACS_ANSWERED : 0));
+       | (received ? BKR94ACS_RECEIVED : 0));
     memcpy(MsgQ[Qtail].value, value, valueLen);
   }
   ++Qtail;
@@ -345,7 +347,7 @@ qActs(
           continue;
         qPush(BKR94ACS_CLS_ACAST, acts[k].process, 0, 0,
               acts[k].type, acts[k].accepted,
-              acts[k].answer && BRACHA87_SKIP_TST(acts[k].answer, p),
+              acts[k].received && BRACHA87_SKIP_TST(acts[k].received, p),
               self, (unsigned char)p,
               acts[k].value, vLen);
       }
@@ -363,7 +365,7 @@ qActs(
           continue;
         qPush(BKR94ACS_CLS_BA, acts[k].process, acts[k].round,
               acts[k].initiator, acts[k].type, acts[k].accepted,
-              acts[k].answer && BRACHA87_SKIP_TST(acts[k].answer, p),
+              acts[k].received && BRACHA87_SKIP_TST(acts[k].received, p),
               self, (unsigned char)p,
               &acts[k].baValue, 1);
       }
@@ -465,8 +467,8 @@ main(
   /* Byzantine-mode observation.  The POKE assertions are read off the
    * live run: a poke's Input return (the barren evidence stream), and
    * the two READY masks at the one stable point where they diverge --
-   * right after a poke's delivery has armed the want and before the
-   * egress that answers it consumes it again. */
+   * right after a poke's delivery has re-armed its sender and before
+   * the marked re-send the next egress aims back consumes the arm. */
   unsigned int pokeArmed;
   unsigned int pokeSent;
   unsigned int pokeActs;
@@ -735,10 +737,7 @@ main(
   pokeAimed = 0;
 
   for (;;) {
-    unsigned int progress;
-
     ++tickCount;
-    progress = 0;
 
     /*--------------------------------------------------------------------*/
     /*  Drain ingress.  Deliveries BANK evidence and output the protocol's  */
@@ -805,22 +804,22 @@ main(
         if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
           bkr94acsAcastAccepted(st, m->process, m->from);
         /*
-         * ANSWER-annotation ingress: a READY WITHOUT bit 5 is its sender
-         * saying it has not recorded OUR accept -- it would have
-         * suppressed us otherwise -- so un-suppress it for the next
-         * READY egress, which answers with the bit set.  Never route a
-         * READY that HAS the bit: an answer that armed a want would
-         * ping-pong and the pair would never fall silent.
+         * RECEIVED-annotation ingress: a READY WITHOUT bit 5 is its
+         * sender showing it has not recorded OUR accept -- it would
+         * have suppressed us otherwise -- so un-suppress it for the
+         * next READY egress, which goes out marked.  Never route a
+         * READY that HAS the bit: a marked READY that re-armed its
+         * receiver would ping-pong and the pair would never fall silent.
          */
-        if (type == BRACHA87_READY && !(m->clsType & BKR94ACS_ANSWERED)) {
-          bkr94acsAcastWants(st, m->process, m->from);
+        if (type == BRACHA87_READY && !(m->clsType & BKR94ACS_RECEIVED)) {
+          bkr94acsAcastResend(st, m->process, m->from);
           /*
-           * Leaving the rotation is PROVISIONAL: a want is evidence
-           * that something IS still owed, and a process that stopped
-           * ticking can never answer it.  Re-enter -- under loss this
-           * is what makes quiescence reachable, since a lost answer is
-           * re-requested by the next poke and the poke is worthless if
-           * nobody is left to hear it.
+           * Leaving the rotation is PROVISIONAL: an unmarked READY is
+           * evidence that something IS still owed, and a process that
+           * stopped ticking can never re-send marked.  Re-enter --
+           * under loss this is what makes quiescence reachable, since
+           * a lost marked re-send is drawn again by the next unmarked
+           * one, and the unmarked one is worthless if nobody is left to hear it.
            */
           if (quiescent[m->to]) {
             quiescent[m->to] = 0;
@@ -844,8 +843,8 @@ main(
         if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
           bkr94acsBaAccepted(st, m->process, m->round,
                                     m->initiator, m->from);
-        if (type == BRACHA87_READY && !(m->clsType & BKR94ACS_ANSWERED)) {
-          bkr94acsBaWants(st, m->process, m->round,
+        if (type == BRACHA87_READY && !(m->clsType & BKR94ACS_RECEIVED)) {
+          bkr94acsBaResend(st, m->process, m->round,
                                  m->initiator, m->from);
           if (quiescent[m->to]) {
             quiescent[m->to] = 0;
@@ -856,9 +855,9 @@ main(
 
       /* Enqueue output actions as network messages.  A duplicate
        * (BPR-retried) delivery returns 0 acts -- Input dedup, the
-       * invariant that makes the progress gate below sound. */
-      if (nacts)
-        progress = 1;
+       * invariant a barren-sweep policy's progress reading relies
+       * on (BPR.md Termination and Abandonment); this demo ends by
+       * quiescence and maintains no progress counter. */
       /* A poke is a duplicate READY.  Its Input return is what the
        * barren-sweep policy would read, and it is the whole reason a
        * poke costs the evidence stream nothing. */
@@ -878,19 +877,20 @@ main(
     Qhead = Qtail = 0;
 
     /*--------------------------------------------------------------------*/
-    /*  THE AIMED-ANSWER READING, taken once and only here.  A poke has   */
-    /*  just been delivered and has armed its want; the egress that       */
-    /*  answers it has not run yet.  This is the single configuration     */
-    /*  where the two READY masks diverge: the poker announced its own    */
-    /*  accept, so its ANSWER bit is set, while its want has taken it     */
-    /*  back out of SKIP -- and every other process is still suppressed.  */
-    /*  The reply therefore reaches the poker and nobody else.            */
+    /*  THE AIMED RE-SEND READING, taken once and only here.  A poke has  */
+    /*  just been delivered and its arm is placed; the egress whose       */
+    /*  marked re-send consumes it has not run yet.  This is the single   */
+    /*  configuration where the two READY masks diverge: the poker        */
+    /*  announced its own accept, so its RECEIVED bit is set, while the   */
+    /*  arm has taken it back out of SKIP -- and every other process is   */
+    /*  still suppressed.  The marked re-send therefore reaches the       */
+    /*  poker and nobody else.                                            */
     /*                                                                    */
     /*  The stable point is the poker's OWN quiescence: its masks fill    */
-    /*  only once every process has announced its accept and answered     */
-    /*  the poker's, so the honest exchange has settled by then and the   */
-    /*  only arm left standing anywhere is the one this tick's poke just  */
-    /*  placed.                                                           */
+    /*  only once every process has announced its accept and re-sent      */
+    /*  marked to the poker, so the honest exchange has settled by then   */
+    /*  and the only arm left standing anywhere is the one this tick's    */
+    /*  poke just placed.                                                 */
     /*--------------------------------------------------------------------*/
 
     if (byzMode == BYZ_POKE && pokeArmed && quiescent[BYZ_PROCESS]
@@ -902,19 +902,19 @@ main(
         for (j = 0; j < n; ++j) {
           const struct bracha87Fig1 *f1;
           const unsigned char *sk;
-          const unsigned char *an;
+          const unsigned char *rcv;
           unsigned int q;
 
           if (!(f1 = bkr94acsAcastFig1(processes[i], (unsigned char)j))
            || !bkr94acsAcastValue(processes[i], (unsigned char)j))
             continue;
           sk = bracha87Fig1Skip(f1, BRACHA87_READY_ALL);
-          an = bracha87Fig1Answer(f1);
-          if (!sk || !an)
+          rcv = bracha87Fig1Received(f1);
+          if (!sk || !rcv)
             continue;
           ++pokeInstances;
           if (BRACHA87_SKIP_TST(sk, BYZ_PROCESS)
-           || !BRACHA87_SKIP_TST(an, BYZ_PROCESS))
+           || !BRACHA87_SKIP_TST(rcv, BYZ_PROCESS))
             continue;
           for (q = 0; q < n; ++q)
             if (q != (unsigned int)BYZ_PROCESS && !BRACHA87_SKIP_TST(sk, q))
@@ -942,7 +942,6 @@ main(
       struct bkr94acsAct acastAct;
 
       released = 1;
-      progress = 1;
       printf("process %d: delayed A-Cast \"%s\" releases (tick %u)\n",
              dproc, acasts[dproc], tickCount);
       if (bkr94acsAcast(processes[dproc],
@@ -1050,7 +1049,6 @@ main(
                              || bkr94acsBaDecision(processes[i],
                                   (unsigned char)p) != 0xFF, acts);
         if (nacts) {
-          progress = 1;
           if (quiescent[i]) {
             quiescent[i] = 0;
             --quiesced;
@@ -1076,7 +1074,6 @@ main(
         nacts = bkr94acsFanout(processes[i], acts);
         if (nacts) {
           fanoutFires += nacts;
-          progress = 1;
           if (quiescent[i]) {
             quiescent[i] = 0;
             --quiesced;
@@ -1106,12 +1103,12 @@ main(
     /*--------------------------------------------------------------------*/
     /*  THE POKE.  Once the poker has completed it re-sends, every tick,  */
     /*  a READY for every A-Cast instance it accepted, stripped of the    */
-    /*  ANSWERED annotation -- the framer's own bit, cleared.  Each one   */
+    /*  RECEIVED annotation -- the framer's own bit, cleared.  Each one   */
     /*  is a duplicate the receiver's Input dedups to 0 acts, and each    */
-    /*  one re-arms an answer that costs one masked READY per poked       */
-    /*  instance per sweep, aimed back at the poker alone.  The price is  */
-    /*  bounded by the poked instance count; what it buys is that no      */
-    /*  gate needing all n ever closes.                                   */
+    /*  one re-arms a marked re-send that costs one masked READY per      */
+    /*  poked instance per sweep, aimed back at the poker alone.  The     */
+    /*  price is bounded by the poked instance count; what it buys is     */
+    /*  that no gate needing all n ever closes.                           */
     /*--------------------------------------------------------------------*/
 
     if (byzMode == BYZ_POKE && processes[BYZ_PROCESS]->complete) {
@@ -1128,14 +1125,13 @@ main(
             continue;
           qPush(BKR94ACS_CLS_ACAST, (unsigned char)j, 0, 0,
                 BRACHA87_READY, 1 /* the poker did accept */,
-                0 /* ANSWERED stripped -- this READY asks */,
+                0 /* RECEIVED stripped -- unmarked, so the receiver re-arms */,
                 (unsigned char)BYZ_PROCESS, (unsigned char)q, pv, vLen);
           ++pokeSent;
         }
       }
     }
 
-    (void)progress;
     if (quiesced == n)
       break;
     if (tickCount > 100000) {
@@ -1253,10 +1249,10 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
-  /*  How the run ended, per process.  QUIESCENT is the proof stop: that   */
-  /*  process's Retry pass owed nothing.  Reaching the cap instead is the  */
-  /*  harness standing in for an abandonment policy, and a failure here    */
-  /*  since this demo loses nothing.                                       */
+  /*  How the run ended, per process.  QUIESCENT is the owing ending:      */
+  /*  that process's Retry pass owed nothing.  Reaching the cap instead    */
+  /*  is the harness standing in for an abandonment policy, and a failure  */
+  /*  here since this demo loses nothing.                                  */
   /*----------------------------------------------------------------------*/
 
   for (i = 0; i < n; ++i)
@@ -1327,7 +1323,7 @@ main(
              pokeActs ? "DISTURBED -- FAIL" : "unaffected");
       if (pokeActs)
         exitCode = 1;
-      printf("Aimed answers: %u of %u poked instances suppress every "
+      printf("Aimed re-sends: %u of %u poked instances suppress every "
              "process but the poker: %s\n",
              pokeAimed, pokeInstances,
              (pokeInstances && pokeAimed == pokeInstances) ? "ok" : "FAIL");
@@ -1419,6 +1415,6 @@ usage:
     "                           case bit flipped to [S..n), then stops\n"
     "                 poke      participates honestly through\n"
     "                           COMPLETE, then re-sends READYs with\n"
-    "                           the ANSWERED annotation stripped\n");
+    "                           the RECEIVED annotation stripped\n");
   return (1);
 }

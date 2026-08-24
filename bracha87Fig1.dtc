@@ -177,8 +177,16 @@ no,"(echo, v)",
 # output when ACCEPTED.  (ready, v) is NOT dropped on accepted:
 # it is exactly what the amplification tail consumes -- an
 # accepted process still owes its ready to processes under 2t+1, and
-# retry is the only delivery mechanism under loss.  The
-# application's abandon policy frees the instance.
+# retry is the only delivery mechanism under loss.  (ready, v)
+# retires only on remote evidence, per process and whole-action:
+# it is suppressed to each process for which the remote pair of
+# facts holds -- accepted, and holding this instance's accept
+# (the ACCEPTED and RECEIVED annotations riding the READY
+# already being retried) -- and the retry falls silent when
+# that evidence covers all n: quiescence, the owing ending.
+# BPR.md (Retirement, Suppression and the Announcements,
+# Quiescence) carries each gate's argument; the application's
+# abandon policy remains the backstop.
 #
 # Initiator (initial, v) retry -- not in this dispatch.
 # A process that initiates a broadcast outputs (initial, v) on

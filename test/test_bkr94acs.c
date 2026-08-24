@@ -2861,7 +2861,7 @@ testExhaustedAdoptBranch(
 /*  also produces, and sooner.  What separates them is WHOSE accepts closed */
 /*  the gate, so the arm reads each sent instance's READY suppress mask --  */
 /*  the mask the header names as the retire gate, and the one that excludes */
-/*  a process still asking to be announced to.                              */
+/*  a process still owed an announcement.                                   */
 /*--------------------------------------------------------------------------*/
 
 static void
@@ -2958,9 +2958,9 @@ testQuiescenceAfterExhausted(
    * directly instead would write the very bits the ending evidence
    * below reads, and a machine that retired READY on its own local
    * accept -- outputting no READY at all past accept -- would still
-   * pass.  The annotation's absence is the want, routed back the same
+   * pass.  The annotation's absence is the arm, routed back the same
    * way, so a process suppressed before it was announced to is
-   * un-suppressed for the egress that answers it.
+   * un-suppressed for the marked re-send that reaches it.
    */
   for (p = 0; p < 4; ++p) {
     bracha87RetryInit(&cursor[p]);
@@ -2988,11 +2988,11 @@ testQuiescenceAfterExhausted(
           if (out[k].accepted)
             bkr94acsBaAccepted(processes[q], out[k].process, out[k].round,
                                out[k].initiator, (unsigned char)p);
-          if (!out[k].answer || !BRACHA87_SKIP_TST(out[k].answer, q)) {
-            bkr94acsBaWants(processes[q], out[k].process, out[k].round,
+          if (!out[k].received || !BRACHA87_SKIP_TST(out[k].received, q)) {
+            bkr94acsBaResend(processes[q], out[k].process, out[k].round,
                             out[k].initiator, (unsigned char)p);
             /* Leaving the rotation is provisional -- only a tick can
-             * answer a want, so the wanted process goes back on. */
+             * re-send, so the armed process goes back on. */
             if (quiesced[q]) {
               quiesced[q] = 0;
               --nQuiesced;

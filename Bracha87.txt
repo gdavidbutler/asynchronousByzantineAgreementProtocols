@@ -24,7 +24,59 @@ On asynchrony (same section):
   Protocols for asynchronous systems can also be viewed as a sequence
   of rounds. In each round, every process sends messages to all
   others, waits for only n - t messages of that round, and changes
-  state.
+  state. The processes cannot wait for more than n - t messages in a
+  round since there is a possibility that all t faulty processes do
+  not send any message in that round.
+
+The scheduler (same section):
+
+  In asynchronous systems, we need to postulate an additional agent,
+  the scheduler, that will determine in each round for each process
+  which n - t messages it receives out of n potential messages. We
+  assume that the scheduler is an adversary scheduler and that it
+  tries to prevent agreement by selectively routing messages to
+  processes.
+
+FLP and the termination requirements (Section 1, p. 132):
+
+  For deterministic protocols we impose the following termination
+  requirement:
+
+  Termination (deterministic). All correct processes decide by round
+  r, for some a priori known constant r.
+
+  In Fischer et al. (1985) it was shown that, in asynchronous
+  systems, deterministic consensus protocols are impossible even in
+  the simple case of only one Fail-Stop process.
+
+  For randomized protocols we only require that agreement is
+  eventually reached. In other words,
+
+  Termination (probabilistic). The probability that a correct
+  process is undecided after r rounds approaches zero as r
+  approaches infinity.
+
+  Thus, though the number of rounds to reach agreement is not
+  bounded, the probability that the protocol does not terminate is
+  zero.
+
+This is the paper's whole relationship to FLP: it does not evade the
+impossibility, it changes the termination requirement.  The ONLY
+FLP-safe claim in the paper is the central result -- the
+probability-1 decision (Theorem 2; the coin at Fig 4 step 3 case
+(iii) is what buys it).  Much happens before and after that result,
+and none of it carries the same cover: before it, a broadcast may
+never accept (Theorems 4 and 5, Section 8 below); after it, halting
+is one unproved clause (quoted at the end of this file).
+
+The perspective: every figure is written from ONE process's seat --
+"(By process p)" (Fig 1), "round(k) by process p" (Figs 2 and 3),
+"Phase(i): (by process p)" (Fig 4).  A process acts unilaterally: it
+sends to all, then waits only for local counts to cross thresholds
+(n - t, (n+t)/2, t+1, 2t+1 -- each satisfiable by the correct
+processes alone) over whatever the scheduler delivers, "for some v."
+No step waits on a named process, reads absence as information, or
+coordinates its firing with another process's step.
 
 Figure 1 -- The broadcast primitive. Pure mechanics.
 
@@ -150,6 +202,34 @@ Key properties from the paper:
 
   Termination: probability of not terminating is
   lim_{r->inf} (1 - p)^r = 0, where p > 2^{-(n-1)}.
+
+The second impossibility (Section 8, p. 141) -- why waiting on a
+named process is forbidden, in the paper's own words:
+
+  In asynchronous systems, such reduction is impossible. The
+  processes do not know if the transmitter sent them any message at
+  all, and therefore they cannot decide whether to continue waiting
+  for a message from the transmitter or to regard the value of the
+  transmitter as some default value. Thus, the termination
+  properties for Byzantine Generals protocols are not achievable in
+  an asynchronous system.
+
+  Theorem 4. Byzantine Generals protocols are impossible in
+  asynchronous systems even in the presence of a single fault.
+
+  Weak termination: if the transmitter is correct then all correct
+  processes eventually decide; if the transmitter is faulty, either
+  all correct processes eventually decide, or none of them ever
+  decides.
+
+  Theorem 5. In asynchronous systems, Byzantine Generals protocols
+  with weak termination are possible if and only if t < n/3.
+
+Fig 1 IS the Theorem 5 protocol ("the broadcast primitive of Fig. 1
+is a weak termination Byzantine Generals protocol").  A faulty
+initiator's broadcast may never accept, and no correct process can
+ever tell -- "may never" is the model speaking, not a defect.
+Before the central result, nothing is owed to anyone.
 
 Protocol halting -- the paper's entire treatment (Section 4, page
 138, verbatim): "For notational convenience, the protocol in Fig. 4

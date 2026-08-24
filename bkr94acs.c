@@ -376,7 +376,7 @@ bkr94acsEnter(
 
   out->value = 0;
   out->skip = 0;            /* fresh initiation: nothing to suppress yet */
-  out->answer = 0;
+  out->received = 0;
   out->act = BKR94ACS_ACT_BA_SEND;
   out->process = process;
   out->round = 0;
@@ -452,8 +452,8 @@ bkr94acsAcastInput(
     if (f1out[k] == BRACHA87_ECHO_ALL || f1out[k] == BRACHA87_READY_ALL) {
       out[nact].value = bracha87Fig1Value(f1);
       out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
-      out[nact].answer = (f1out[k] == BRACHA87_READY_ALL)
-        ? bracha87Fig1Answer(f1) : 0;
+      out[nact].received = (f1out[k] == BRACHA87_READY_ALL)
+        ? bracha87Fig1Received(f1) : 0;
       out[nact].act = BKR94ACS_ACT_ACAST_SEND;
       out[nact].process = process;
       out[nact].round = 0;
@@ -475,7 +475,7 @@ bkr94acsAcastInput(
       /*
        * BKR94 Step 1: "For each Pj for whom you (Pi) know Q(j) = 1,
        * participate in BA_j with input 1."  Q(j) = 1 is carried by
-       * Fig1 ACCEPT for process j (Bracha87 Lemma 4 gives BKR94's Q
+       * Fig1 ACCEPT for process j (Bracha87 Lemma 3 gives BKR94's Q
        * assumption (2) for free).  Step 2 is not dispatched from any
        * arrival path -- it fires from the BPR sweep (bkr94acsFanout);
        * only Step 1 is reachable at this dispatch site, but the
@@ -619,8 +619,8 @@ bkr94acsBaInput(
 
       out[nact].value = 0;
       out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
-      out[nact].answer = (f1out[k] == BRACHA87_READY_ALL)
-        ? bracha87Fig1Answer(f1) : 0;
+      out[nact].received = (f1out[k] == BRACHA87_READY_ALL)
+        ? bracha87Fig1Received(f1) : 0;
       out[nact].act = BKR94ACS_ACT_BA_SEND;
       out[nact].process = process;
       out[nact].round = round;
@@ -716,7 +716,7 @@ bkr94acsAcast(
 
   out->value = bracha87Fig1Value(acastF1(a, a->self));
   out->skip = 0;            /* fresh initiation: nothing to suppress yet */
-  out->answer = 0;
+  out->received = 0;
   out->act = BKR94ACS_ACT_ACAST_SEND;
   out->process = a->self;
   out->round = 0;
@@ -801,8 +801,8 @@ bkr94acsRetryOutputAcast(
   for (k = 0; k < n; ++k) {
     out[nact].value = cv;
     out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
-    out[nact].answer = (f1out[k] == BRACHA87_READY_ALL)
-      ? bracha87Fig1Answer(f1) : 0;
+    out[nact].received = (f1out[k] == BRACHA87_READY_ALL)
+      ? bracha87Fig1Received(f1) : 0;
     out[nact].act = BKR94ACS_ACT_ACAST_SEND;
     out[nact].process = process;
     out[nact].round = 0;
@@ -847,8 +847,8 @@ bkr94acsRetryOutputBa(
   for (k = 0; k < n; ++k) {
     out[nact].value = 0;
     out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
-    out[nact].answer = (f1out[k] == BRACHA87_READY_ALL)
-      ? bracha87Fig1Answer(f1) : 0;
+    out[nact].received = (f1out[k] == BRACHA87_READY_ALL)
+      ? bracha87Fig1Received(f1) : 0;
     out[nact].act = BKR94ACS_ACT_BA_SEND;
     out[nact].process = process;
     out[nact].round = round;
@@ -1091,7 +1091,7 @@ bkr94acsTurn(
     bkr94acsDecision(a)[process] = f4->decision;
     out[nact].value = 0;
     out[nact].skip = 0;
-    out[nact].answer = 0;
+    out[nact].received = 0;
     out[nact].act = BKR94ACS_ACT_BA_DECIDED;
     out[nact].process = process;
     out[nact].round = 0;
@@ -1141,7 +1141,7 @@ bkr94acsTurn(
       a->complete = 1;
       out[nact].value = 0;
       out[nact].skip = 0;
-      out[nact].answer = 0;
+      out[nact].received = 0;
       out[nact].act = BKR94ACS_ACT_COMPLETE;
       out[nact].process = 0;
       out[nact].round = 0;
@@ -1176,7 +1176,7 @@ bkr94acsTurn(
 
     out[nact].value = 0;
     out[nact].skip = 0;     /* fresh initiation: nothing to suppress */
-    out[nact].answer = 0;
+    out[nact].received = 0;
     out[nact].act = BKR94ACS_ACT_BA_SEND;
     out[nact].process = process;
     out[nact].round = *nextRound;
@@ -1223,7 +1223,7 @@ bkr94acsTurn(
     bkr94acsDecision(a)[process] = 0xFE;
     out[nact].value = 0;
     out[nact].skip = 0;
-    out[nact].answer = 0;
+    out[nact].received = 0;
     out[nact].act = BKR94ACS_ACT_BA_EXHAUSTED;
     out[nact].process = process;
     out[nact].round = 0;
@@ -1274,31 +1274,31 @@ bkr94acsBaAccepted(
 }
 
 /*--------------------------------------------------------------------------*/
-/*  ANSWER-annotation ingress (the retire's other half)                     */
+/*  RECEIVED-annotation ingress (the retire's other half)                   */
 /*                                                                          */
-/*  A received READY WITHOUT the BKR94ACS_ANSWERED wire bit is its sender   */
+/*  A received READY WITHOUT the BKR94ACS_RECEIVED wire bit is its sender   */
 /*  saying it has not recorded this process's accept of the named Fig1 --   */
 /*  it would have suppressed us otherwise.  Route it here and the Fig1      */
 /*  un-suppresses that sender for one READY egress, so the announcement it  */
-/*  is waiting for goes out (bracha87Fig1ProcessWants).  Call AFTER the     */
+/*  is waiting for goes out (bracha87Fig1ProcessResend).  Call AFTER the    */
 /*  matching bkr94acs*Input, and never for a READY that DOES carry the      */
-/*  bit -- an answer that armed a want would ping-pong.  Out-of-range       */
-/*  indices are ignored.                                                    */
+/*  bit -- a marked READY re-arms nothing, or the exchange would ping-pong. */
+/*  Out-of-range indices are ignored.                                       */
 /*--------------------------------------------------------------------------*/
 
 void
-bkr94acsAcastWants(
+bkr94acsAcastResend(
   struct bkr94acs *a
  ,unsigned char process
  ,unsigned char from
 ){
   if (!a || process > a->n || from > a->n)
     return;
-  bracha87Fig1ProcessWants(acastF1(a, process), from);
+  bracha87Fig1ProcessResend(acastF1(a, process), from);
 }
 
 void
-bkr94acsBaWants(
+bkr94acsBaResend(
   struct bkr94acs *a
  ,unsigned char process
  ,unsigned char round
@@ -1308,7 +1308,7 @@ bkr94acsBaWants(
   if (!a || process > a->n || round >= maxRounds(a)
    || initiator > a->n || from > a->n)
     return;
-  bracha87Fig1ProcessWants(baF1(a, process, round, initiator), from);
+  bracha87Fig1ProcessResend(baF1(a, process, round, initiator), from);
 }
 
 /*--------------------------------------------------------------------------*/
@@ -1349,8 +1349,8 @@ bkr94acsBaGetValid(
   /*
    * The BA's next round is the one bkr94acsTurnDuty classifies and
    * bkr94acsTurn consumes; at maxRounds the round space is exhausted
-   * and there is no next round to answer for (bracha87Fig3GetValid
-   * would answer 0 for the out-of-range round anyway).
+   * and there is no next round to report (bracha87Fig3GetValid
+   * would return 0 for the out-of-range round anyway).
    */
   nextRound = bkr94acsNextRound(a)[process];
   if (nextRound >= maxRounds(a))

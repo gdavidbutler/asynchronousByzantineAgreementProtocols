@@ -374,16 +374,16 @@ and requires the second to output nothing.
 #END
 
 #MUTANT M13
-#FAMILY annotation fills -- answer mask dropped at the array retry egress
+#FAMILY annotation fills -- RECEIVED mask dropped at the array retry egress
 #FILE bracha87.c
 #ORACLE test_bracha87
 #LABEL Livelock: honest n=4 quiesces
 #EXPECT KILLED
 #WHY
-A ready that arrives without the answer annotation is its sender saying
-it does not hold this instance's accept, and the receiver arms a want
-that un-suppresses it for one egress.  If the egress never carries the
-annotation, every ready reads as a want, every want re-opens the
+A ready that arrives unmarked is its sender showing this instance's
+accept was not received there, and the receiver arms a re-send that
+un-suppresses it for one egress.  If the egress never carries the
+annotation, every ready arrives unmarked, every one re-opens the
 suppress mask, and the mask can never reach full coverage.  The oracle
 drives n=4 all-correct instances under the caller discipline both
 example loops follow and requires all four to reach the zero return
@@ -392,10 +392,10 @@ so the quiesced count falls short and the check goes red.  Reachability
 needs no loss and no adversary -- the arm is the plain schedule.
 Corroborated by the explorer's quiescent-terminal reachability.
 #ANCHOR
-          out[i].answer = (acts[i] == BRACHA87_READY_ALL)
-            ? bracha87Fig1Answer(instances[idx]) : 0;
+          out[i].received = (acts[i] == BRACHA87_READY_ALL)
+            ? bracha87Fig1Received(instances[idx]) : 0;
 #WITH
-          out[i].answer = 0;
+          out[i].received = 0;
 #END
 
 #MUTANT M14
@@ -427,43 +427,43 @@ quiesced count falls short.
 #LABEL Quiescence: READY retired when all n accepted
 #EXPECT KILLED
 #WHY
-The effective mask is the accepted set MINUS the processes that have
-asked for this instance's announcement.  Written as an intersection
-instead, the mask is empty whenever nothing has asked -- which is the
+The effective mask is the accepted set MINUS the processes with an
+outstanding arm.  Written as an intersection
+instead, the mask is empty whenever nothing is armed -- which is the
 ordinary case -- so coverage never completes and the action never
-retires.  The oracle records all n accepts with no want armed and
+retires.  The oracle records all n accepts with nothing armed and
 requires the retry to stop outputting READY.  Under the mutation the
 mask is zero, coverage is zero, and READY is still output -- red on
 that call.
 #ANCHOR
-        sk[i] = ac[i] & ~wt[i];
+        sk[i] = ac[i] & ~am[i];
 #WITH
-        sk[i] = ac[i] & wt[i];
+        sk[i] = ac[i] & am[i];
 #END
 
 #MUTANT M16
-#FAMILY want arm -- the accept guard dropped
+#FAMILY re-send arm -- the accept guard dropped
 #FILE bracha87.c
 #ORACLE test_bracha87
-#LABEL Want: pre-accept want does not arm (bit 1 still suppressed)
+#LABEL Resend: pre-accept unmarked READY does not arm (bit 1 still suppressed)
 #EXPECT KILLED
 #WHY
-A want records that a process lacks THIS instance's accept.  Before
-this instance has accepted there is no accept to announce, so arming
-would un-suppress a process for an egress that has nothing to say and
-would re-arm on every subsequent ready.  The oracle drives an instance
-to RDSENT but not ACCEPTED, records one process's accept, then routes a
-want from that same process, and requires it to remain suppressed.
-Under the mutation the want arms and the suppression is cleared -- red
-on that read.
+An unmarked READY shows its sender has not received THIS instance's
+accept.  Before this instance has accepted there is no accept to
+announce, so arming would un-suppress a process for an egress that has
+nothing to say and would re-arm on every subsequent ready.  The oracle
+drives an instance to RDSENT but not ACCEPTED, records one process's
+accept, then routes an unmarked READY from that same process, and
+requires it to remain suppressed.  Under the mutation the arm is
+recorded and the suppression is cleared -- red on that read.
 #ANCHOR
   if (!b || from > b->n || !(b->flags & BRACHA87_F1_ACCEPTED))
     return;
-  BIT_SET(F1_WTFROM(b), from);
+  BIT_SET(F1_ARMFROM(b), from);
 #WITH
   if (!b || from > b->n)
     return;
-  BIT_SET(F1_WTFROM(b), from);
+  BIT_SET(F1_ARMFROM(b), from);
 #END
 
 #MUTANT M17
@@ -741,15 +741,15 @@ through the gate, so it is independent of the mutated line.
 #END
 
 #MUTANT M29
-#FAMILY annotation fills -- answer mask dropped at the A-Cast retry egress
+#FAMILY annotation fills -- RECEIVED mask dropped at the A-Cast retry egress
 #FILE bkr94acs.c
 #ORACLE test_schedules
 #LABEL FAILURE: no schedule reached a QUIESCENT terminal
 #EXPECT KILLED
 #WHY
 This is the one entry whose designated oracle is the explorer, because
-nothing cheaper detects it.  Dropping the answer mask on the A-Cast
-retry means every such ready reads as a want at its receiver, the want
+nothing cheaper detects it.  Dropping the RECEIVED mask on the A-Cast
+retry means every such ready arrives unmarked at its receiver, each
 re-opens the suppress mask, and the instance never retires its ready.
 The composed suites drive to COMPLETION, not to quiescence, so they
 finish green: completion is decided by the agreements, and the ready
@@ -762,12 +762,12 @@ so the attribution is clean.
 #ANCHOR
     out[nact].value = cv;
     out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
-    out[nact].answer = (f1out[k] == BRACHA87_READY_ALL)
-      ? bracha87Fig1Answer(f1) : 0;
+    out[nact].received = (f1out[k] == BRACHA87_READY_ALL)
+      ? bracha87Fig1Received(f1) : 0;
 #WITH
     out[nact].value = cv;
     out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
-    out[nact].answer = 0;
+    out[nact].received = 0;
 #END
 
 #MUTANT M30
@@ -903,7 +903,7 @@ test/test_schedules.c).
     bkr94acsDecision(a)[process] = f4->decision;
     out[nact].value = 0;
     out[nact].skip = 0;
-    out[nact].answer = 0;
+    out[nact].received = 0;
     out[nact].act = BKR94ACS_ACT_BA_DECIDED;
     out[nact].process = process;
     out[nact].round = 0;

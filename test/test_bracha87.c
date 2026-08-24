@@ -4692,23 +4692,23 @@ testFig1ArrayRetry(
 
 
 /*************************************************************************/
-/*  Fig 1 want / answer -- the READY retire's second half                */
+/*  Fig 1 resend / received -- the READY retire's second half            */
 /*                                                                       */
 /*  acFrom alone conflates "q has accepted" with "q holds MY accept."    */
 /*  Suppressing READY on the first silences the announcement that        */
 /*  carries the second, so q's own gate stands one bit short for good.   */
-/*  bracha87Fig1ProcessWants is the repair signal (a (ready, v) with no  */
-/*  answer annotation), bracha87Fig1Answer is the annotation, and        */
+/*  bracha87Fig1ProcessResend is the arm (an unmarked (ready, v)),       */
+/*  bracha87Fig1Received is the annotation, and                          */
 /*  bracha87Fig1Skip(READY_ALL) is the difference plus the retire gate.  */
 /*************************************************************************/
 
 /*
  * Wire byte annotations for the sweep drivers below.  Same positions the
- * bundled examples frame to (BKR94ACS_ACCEPTED / BKR94ACS_ANSWERED); the
+ * bundled examples frame to (BKR94ACS_ACCEPTED / BKR94ACS_RECEIVED); the
  * bare layer fixes only bits 0-1, so a test frames its own.
  */
 #define WA_ACCEPTED 0x10
-#define WA_ANSWERED 0x20
+#define WA_RECEIVED 0x20
 
 #define WA_MSGS 8192
 
@@ -4730,7 +4730,7 @@ static void
 waPush(
   unsigned char type
  ,unsigned char accepted
- ,unsigned char answered
+ ,unsigned char received
  ,unsigned char from
  ,unsigned char to
  ,const unsigned char *value
@@ -4741,7 +4741,7 @@ waPush(
   }
   WaNxt[WaNNxt].type = (unsigned char)(type
     | (accepted ? WA_ACCEPTED : 0)
-    | (answered ? WA_ANSWERED : 0));
+    | (received ? WA_RECEIVED : 0));
   WaNxt[WaNNxt].from = from;
   WaNxt[WaNNxt].to = to;
   memcpy(WaNxt[WaNNxt].value, value, VLEN);
@@ -4784,7 +4784,7 @@ waSweeps(
   unsigned int i;
   unsigned int j;
 
-  memcpy(val, "WANT", VLEN);
+  memcpy(val, "RSND", VLEN);
   sz = bracha87Fig1Sz(n - 1, VLEN - 1);
   for (i = 0; i < n; ++i) {
     inst[i] = (struct bracha87Fig1 *)calloc(1, sz);
@@ -4830,7 +4830,7 @@ waSweeps(
         if (!pass
          && sweep < holdUntil
          && ty == BRACHA87_READY
-         && !(q[k].type & WA_ANSWERED)
+         && !(q[k].type & WA_RECEIVED)
          && (holdFrom & (1u << q[k].from))
          && q[k].to == holdTo) {
           heldNew[nHeldNew++] = q[k];
@@ -4843,8 +4843,8 @@ waSweeps(
         nout = bracha87Fig1Input(f, ty, q[k].from, q[k].value, out);
         if (ty == BRACHA87_READY && (q[k].type & WA_ACCEPTED))
           bracha87Fig1ProcessAccepted(f, q[k].from);
-        if (ty == BRACHA87_READY && !(q[k].type & WA_ANSWERED))
-          bracha87Fig1ProcessWants(f, q[k].from);
+        if (ty == BRACHA87_READY && !(q[k].type & WA_RECEIVED))
+          bracha87Fig1ProcessResend(f, q[k].from);
         for (o = 0; o < nout; ++o) {
           const unsigned char *cv;
           const unsigned char *sk;
@@ -4858,7 +4858,7 @@ waSweeps(
           }
           sk = bracha87Fig1Skip(f, out[o]);
           an = (out[o] == BRACHA87_READY_ALL)
-               ? bracha87Fig1Answer(f) : 0;
+               ? bracha87Fig1Received(f) : 0;
           for (j = 0; j < n; ++j) {
             if (sk && BRACHA87_SKIP_TST(sk, j))
               continue;
@@ -4897,7 +4897,7 @@ waSweeps(
                : acts[p].act == BRACHA87_ECHO_ALL    ? BRACHA87_ECHO
                :                                       BRACHA87_READY,
                  acts[p].accepted,
-                 acts[p].answer && BRACHA87_SKIP_TST(acts[p].answer, j),
+                 acts[p].received && BRACHA87_SKIP_TST(acts[p].received, j),
                  (unsigned char)i, (unsigned char)j, acts[p].value);
         }
     }
@@ -4916,7 +4916,7 @@ waSweeps(
 }
 
 static void
-testFig1WantAnswer(
+testFig1ResendReceived(
   void
 ){
   struct bracha87Fig1 *b;
@@ -4930,42 +4930,42 @@ testFig1WantAnswer(
   unsigned char val[VLEN];
   const unsigned char *m;
 
-  printf("\n  Fig1 want / answer tests:\n");
-  memcpy(val, "WANT", VLEN);
+  printf("\n  Fig1 resend / received tests:\n");
+  memcpy(val, "RSND", VLEN);
   sz = bracha87Fig1Sz(3, VLEN - 1);
 
   /* Accessor guards, mirroring bracha87Fig1Skip's. */
-  check("Answer: NULL instance -> 0", bracha87Fig1Answer(0) == 0);
-  bracha87Fig1ProcessWants(0, 0);                /* NULL: no crash */
+  check("Received: NULL instance -> 0", bracha87Fig1Received(0) == 0);
+  bracha87Fig1ProcessResend(0, 0);                /* NULL: no crash */
 
   /*
-   * Pre-accept a want records nothing: there is no accept to announce,
-   * and an un-announced-to process is not in acFrom to be suppressed
-   * anyway.  Drive to RDSENT but NOT accepted first.
+   * Pre-accept an unmarked READY records nothing: there is no accept to
+   * announce, and an un-announced-to process is not in acFrom to be
+   * suppressed anyway.  Drive to RDSENT but NOT accepted first.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
   bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
   bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
   bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);   /* t+1 -> Rule 5 */
-  check("Want: setup RDSENT, not accepted",
+  check("Resend: setup RDSENT, not accepted",
         (b->flags & BRACHA87_F1_RDSENT)
         && !(b->flags & BRACHA87_F1_ACCEPTED));
   bracha87Fig1ProcessAccepted(b, 1);
-  bracha87Fig1ProcessWants(b, 1);
+  bracha87Fig1ProcessResend(b, 1);
   m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
-  check("Want: pre-accept want does not arm (bit 1 still suppressed)",
+  check("Resend: pre-accept unmarked READY does not arm (bit 1 still suppressed)",
         BRACHA87_SKIP_TST(m, 1));
-  check("Answer: mask holds the announced accept",
-        BRACHA87_SKIP_TST(bracha87Fig1Answer(b), 1));
+  check("Received: mask holds the announced accept",
+        BRACHA87_SKIP_TST(bracha87Fig1Received(b), 1));
   free(b);
 
   /*
    * Post-accept, the two setters are order-independent: one (ready, v)
    * legitimately carries both facts (its sender accepted, and it lacks
    * ours), and the caller may route them either way round.  Process 1
-   * takes accept-then-want, process 2 want-then-accept; both must end
-   * un-suppressed and both must stay in the answer mask.
+   * takes accept-then-arm, process 2 arm-then-accept; both must end
+   * un-suppressed and both must stay in the RECEIVED mask.
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
@@ -4973,60 +4973,61 @@ testFig1WantAnswer(
   bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
   bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
   bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);
-  check("Want: setup ACCEPTED", (b->flags & BRACHA87_F1_ACCEPTED) != 0);
+  check("Resend: setup ACCEPTED", (b->flags & BRACHA87_F1_ACCEPTED) != 0);
   bracha87Fig1ProcessAccepted(b, 0);
   bracha87Fig1ProcessAccepted(b, 1);
-  bracha87Fig1ProcessWants(b, 1);
-  bracha87Fig1ProcessWants(b, 2);
+  bracha87Fig1ProcessResend(b, 1);
+  bracha87Fig1ProcessResend(b, 2);
   bracha87Fig1ProcessAccepted(b, 2);
   m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
-  check("Want: accept-then-want un-suppresses", !BRACHA87_SKIP_TST(m, 1));
-  check("Want: want-then-accept un-suppresses", !BRACHA87_SKIP_TST(m, 2));
-  check("Want: an un-wanted accept stays suppressed",
+  check("Resend: accept-then-arm un-suppresses", !BRACHA87_SKIP_TST(m, 1));
+  check("Resend: arm-then-accept un-suppresses", !BRACHA87_SKIP_TST(m, 2));
+  check("Resend: an un-armed accept stays suppressed",
         BRACHA87_SKIP_TST(m, 0));
-  m = bracha87Fig1Answer(b);
-  check("Answer: a wanter stays in the answer mask (0,1,2)",
+  m = bracha87Fig1Received(b);
+  check("Received: an armed sender stays in the RECEIVED mask (0,1,2)",
         BRACHA87_SKIP_TST(m, 0) && BRACHA87_SKIP_TST(m, 1)
         && BRACHA87_SKIP_TST(m, 2));
-  check("Answer: an unannounced process is not answered",
+  check("Received: an unannounced process is not marked",
         !BRACHA87_SKIP_TST(m, 3));
-  bracha87Fig1ProcessWants(b, 99);         /* out of range: ignored */
-  check("Want: range guard leaves 3 suppressed-state untouched",
+  bracha87Fig1ProcessResend(b, 99);         /* out of range: ignored */
+  check("Resend: range guard leaves 3 suppressed-state untouched",
         !BRACHA87_SKIP_TST(bracha87Fig1Skip(b, BRACHA87_READY_ALL), 3));
 
   /*
    * The retire gate is the same mask: full coverage retires READY, and a
-   * standing want keeps it alive with the wanter excluded.  Record the
-   * last accept so acFrom is all n and let one tick answer the wants
-   * already standing, so the gate arms below start from full coverage.
+   * standing arm keeps it alive with the armed sender excluded.  Record
+   * the last accept so acFrom is all n and let one tick re-send marked to
+   * the arms already standing, so the gate checks below start from full
+   * coverage.
    */
   bracha87Fig1ProcessAccepted(b, 3);
   bracha87Fig1Bpr(b, out);
-  bracha87Fig1ProcessWants(b, 3);
+  bracha87Fig1ProcessResend(b, 3);
   nout = bracha87Fig1Bpr(b, out);
   sawReady = 0;
   for (gi = 0; gi < nout; ++gi)
     if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
-  check("Gate: a want keeps READY alive at all-n accepted", sawReady);
+  check("Gate: an arm keeps READY alive at all-n accepted", sawReady);
   m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
-  check("Gate: the emission's mask excludes the wanter only",
+  check("Gate: the egress's mask excludes the armed sender only",
         !BRACHA87_SKIP_TST(m, 3) && BRACHA87_SKIP_TST(m, 0)
         && BRACHA87_SKIP_TST(m, 1) && BRACHA87_SKIP_TST(m, 2));
-  /* The egress consumed the want; the next tick retires. */
+  /* The egress consumed the arm; the next tick retires. */
   nout = bracha87Fig1Bpr(b, out);
   sawReady = 0;
   for (gi = 0; gi < nout; ++gi)
     if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
-  check("Gate: the egress consumes the want and READY retires", !sawReady);
+  check("Gate: the egress consumes the arm and READY retires", !sawReady);
   check("Gate: retired mask is full coverage",
         bracha87Fig1Skip(b, BRACHA87_READY_ALL)[0] == 0x0F);
-  /* A later want re-opens it for exactly the tick that answers. */
-  bracha87Fig1ProcessWants(b, 2);
+  /* A later arm re-opens it for exactly the tick that re-sends marked. */
+  bracha87Fig1ProcessResend(b, 2);
   nout = bracha87Fig1Bpr(b, out);
   sawReady = 0;
   for (gi = 0; gi < nout; ++gi)
     if (out[gi] == BRACHA87_READY_ALL) sawReady = 1;
-  check("Gate: a want after quiescence re-opens READY for one tick",
+  check("Gate: an arm after quiescence re-opens READY for one tick",
         sawReady);
   nout = bracha87Fig1Bpr(b, out);
   sawReady = 0;
@@ -5041,7 +5042,7 @@ testFig1WantAnswer(
    * carry it past 2t+1 are then retries, which announce, so process 3
    * records all three accepts in the same drain it accepts in and its
    * own announcement is suppressed before it is ever sent.  Before the
-   * want/answer pair this quiesced 1 of 4 and stayed there; the other
+   * annotation exchange this quiesced 1 of 4 and stayed there; the other
    * three retried a READY at process 3 for good.
    */
   sweeps = 0;
@@ -5053,11 +5054,11 @@ testFig1WantAnswer(
          quiesced, sweeps);
 
   /*
-   * Livelock regression.  Answering without a wire discriminator makes an
-   * answer byte-identical to a poke, so every answer re-arms a want and
-   * the honest all-to-all run never falls silent (measured: 0 of 4 at a
-   * 1000-sweep cap).  The annotation is what bounds it; the honest
-   * schedule must still quiesce in a handful of sweeps.
+   * Livelock regression.  Without a wire discriminator every READY is
+   * byte-identical to every other, so every marked re-send re-arms its
+   * receiver and the honest all-to-all run never falls silent (measured:
+   * 0 of 4 at a 1000-sweep cap).  The annotation is what bounds it; the
+   * honest schedule must still quiesce in a handful of sweeps.
    */
   sweeps = 0;
   quiesced = waSweeps(4, 1, 0, 0, 0, 1000, &sweeps);
@@ -5359,7 +5360,7 @@ main(
   testFig1ValueSwitch();
   testFig1Bpr();
   testFig1SkipAccept();
-  testFig1WantAnswer();
+  testFig1ResendReceived();
   testFig1PostAcceptRecord();
   testBprLargeN();
 

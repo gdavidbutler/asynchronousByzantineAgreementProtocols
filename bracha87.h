@@ -33,8 +33,11 @@
  * Fig 3 refines Fig 2: replaces receive with validate (VALID sets).
  *
  * Each module boundary matches the paper exactly.
- * Proofs apply per-module: Lemmas 1-4 and Theorem 1 to Fig1,
- * Lemmas 5-7 to Fig2/3, Lemmas 8-10 and Theorems 2-3 to Fig4.
+ * Proofs apply per-module: Lemmas 1-4 and Theorems 1 and 4-5 to Fig1
+ * (Theorem 5 names Fig1 the weak-termination Byzantine Generals
+ * protocol: a faulty initiator's broadcast may never accept, and no
+ * correct process can tell), Lemmas 5-7 to Fig2/3, Lemmas 8-10 and
+ * Theorems 2-3 to Fig4.
  *
  * Operational limits:
  *   n:         unsigned char, encodes process count 1..256 (n + 1)
@@ -307,25 +310,27 @@ bracha87Fig1Value(
  *     first alone silences the announcement q is waiting for -- q's own
  *     gate then stands one bit short forever, which a cursor phase
  *     offset reaches with no loss at all.  A (ready, v) arriving
- *     WITHOUT the answer annotation is q saying so; the caller routes it
- *     to bracha87Fig1ProcessWants and the next tick answers it with the
- *     annotation set (bracha87Fig1Answer).  Answers never arm, so the
- *     exchange converges in one tick per direction and stops.
+ *     WITHOUT the RECEIVED annotation is q showing so; the caller routes
+ *     it to bracha87Fig1ProcessResend and the next tick re-sends with the
+ *     annotation set (bracha87Fig1Received).  A marked READY re-arms
+ *     nothing, so the exchange converges in one tick per direction and
+ *     stops.
  *
  *     Under fair loss quiescence is REACHABLE, not guaranteed: a lost
- *     answer leaves the wanter's mask unchanged, so its pokes persist at
- *     its own tick rate, each re-arms, each is re-answered, and fair loss
- *     delivers one eventually.  What still blocks the gate forever is an
- *     honest residue no annotation can reach: a process that abandons
- *     early, or one that never announces at all (Byzantine-silent), keeps
- *     every other process's count below n.  That is safe -- it can only
+ *     marked READY leaves its target's evidence unchanged, so its
+ *     unmarked re-sends persist at its own tick rate, each re-arms, each
+ *     draws the marked re-send again, and fair loss delivers one
+ *     eventually.  What still blocks the gate forever is an honest
+ *     residue no annotation can reach: a process that abandons early, or
+ *     one that never announces at all (Byzantine-silent), keeps every
+ *     other process's count below n.  That is safe -- it can only
  *     persist once every correct process has accepted, and the
  *     un-quiesced process merely retries a READY no correct process
- *     consumes.  Answering costs one masked READY per tick while a want
- *     stands, aimed only at the process that asked; a Byzantine process
- *     that announced and then pokes can hold the gate open at that price,
- *     forfeiting nothing owed to any correct process.  The application's
- *     abandonment policy remains the backstop.
+ *     consumes.  An outstanding arm costs one masked READY per tick,
+ *     aimed only at the process it un-suppressed; a Byzantine process
+ *     that announced and then keeps re-arming can hold the gate open at
+ *     that price, forfeiting nothing owed to any correct process.  The
+ *     application's abandonment policy remains the backstop.
  *
  * Per-process suppression: every retry action carries a suppress mask
  * (bracha87Fig1Skip; on the array path, struct bracha87Fig1Act.skip)
@@ -346,8 +351,8 @@ bracha87Fig1Value(
  * gate above: INITIAL and ECHO at ACCEPTED (INITIAL also at
  * all-echoed), READY at full suppress coverage.  An RDSENT instance
  * therefore outputs at least READY until that gate closes; past that
- * it is quiescent and returns 0, and a want arriving afterward
- * re-opens it for exactly the tick that answers.
+ * it is quiescent and returns 0, and an unmarked READY arriving
+ * afterward re-opens it for exactly the tick that re-sends marked.
  *
  * Out actions reuse BRACHA87_INITIAL_ALL / BRACHA87_ECHO_ALL /
  * BRACHA87_READY_ALL; the echoed value is read via
@@ -385,7 +390,7 @@ bracha87Fig1AllEchoed(
 /*
  * Record that process 'from' has ACCEPTED this instance (idempotent,
  * value-agnostic).  Drives the READY suppress mask and, with
- * bracha87Fig1ProcessWants, the READY quiescence gate.  'from' is the
+ * bracha87Fig1ProcessResend, the READY quiescence gate.  'from' is the
  * announcing process -- the sender of
  * a (ready, v) carrying the ACCEPTED annotation, already fed through
  * bracha87Fig1Input -- or the local index, supplied by the caller for
@@ -402,44 +407,45 @@ bracha87Fig1ProcessAccepted(
  * Record that process 'from' does NOT hold this instance's accept, so the
  * READY suppress mask must not drop it and the READY retire gate must not
  * close over it.  Mirror of bracha87Fig1ProcessAccepted, and read off the
- * same message: a (ready, v) that arrives WITHOUT the answer annotation is
- * its sender saying "I have not recorded your accept" -- had it recorded
- * one, it would have suppressed this process instead of sending.  Call
- * AFTER the matching bracha87Fig1Input for that (ready, v), the same
- * discipline ProcessAccepted takes; the two are order-independent with
- * respect to each other, and one message can legitimately carry both facts
- * (its sender has accepted, and it lacks ours).
+ * same message: a (ready, v) that arrives WITHOUT the RECEIVED annotation
+ * is its sender showing this process's accept has not been recorded there
+ * -- had it recorded one, it would have suppressed this process instead of
+ * sending.  Call AFTER the matching bracha87Fig1Input for that (ready, v),
+ * the same discipline ProcessAccepted takes; the two are order-independent
+ * with respect to each other, and one message can legitimately carry both
+ * facts (its sender has accepted, and it lacks ours).
  *
- * The arm cannot ride Input itself: a wanter's poke is a DUPLICATE (ready,
- * v), which Input dedups and returns 0 for before reaching any post-accept
- * region.  Caller-fed is how the arm escapes that dedup -- exactly as
- * ProcessAccepted already does for the ACCEPTED annotation.
+ * The arm cannot ride Input itself: an unmarked re-send is a DUPLICATE
+ * (ready, v), which Input dedups and returns 0 for before reaching any
+ * post-accept region.  Caller-fed is how the arm escapes that dedup --
+ * exactly as ProcessAccepted already does for the ACCEPTED annotation.
  *
  * Records nothing until this instance has BRACHA87_F1_ACCEPTED: there is
  * no accept to announce, and the post-accept retries reach an
  * unannounced-to process anyway, since it is not yet in acFrom.  Consumed
- * by the next READY egress, which answers it; a lost answer is re-armed by
- * the wanter's next poke, and that re-arming is the loss recovery.
- * Out-of-range 'from' and a null instance are ignored.
+ * by the next READY egress, which goes out marked; a lost marked re-send
+ * is re-armed by its target's next unmarked one, and that re-arming is the
+ * loss recovery.  Out-of-range 'from' and a null instance are ignored.
  *
  * CALLER OBLIGATION.  A caller that stops ticking an instance on the
  * quiescent 0 return (leaving it out of its retry rotation) must put it
  * BACK on this call.  The library re-opens the READY retire here, but only
- * a tick can answer, and a want is exactly the evidence that something is
- * still owed.  Skipping the re-entry costs nothing while nothing is lost
- * and forfeits the whole fair-loss recovery the moment an answer is
- * dropped: the wanter re-pokes forever into a process that has stopped
- * listening for its own work.
+ * a tick can re-send, and an unmarked READY is exactly the evidence that
+ * something is still owed.  Skipping the re-entry costs nothing while
+ * nothing is lost and forfeits the whole fair-loss recovery the moment a
+ * marked re-send is dropped: its target re-sends unmarked forever into a
+ * process that has stopped listening for its own work.
  *
  * Byzantine note, the mirror of ProcessAccepted's: an arm only ever
- * un-suppresses its own sender, so a forged poke buys the forger one
- * masked READY per tick, aimed at the forger.  It can hold this instance's
- * READY retire open -- the same standing an announcement it never sends
- * already has -- and can neither delay nor displace anything owed to a
- * correct process, since every other bit of the mask still suppresses.
+ * un-suppresses its own sender, so a forged unmarked READY buys the forger
+ * one masked READY per tick, aimed at the forger.  It can hold this
+ * instance's READY retire open -- the same standing an announcement it
+ * never sends already has -- and can neither delay nor displace anything
+ * owed to a correct process, since every other bit of the mask still
+ * suppresses.
  */
 void
-bracha87Fig1ProcessWants(
+bracha87Fig1ProcessResend(
   struct bracha87Fig1 *
  ,unsigned char            /* from: process lacking our announcement */
 );
@@ -448,19 +454,20 @@ bracha87Fig1ProcessWants(
  * BPR per-process suppress mask for one retry action: a bitmap of processes
  * that provably no longer consume it, so the caller's broadcast skips
  * them (process p skipped iff bit p set).  INITIAL_ALL -> echoed processes,
- * ECHO_ALL -> readied processes, READY_ALL -> accepted processes MINUS the
- * ones that have asked for this instance's announcement (bracha87Fig1-
- * ProcessWants) -- suppressing a wanter is what strands it; 0 for a null
+ * ECHO_ALL -> readied processes, READY_ALL -> accepted processes MINUS
+ * the ones with an outstanding arm (bracha87Fig1ProcessResend) --
+ * suppressing an armed process is what strands it; 0 for a null
  * instance or non-retry act (broadcast to all).  Borrowed pointer into
  * library state, valid until the next mutating call on this instance.
  * The array Retry fills struct bracha87Fig1Act.skip from this.
  *
  * The READY mask is also the retire gate: bracha87Fig1Bpr stops outputting
  * READY_ALL when all n of its bits are set, which is the same statement as
- * "every process has accepted and none is owed an announcement."  Its wants
- * are consumed by each READY_ALL egress, so a mask read between that egress
- * and the next arm or tick can still show a just-answered process
- * un-suppressed -- one duplicate (ready, v) at worst, never a missed one.
+ * "every process has accepted and none is owed an announcement."  Its
+ * outstanding arms are consumed by each READY_ALL egress, so a mask read
+ * between that egress and the next arm or tick can still show a process
+ * un-suppressed whose marked re-send just went out -- one duplicate
+ * (ready, v) at worst, never a missed one.
  */
 const unsigned char *
 bracha87Fig1Skip(
@@ -469,24 +476,26 @@ bracha87Fig1Skip(
 );
 
 /*
- * The ANSWER mask: a bitmap of the processes whose accept this instance has
- * recorded (bracha87Fig1ProcessAccepted), so a (ready, v) sent to process p
- * can say so iff bit p is set -- test with BRACHA87_SKIP_TST, same bit
- * convention.  0 for a null instance.  Borrowed pointer into library state,
- * valid until the next mutating call on this instance.  The array Retry
- * fills struct bracha87Fig1Act.answer from this.
+ * The RECEIVED mask: a bitmap of the processes whose accept this instance
+ * has recorded (bracha87Fig1ProcessAccepted), so a (ready, v) sent to
+ * process p can say so iff bit p is set -- test with BRACHA87_SKIP_TST,
+ * same bit convention.  0 for a null instance.  Borrowed pointer into
+ * library state, valid until the next mutating call on this instance.  The
+ * array Retry fills struct bracha87Fig1Act.received from this.
  *
- * The annotation is what keeps the want/answer exchange from ping-ponging:
- * a (ready, v) carrying it must NOT be fed to bracha87Fig1ProcessWants,
- * while one arriving without it is a want.  It is the raw accepted set, not
- * the suppressed set -- a wanter is precisely a process in this mask that
- * must still be sent to -- so a caller reads .skip to decide WHETHER to
- * send and this to decide WHAT the sent (ready, v) claims.  Never set the
- * annotation for a process outside this mask: it would tell a correct
- * process to stop asking for an announcement this instance still needs.
+ * The annotation is the discriminator that keeps the annotation exchange
+ * from ping-ponging: a (ready, v) carrying it must NOT be fed to
+ * bracha87Fig1ProcessResend, while one arriving without it re-arms.  It is
+ * the raw accepted set, not the suppressed set -- an armed process is
+ * precisely a process in this mask that must still be sent to -- so a
+ * caller reads .skip to decide WHETHER to send and this to decide WHAT the
+ * sent (ready, v) claims.  Never set the annotation for a process outside
+ * this mask: it would show a correct process its accept as received here,
+ * silencing the re-sends carrying the announcement this instance still
+ * needs.
  */
 const unsigned char *
-bracha87Fig1Answer(
+bracha87Fig1Received(
   const struct bracha87Fig1 *
 );
 
@@ -935,8 +944,8 @@ bracha87Fig4Round(
 /*  (pre-broadcast / fully-shutdown state) or every sent instance   */
 /*  has retired all its retries (quiescence -- every process announced      */
 /*  accepted and holds this process's own announcement).  Neither is a   */
-/*  termination signal by itself, and a later want re-opens the READY    */
-/*  retry for the one tick that answers it.                              */
+/*  termination signal by itself, and a later unmarked READY re-opens    */
+/*  the READY retry for the one tick that re-sends marked.               */
 /*                                                                       */
 /*  Termination is the application's policy, not the library's,          */
 /*  which prescribes none -- see BPR.md.  Count Retry calls across       */
@@ -997,13 +1006,14 @@ struct bracha87Fig1Act {
   const unsigned char *skip;  /* BPR per-process suppress mask, or 0 = all;
                                * see bracha87Fig1Skip.  Borrowed, valid
                                * until the next mutating call. */
-  const unsigned char *answer;/* READY_ALL: per-recipient ANSWER mask (set
-                               * the wire answer bit for recipient p iff bit
-                               * p is set), or 0 on any other act.  Unlike
-                               * .accepted, which is one fact about the
-                               * sender, this is one bit per recipient; see
-                               * bracha87Fig1Answer.  Borrowed, same
-                               * lifetime as .skip. */
+  const unsigned char *received;/* READY_ALL: per-recipient RECEIVED mask
+                                 * (set the wire RECEIVED bit for recipient
+                                 * p iff bit p is set), or 0 on any other
+                                 * act.  Unlike .accepted, which is one fact
+                                 * about the sender, this is one bit per
+                                 * recipient; see
+                                 * bracha87Fig1Received.  Borrowed, same
+                                 * lifetime as .skip. */
 };
 
 /*

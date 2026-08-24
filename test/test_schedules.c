@@ -31,12 +31,12 @@
  * one Fig 1 instance per process, one designated honest initiator,
  * the caller-side forged-INITIAL filter, wire bits 4/5 framing,
  * ingress ordered Input -> ProcessAccepted (a READY with bit 4) ->
- * ProcessWants (a READY without bit 5) with rotation re-entry, and
+ * ProcessResend (a READY without bit 5) with rotation re-entry, and
  * the self-accept recorded at ACCEPT.
  *
  * SURFACE 2 is the ACS loop of example/bkr94acs.c: the bkr94acsAcast
  * bootstrap, both Input classes with the canonical packed-byte
- * framing, bkr94acs*Accepted / bkr94acs*Wants routing with the same
+ * framing, bkr94acs*Accepted / bkr94acs*Resend routing with the same
  * re-entry.
  *
  * The HEADERS define the contract; the examples DEMONSTRATE it and
@@ -80,7 +80,7 @@
  *               on the full content, ingress is a deterministic
  *               function of (state, content), so which copy is
  *               removed cannot matter.  Copies are NOT coalesced --
- *               ProcessAccepted is idempotent but ProcessWants is
+ *               ProcessAccepted is idempotent but ProcessResend is
  *               one-shot-per-egress, so k copies are not one copy.
  *   tick(p)     the surface's sweep-tick composite, atomically.  A
  *               caller's loop body is straight-line code, so no
@@ -93,8 +93,8 @@
  *
  * The content key carries every field ingress reads.  Surface 2:
  * class, process, round, initiator, type, the ACCEPTED bit, the
- * ANSWERED bit, from, to, and the BA binary value with its D_FLAG.
- * The ANSWERED bit is computed PER RECIPIENT at expansion
+ * RECEIVED bit, from, to, and the BA binary value with its D_FLAG.
+ * The RECEIVED bit is computed PER RECIPIENT at expansion
  * (bracha87.h:1000-1006), not per act, and is part of the key.  The
  * A-Cast value bytes are a function of the A-Cast's process here --
  * honest processes, one value each, no equivocation -- so `process`
@@ -174,8 +174,9 @@
  *                exhaustive over schedules with at most K ticks per
  *                process, and nothing more.  Measured per config, not
  *                inherited: surface 1 at n=2 t=0 needs 3 ticks per
- *                process (announce, answer, observe the retire), while
- *                surface 2's floor is a full retry-cursor pass, N +
+ *                process (announce, marked re-send, observe the
+ *                retire), while surface 2's floor is a full
+ *                retry-cursor pass, N +
  *                N*(3*maxPhases)*N calls -- 52 at n=4 maxPhases=1.
  *   maxPhases    surface 2, small, and A KNOB.  Whether the EXHAUSTED
  *                class is empty is a reading of this knob, never a
@@ -191,7 +192,7 @@
  * 100,663,296 distinct states at K=3 without closing, which is where
  * a 1.5 GB visited table fills.  The blow-up is the pool: each
  * tick pushes fresh copies of contents whose count had dropped, and a
- * duplicate un-ANSWERED READY re-arms a want after an egress consumed
+ * duplicate unmarked READY re-arms its sender after an egress consumed
  * the previous arm (bracha87.c:624-625), so copies are semantically
  * live and cannot be coalesced.  What that costs is the ONE property
  * a completed search would have had: the counts below are a
@@ -290,14 +291,14 @@
  *     with the local index and no rdFrom guard
  *     (bracha87.h:388-392, bracha87.c:585-600), while the process's
  *     own (ready, v) can still be pending in the pool.
- *   - the ANSWER mask is present only on a READY act
+ *   - the RECEIVED mask is present only on a READY act
  *     (bracha87.h:1000-1006, bkr94acs.h:229-238).
  *   - HARNESS SELF-CHECKS, labeled as such because they prove framer
- *     discipline and not library behavior: an ANSWERED READY is never
- *     routed to *Wants, and the wire ANSWERED bit is set for
- *     recipient p only where the answer mask says so.  The second
+ *     discipline and not library behavior: a marked READY is never
+ *     routed to *Resend, and the wire RECEIVED bit is set for
+ *     recipient p only where the RECEIVED mask says so.  The second
  *     would be an identity at the library layer anyway --
- *     bracha87Fig1Answer RETURNS acFrom (bracha87.c:679-685).
+ *     bracha87Fig1Received RETURNS acFrom (bracha87.c:679-685).
  *   - single input per BA: bkr94acsBaEntered latched once entered.
  *   - Bracha Lemma 1 (surface 1), in its observable form: every
  *     instance whose echoed value exists carries the initiator's
@@ -328,13 +329,13 @@
  *     everywhere; no 0xFE anywhere -- sound ONLY under the class
  *     precedence above.  Pool empty.  AND the ending claim per owned
  *     Fig 1 instance, read through bkr94acsAcastFig1 / bkr94acsBaFig1:
- *     every SENT instance THE RETRY STILL SERVES has an answer mask
+ *     every SENT instance THE RETRY STILL SERVES has a RECEIVED mask
  *     covering all n.  The scope matters: the decided-0 retry gate
  *     (bkr94acs.c:744-777) skips an excluded process's A-Cast walk,
  *     so there the gate itself is the retire, and a late-submitted
  *     excluded A-Cast legitimately quiesces accepted-everywhere with
- *     a short mask and armed wants nothing will consume.  The argument
- *     that makes "sent" the right guard: at quiescence a sent
+ *     a short mask and outstanding arms nothing will consume.  The
+ *     argument that makes "sent" the right guard: at quiescence a sent
  *     instance is ECHOED (a never-echoed initiator can retire INITIAL
  *     neither way -- ACCEPTED needs readySent needs echoed, and
  *     all-echoed counts the initiator's own echo), ECHOED is ACCEPTED
@@ -420,7 +421,7 @@
  */
 #define KEY_TYPE_SH   0   /* BRACHA87_INITIAL / ECHO / READY  */
 #define KEY_ACC_SH    2   /* wire ACCEPTED bit                */
-#define KEY_ANS_SH    3   /* wire ANSWERED bit, per recipient */
+#define KEY_RCV_SH    3   /* wire RECEIVED bit, per recipient */
 #define KEY_CLS_SH    4   /* 0 = A-Cast, 1 = BA               */
 #define KEY_BAV_SH    5   /* bit 0 binary value, bit 1 D_FLAG */
 #define KEY_PROC_SH   7
@@ -465,10 +466,10 @@ struct config {
   unsigned char maxPhases;  /* surface 2 */
   unsigned char defer;      /* surface 2: deferred A-Cast, 0xFF = none */
   unsigned char keyAllow;   /* 1 = allowance in the key, 0 = dominance */
-  unsigned char wantQuiescent;
-  unsigned char wantNoExhausted;
-  unsigned char wantSubsetFull;
-  unsigned char wantSubsetShort;
+  unsigned char expectQuiescent;
+  unsigned char expectNoExhausted;
+  unsigned char expectSubsetFull;
+  unsigned char expectSubsetShort;
   unsigned char smoke;
 };
 
@@ -494,11 +495,11 @@ static struct config Configs[] = {
    * and not a guess: a process must tick once to announce its accept
    * (the ACCEPTED annotation rides only on retry READYs -- an
    * Input-produced READY passes a literal 0,
-   * example/bracha87Fig1.c:599-603), once to answer the want that
-   * announcement provokes, and once more to read the retired 0 return
-   * that IS quiescence.  It is the anchor because it is the smallest
-   * shape that reaches quiescence at all, not because it closes: see
-   * the ceiling paragraph in the banner. */
+   * example/bracha87Fig1.c:599-603), once for the marked re-send the
+   * announcement's unmarked arrival arms, and once more to read the
+   * retired 0 return that IS quiescence.  It is the anchor because it
+   * is the smallest shape that reaches quiescence at all, not because
+   * it closes: see the ceiling paragraph in the banner. */
   { "1", "surface 1, n=2 t=0, K=3 -- the anchor",
     4000000UL, 4000UL,
     4000000UL, 18835154UL, 43UL, 0UL, 2585UL, 1UL,
@@ -616,7 +617,7 @@ static struct bracha87Fig1 *F1arr[1];
 static struct bracha87Retry F1cursor;
 static struct bkr94acs *Acsp;
 static const unsigned char *Skip;
-static const unsigned char *Answer;
+static const unsigned char *Received;
 static unsigned char PushType;
 static unsigned char PushAcc;
 static unsigned char PreDec;
@@ -1024,7 +1025,7 @@ explore(
          * needs echoed, and all-echoed counts the initiator's own
          * echo), ECHOED is ACCEPTED (ECHO retires only there), and an
          * ACCEPTED instance's READY retires only on the remote
-         * all-accepted gate: the answer mask covers all n.  Value
+         * all-accepted gate: the RECEIVED mask covers all n.  Value
          * non-null is the sent test. */
         {
           unsigned int r;
@@ -1034,13 +1035,13 @@ explore(
           const unsigned char *am;
 
           for (b = 0; b < N; ++b) {
-            /* The decided-0 retry gate OUTRANKS the want/answer
+            /* The decided-0 retry gate OUTRANKS the annotation
              * exchange for an excluded process's A-Cast
              * (bkr94acs.c:744-777: BA decided 0 -> the retry skips
              * the A-Cast walk; the gate itself is the retire).  A
              * late-submitted excluded A-Cast can therefore quiesce
-             * accepted-everywhere with a permanently short answer
-             * mask and armed wants nothing will ever consume --
+             * accepted-everywhere with a permanently short RECEIVED
+             * mask and outstanding arms nothing will ever consume --
              * reachable, and benign: nothing is owed, the exclusion
              * already conveyed the outcome.  The ending claim is
              * scoped to the instances the retry still serves. */
@@ -1049,15 +1050,15 @@ explore(
             f1 = bkr94acsAcastFig1(Acsp, (unsigned char)b);
             if (!f1 || !bracha87Fig1Value(f1))
               continue;
-            if (!(am = bracha87Fig1Answer(f1))) {
+            if (!(am = bracha87Fig1Received(f1))) {
               FailMsg = "quiescent terminal: a sent A-Cast Fig 1 has"
-                        " no answer mask";
+                        " no RECEIVED mask";
               goto fail;
             }
             for (q = 0; q < N; ++q)
               if (!BRACHA87_SKIP_TST(am, q)) {
                 FailMsg = "quiescent terminal: a sent A-Cast Fig 1's"
-                          " answer mask is short of all n -- its READY"
+                          " RECEIVED mask is short of all n -- its READY"
                           " did not retire on the remote gate";
                 goto fail;
               }
@@ -1069,15 +1070,15 @@ explore(
                                     (unsigned char)r, (unsigned char)w);
                 if (!f1 || !bracha87Fig1Value(f1))
                   continue;
-                if (!(am = bracha87Fig1Answer(f1))) {
+                if (!(am = bracha87Fig1Received(f1))) {
                   FailMsg = "quiescent terminal: a sent BA Fig 1 has"
-                            " no answer mask";
+                            " no RECEIVED mask";
                   goto fail;
                 }
                 for (q = 0; q < N; ++q)
                   if (!BRACHA87_SKIP_TST(am, q)) {
                     FailMsg = "quiescent terminal: a sent BA Fig 1's"
-                              " answer mask is short of all n -- its"
+                              " RECEIVED mask is short of all n -- its"
                               " READY did not retire on the remote"
                               " gate";
                     goto fail;
@@ -1246,7 +1247,7 @@ explore(
                KEY_FLD(evArg, KEY_FROM_SH, 4),
                KEY_FLD(evArg, KEY_TO_SH, 4),
                KEY_FLD(evArg, KEY_ACC_SH, 1),
-               KEY_FLD(evArg, KEY_ANS_SH, 1),
+               KEY_FLD(evArg, KEY_RCV_SH, 1),
                KEY_FLD(evArg, KEY_BAV_SH, 2));
       else
         printf("%s process %lu\n",
@@ -1335,11 +1336,11 @@ explore(
         if (KEY_FLD(key, KEY_ACC_SH, 1))
           bracha87Fig1ProcessAccepted(F1p,
             (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4));
-        /* HARNESS SELF-CHECK: an ANSWERED READY is never routed to
-         * *Wants -- an answer that armed a want would ping-pong and
-         * the pair would never fall silent. */
-        if (!KEY_FLD(key, KEY_ANS_SH, 1)) {
-          bracha87Fig1ProcessWants(F1p,
+        /* HARNESS SELF-CHECK: a marked READY is never routed to
+         * *Resend -- a marked READY that re-armed its sender would
+         * ping-pong and the pair would never fall silent. */
+        if (!KEY_FLD(key, KEY_RCV_SH, 1)) {
+          bracha87Fig1ProcessResend(F1p,
             (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4));
           Quiescent[Self] = 0;
         }
@@ -1366,8 +1367,8 @@ explore(
                                    ? BRACHA87_ECHO : BRACHA87_READY);
         PushAcc = 0;
         Skip = bracha87Fig1Skip(F1p, Out1[i]);
-        Answer = (Out1[i] == BRACHA87_READY_ALL)
-               ? bracha87Fig1Answer(F1p) : 0;
+        Received = (Out1[i] == BRACHA87_READY_ALL)
+               ? bracha87Fig1Received(F1p) : 0;
         PushRet = 1;
         goto push1;
        push1r1:
@@ -1392,8 +1393,8 @@ explore(
           bkr94acsAcastAccepted(Acsp,
             (unsigned char)KEY_FLD(key, KEY_PROC_SH, 4),
             (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4));
-        if (!KEY_FLD(key, KEY_ANS_SH, 1)) {
-          bkr94acsAcastWants(Acsp,
+        if (!KEY_FLD(key, KEY_RCV_SH, 1)) {
+          bkr94acsAcastResend(Acsp,
             (unsigned char)KEY_FLD(key, KEY_PROC_SH, 4),
             (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4));
           Quiescent[Self] = 0;
@@ -1421,8 +1422,8 @@ explore(
             (unsigned char)KEY_FLD(key, KEY_ROUND_SH, 6),
             (unsigned char)KEY_FLD(key, KEY_INIT_SH, 4),
             (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4));
-        if (!KEY_FLD(key, KEY_ANS_SH, 1)) {
-          bkr94acsBaWants(Acsp,
+        if (!KEY_FLD(key, KEY_RCV_SH, 1)) {
+          bkr94acsBaResend(Acsp,
             (unsigned char)KEY_FLD(key, KEY_PROC_SH, 4),
             (unsigned char)KEY_FLD(key, KEY_ROUND_SH, 6),
             (unsigned char)KEY_FLD(key, KEY_INIT_SH, 4),
@@ -1460,8 +1461,8 @@ explore(
         goto applied;
       }
       for (i = 0; i < NActs; ++i) {
-        if (Pacts[i].act != BRACHA87_READY_ALL && Pacts[i].answer) {
-          FailMsg = "an ANSWER mask rode an act that is not READY_ALL";
+        if (Pacts[i].act != BRACHA87_READY_ALL && Pacts[i].received) {
+          FailMsg = "a RECEIVED mask rode an act that is not READY_ALL";
           goto fail;
         }
         PushType = (unsigned char)
@@ -1470,7 +1471,7 @@ explore(
          :                                        BRACHA87_READY);
         PushAcc = Pacts[i].accepted;
         Skip = Pacts[i].skip;
-        Answer = Pacts[i].answer;
+        Received = Pacts[i].received;
         PushRet = 2;
         goto push1;
        push1r2:
@@ -1556,7 +1557,7 @@ explore(
       FailMsg = "bkr94acsAcast output more than 1 act";
       goto fail;
     }
-    /* The bootstrap broadcast honors no suppress mask and answers
+    /* The bootstrap broadcast honors no suppress mask and marks
      * nobody, exactly as example/bkr94acs.c:556-560 pushes it. */
     for (i = 0; i < NActs; ++i)
       for (j = 0; j < N; ++j)
@@ -1573,17 +1574,17 @@ explore(
 
    push1:
     /* Surface 1: one Fig 1 act to every unsuppressed recipient, with
-     * the per-recipient ANSWERED bit read off the answer mask.  The
+     * the per-recipient RECEIVED bit read off the RECEIVED mask.  The
      * HARNESS SELF-CHECK here is that the bit is set for recipient j
      * only where the mask says so -- framer discipline, since
-     * bracha87Fig1Answer RETURNS acFrom. */
+     * bracha87Fig1Received RETURNS acFrom. */
     for (j = 0; j < N; ++j) {
       if (Skip && BRACHA87_SKIP_TST(Skip, j))
         continue;
       poolPush(((unsigned long)PushType << KEY_TYPE_SH)
                | ((unsigned long)(PushAcc ? 1 : 0) << KEY_ACC_SH)
-               | ((unsigned long)((Answer && BRACHA87_SKIP_TST(Answer, j))
-                                  ? 1 : 0) << KEY_ANS_SH)
+               | ((unsigned long)((Received && BRACHA87_SKIP_TST(Received, j))
+                                  ? 1 : 0) << KEY_RCV_SH)
                | ((unsigned long)Self << KEY_FROM_SH)
                | (j << KEY_TO_SH));
     }
@@ -1622,8 +1623,8 @@ explore(
              | ((Acts[i].baValue & BRACHA87_D_FLAG)
                 ? (2UL << KEY_BAV_SH) : 0);
        frame:
-        if (Acts[i].type != BRACHA87_READY && Acts[i].answer) {
-          FailMsg = "an ANSWER mask rode an act that is not a READY";
+        if (Acts[i].type != BRACHA87_READY && Acts[i].received) {
+          FailMsg = "a RECEIVED mask rode an act that is not a READY";
           goto fail;
         }
         base |= ((unsigned long)Acts[i].type << KEY_TYPE_SH)
@@ -1634,9 +1635,9 @@ explore(
           if (Acts[i].skip && BRACHA87_SKIP_TST(Acts[i].skip, j))
             continue;
           poolPush(base
-                   | ((unsigned long)((Acts[i].answer
-                                       && BRACHA87_SKIP_TST(Acts[i].answer, j))
-                                      ? 1 : 0) << KEY_ANS_SH)
+                   | ((unsigned long)((Acts[i].received
+                                       && BRACHA87_SKIP_TST(Acts[i].received, j))
+                                      ? 1 : 0) << KEY_RCV_SH)
                    | (j << KEY_TO_SH));
         }
         break;
@@ -1702,11 +1703,11 @@ explore(
         const unsigned char *rd;
 
         /* acFrom \ {self} is a subset of rdFrom.  acFrom raw is the
-         * ANSWER mask; rdFrom is the ECHO_ALL suppress mask.  The self
+         * RECEIVED mask; rdFrom is the ECHO_ALL suppress mask.  The self
          * bit is excluded because the self-accept is recorded with no
          * rdFrom guard while this process's own (ready, v) can still
          * be pending. */
-        ac = bracha87Fig1Answer((struct bracha87Fig1 *)Img[p]);
+        ac = bracha87Fig1Received((struct bracha87Fig1 *)Img[p]);
         rd = bracha87Fig1Skip((struct bracha87Fig1 *)Img[p],
                               BRACHA87_ECHO_ALL);
         if (ac && rd)
@@ -2083,19 +2084,19 @@ main(
     if (Failed)
       exitCode = 1;
     else if (!witness) {
-      if (Cfg->wantQuiescent && !SawQuiescent) {
+      if (Cfg->expectQuiescent && !SawQuiescent) {
         printf("  FAILURE: no schedule reached a QUIESCENT terminal\n");
         exitCode = 1;
       }
-      if (Cfg->wantNoExhausted && TermExhausted) {
+      if (Cfg->expectNoExhausted && TermExhausted) {
         printf("  FAILURE: the EXHAUSTED class is non-empty at t=0\n");
         exitCode = 1;
       }
-      if (Cfg->wantSubsetFull && !SawSubsetFull) {
+      if (Cfg->expectSubsetFull && !SawSubsetFull) {
         printf("  FAILURE: no schedule reached |SubSet| = n\n");
         exitCode = 1;
       }
-      if (Cfg->wantSubsetShort && !SawSubsetShort) {
+      if (Cfg->expectSubsetShort && !SawSubsetShort) {
         printf("  FAILURE: no schedule reached |SubSet| < n"
                " (honest exclusion)\n");
         exitCode = 1;

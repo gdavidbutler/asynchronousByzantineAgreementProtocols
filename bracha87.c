@@ -52,31 +52,31 @@
  *   rdFrom[BS]           ready bitmap
  *   rdVal[N * L]         ready value per process
  *   acFrom[BS]           accepted bitmap (per-process "has accepted v")
- *   wtFrom[BS]           wants-our-announcement bitmap (one-shot)
- *   skFrom[BS]           effective READY suppress mask = acFrom & ~wtFrom
+ *   armFrom[BS]          outstanding-arms bitmap (one-shot)
+ *   skFrom[BS]           effective READY suppress mask = acFrom & ~armFrom
  *
  * acFrom records processes known to have ACCEPTED this instance, learned
  * from the ACCEPTED annotation an accepted process rides on its (ready, v)
- * retries (bracha87Fig1ProcessAccepted).  It is monotone, it is the ANSWER
- * mask (bracha87Fig1Answer -- the processes whose accept this instance can
- * confirm), and it is the base of the READY suppress mask: an accepted
- * process has its 2t+1 readys and consumes no further one (Rule 6 already
- * fired), so retrying READY to it is dead weight.  acFrom carries no
- * value (accept is value-determined by Lemma 2) -- only the bitmap.
+ * retries (bracha87Fig1ProcessAccepted).  It is monotone, it is the
+ * RECEIVED mask (bracha87Fig1Received -- the processes whose accept this
+ * instance can confirm), and it is the base of the READY suppress mask: an
+ * accepted process has its 2t+1 readys and consumes no further one (Rule 6
+ * already fired), so retrying READY to it is dead weight.  acFrom carries
+ * no value (accept is value-determined by Lemma 2) -- only the bitmap.
  *
  * acFrom alone over-suppresses, and that is the stranding this pair
  * repairs.  "p has accepted" and "p holds OUR accept" are different facts:
  * once acFrom[q] is set we stop sending q the (ready, v) our own ACCEPTED
  * annotation rides on, so if q's accept was recorded here before this
  * instance first announced, q never learns of it, q's own all-n gate stays
- * one bit short forever, and q pokes us with a (ready, v) we suppress.  The
- * poke IS the repair signal: a (ready, v) arriving WITHOUT the answer
- * annotation says its sender has not recorded our accept, and the caller
- * routes it to bracha87Fig1ProcessWants, which arms wtFrom.  wtFrom
- * un-suppresses that process for one egress -- skFrom is the difference --
- * and is consumed by that egress; a lost answer is re-armed by the next
- * poke.  An answer-annotated (ready, v) never arms, so answering cannot
- * ping-pong.
+ * one bit short forever, and q re-sends unmarked into our suppression.
+ * The unmarked re-send IS the repair signal: a (ready, v) arriving WITHOUT
+ * the RECEIVED annotation shows its sender has not recorded our accept,
+ * and the caller routes it to bracha87Fig1ProcessResend, which arms
+ * armFrom.  armFrom un-suppresses that process for one egress -- skFrom is
+ * the difference -- and is consumed by that egress; a lost marked re-send
+ * is re-armed by its target's next unmarked one.  A marked (ready, v)
+ * never arms, so the exchange cannot ping-pong.
  */
 
 #define B_N(b)       ((unsigned int)(b)->n + 1)
@@ -87,7 +87,7 @@
 #define F1_RDFROM(b) ((b)->data + F1_VLEN(b) + BIT_SZ(B_N(b)) + (unsigned long)B_N(b) * F1_VLEN(b))
 #define F1_RDVAL(b)  ((b)->data + F1_VLEN(b) + BIT_SZ(B_N(b)) + (unsigned long)B_N(b) * F1_VLEN(b) + BIT_SZ(B_N(b)))
 #define F1_ACFROM(b) ((b)->data + F1_VLEN(b) + BIT_SZ(B_N(b)) + (unsigned long)B_N(b) * F1_VLEN(b) + BIT_SZ(B_N(b)) + (unsigned long)B_N(b) * F1_VLEN(b))
-#define F1_WTFROM(b) (F1_ACFROM(b) + BIT_SZ(B_N(b)))
+#define F1_ARMFROM(b) (F1_ACFROM(b) + BIT_SZ(B_N(b)))
 #define F1_SKFROM(b) (F1_ACFROM(b) + 2 * BIT_SZ(B_N(b)))
 
 unsigned long
@@ -113,7 +113,7 @@ bracha87Fig1Sz(
     + BIT_SZ(N)               /* rdFrom bitmap */
     + (unsigned long)N * L    /* rdVal */
     + BIT_SZ(N)               /* acFrom bitmap */
-    + BIT_SZ(N)               /* wtFrom bitmap */
+    + BIT_SZ(N)               /* armFrom bitmap */
     + BIT_SZ(N));             /* skFrom bitmap */
 }
 
@@ -518,37 +518,40 @@ bracha87Fig1Bpr(
      * instance's own accept -- then no process consumes a ready anywhere
      * and the instance is quiescent.  acFrom records processes' own accepts
      * (bracha87Fig1ProcessAccepted, fed from the ACCEPTED annotation on their
-     * ready retries, self included via the caller); wtFrom records the
-     * processes that answered back "I do not have yours"
-     * (bracha87Fig1ProcessWants).  skFrom is the difference, and it carries
+     * ready retries, self included via the caller); armFrom records the
+     * processes whose READYs arrived unmarked, each showing this
+     * instance's accept not received there (bracha87Fig1ProcessResend).
+     * skFrom is the difference, and it carries
      * BOTH decisions: full coverage retires the action, and each set bit
      * suppresses one recipient.  Reaching full coverage requires every
      * CORRECT process's true accept -- a byzantine process's forged
      * ACCEPTED only marks itself, never strands a correct laggard -- so the
-     * gate is byzantine-safe; a byzantine poke costs one masked READY aimed
-     * back at the poker per tick and delays nothing owed to a correct
-     * process, since every other bit of skFrom still suppresses.
+     * gate is byzantine-safe; a byzantine process that keeps re-arming
+     * costs one masked READY aimed back at itself per tick and delays
+     * nothing owed to a correct process, since every other bit of skFrom
+     * still suppresses.
      *
-     * The materialization is here, and only here, because a want is
-     * consumed by the egress that answers it.  A want armed after this
-     * point is answered by the next tick; a lost answer is re-armed by the
-     * wanter's next poke, which is what makes quiescence reachable under
-     * fair loss rather than merely under lossless delivery.
+     * The materialization is here, and only here, because an arm is
+     * consumed by the egress it un-suppresses.  An arm set after this
+     * point draws the next tick's marked re-send; a lost marked re-send is
+     * re-armed by its target's next unmarked one, which is what makes
+     * quiescence reachable under fair loss rather than merely under
+     * lossless delivery.
      */
     if (retryReady) {
       unsigned char *ac;
-      unsigned char *wt;
+      unsigned char *am;
       unsigned char *sk;
       unsigned int bs;
       unsigned int i;
 
       ac = F1_ACFROM(b);
-      wt = F1_WTFROM(b);
+      am = F1_ARMFROM(b);
       sk = F1_SKFROM(b);
       bs = BIT_SZ(B_N(b));
       for (i = 0; i < bs; ++i) {
-        sk[i] = ac[i] & ~wt[i];
-        wt[i] = 0;
+        sk[i] = ac[i] & ~am[i];
+        am[i] = 0;
       }
       if (fig1FromCnt(sk, B_N(b)) < B_N(b))
         out[nout++] = BRACHA87_READY_ALL;
@@ -589,12 +592,12 @@ bracha87Fig1ProcessAccepted(
   BIT_SET(F1_ACFROM(b), from);
   /*
    * Keep the effective mask in step with the formula skFrom = acFrom &
-   * ~wtFrom.  Deriving the bit rather than setting it is what makes this
-   * setter and bracha87Fig1ProcessWants order-independent: one READY can
+   * ~armFrom.  Deriving the bit rather than setting it is what makes this
+   * setter and bracha87Fig1ProcessResend order-independent: one READY can
    * carry both facts (its sender has accepted, and it lacks ours), and the
    * caller routes them in whichever order it likes.
    */
-  if (BIT_TST(F1_WTFROM(b), from))
+  if (BIT_TST(F1_ARMFROM(b), from))
     BIT_CLR(F1_SKFROM(b), from);
   else
     BIT_SET(F1_SKFROM(b), from);
@@ -602,11 +605,11 @@ bracha87Fig1ProcessAccepted(
 
 /*
  * Record that process 'from' has NOT recorded this instance's accept --
- * read off a (ready, v) that arrived without the answer annotation, which
- * is exactly the statement "the sender would have suppressed me had it
- * held my accept."  Arms wtFrom, un-suppressing 'from' for the next READY
- * egress (which carries the ACCEPTED annotation and, per bracha87Fig1-
- * Answer, the answer annotation back).
+ * read off a (ready, v) that arrived without the RECEIVED annotation,
+ * which is exactly the statement "the sender would have suppressed me had
+ * it held my accept."  Arms armFrom, un-suppressing 'from' for the next
+ * READY egress (which goes out carrying the ACCEPTED annotation and, per
+ * bracha87Fig1Received, the RECEIVED annotation back).
  *
  * Records nothing before this instance has ACCEPTED: there is no accept to
  * announce yet, and the post-accept retries reach an unannounced-to process
@@ -615,13 +618,13 @@ bracha87Fig1ProcessAccepted(
  * one, and that re-arming IS the loss recovery.
  */
 void
-bracha87Fig1ProcessWants(
+bracha87Fig1ProcessResend(
   struct bracha87Fig1 *b
  ,unsigned char from
 ){
   if (!b || from > b->n || !(b->flags & BRACHA87_F1_ACCEPTED))
     return;
-  BIT_SET(F1_WTFROM(b), from);
+  BIT_SET(F1_ARMFROM(b), from);
   BIT_CLR(F1_SKFROM(b), from);
 }
 
@@ -644,7 +647,7 @@ bracha87Fig1ProcessWants(
  *     from the ACCEPTED annotation processes ride on their ready retries
  *     (bracha87Fig1ProcessAccepted), and skFrom subtracts the processes
  *     still owed this instance's own announcement (bracha87Fig1Process-
- *     Wants) -- suppressing those would strand them.
+ *     Resend) -- suppressing those would strand them.
  *
  * Each mask uses only the soonest sound evidence: ecFrom (not rdFrom)
  * would under-suppress INITIAL; rdFrom (not ecFrom) would over-suppress
@@ -670,14 +673,14 @@ bracha87Fig1Skip(
 }
 
 /*
- * The ANSWER mask: acFrom itself, the processes whose accept this instance
- * has recorded.  A (ready, v) to one of them can say so, and saying so is
- * what stops it re-arming a want here.  Raw, not the suppressed set --
- * skFrom is the difference, and a wanter is precisely a process that is in
- * this mask and must still be sent to.
+ * The RECEIVED mask: acFrom itself, the processes whose accept this
+ * instance has recorded.  A (ready, v) to one of them can say so, and
+ * saying so is what stops it re-arming here.  Raw, not the suppressed set
+ * -- skFrom is the difference, and an armed process is precisely a process
+ * that is in this mask and must still be sent to.
  */
 const unsigned char *
-bracha87Fig1Answer(
+bracha87Fig1Received(
   const struct bracha87Fig1 *b
 ){
   if (!b)
@@ -1584,8 +1587,8 @@ bracha87Fig1RetryStep(
           out[i].idx = idx;
           out[i].value = v;
           out[i].skip = bracha87Fig1Skip(instances[idx], acts[i]);
-          out[i].answer = (acts[i] == BRACHA87_READY_ALL)
-            ? bracha87Fig1Answer(instances[idx]) : 0;
+          out[i].received = (acts[i] == BRACHA87_READY_ALL)
+            ? bracha87Fig1Received(instances[idx]) : 0;
         }
         p->sweepActs += n;
         return (n);
