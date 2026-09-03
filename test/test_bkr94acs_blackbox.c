@@ -166,6 +166,28 @@ struct wire {
   unsigned char value[MAX_VLEN]; /* ACAST only (vLen bytes) */
 };
 
+/*
+ * The two READY annotations as the one byte bkr94acs{Acast,Ba}Input
+ * takes for annot.  The wire model above carries them as separate
+ * flags; the library reads BKR94ACS_ACCEPTED and BKR94ACS_RECEIVED off
+ * whatever byte it is handed, and only when the type is a READY.
+ */
+static unsigned char
+wireAnnot(
+  const struct wire *w
+){
+  return ((w->accepted ? BKR94ACS_ACCEPTED : 0)
+        | (w->received ? BKR94ACS_RECEIVED : 0));
+}
+
+/*
+ * For the unit drivers below, which inject protocol traffic without
+ * modeling the annotation exchange.  BKR94ACS_RECEIVED says the sender
+ * already holds this process re-send arm, so no arm is taken and the
+ * driver exercises the Fig 1 rules alone.
+ */
+#define ANNOT_NO_ARM BKR94ACS_RECEIVED
+
 static struct wire WireQ[QCAP];
 static unsigned int QHead = 0;
 static unsigned int QTail = 0;
@@ -411,12 +433,12 @@ deliverWire(
   unsigned int n;
 
   if (w->cls == BKR94ACS_CLS_ACAST) {
-    n = bkr94acsAcastInput(process, w->process, w->type, w->from,
+    n = bkr94acsAcastInput(process, w->process, w->type, wireAnnot(w), w->from,
                               w->value, out);
     CHECK(n <= 3, "A-Cast input act count within its bound (2 + enter-1)");
   } else {
     n = bkr94acsBaInput(process, w->process, w->round, w->initiator,
-                               w->type, w->from, w->baValue, out);
+                               w->type, wireAnnot(w), w->from, w->baValue, out);
     CHECK(n <= 2, "BA input act count within its bound (echo/ready only)");
   }
   observeAndOutput(obs, w->to, nAct, out, n, vBytes, 0, -1);
@@ -621,7 +643,7 @@ freeCluster(
 /*  Used by Section C/D/E.  Each iteration:                           */
 /*    1. Drain wire queue, calling deliverWire for every popped wire  */
 /*       (silent process's wires are skipped at output, not delivery). */
-/*    2. Call bkr94acsRetry once on every non-silent process; output acts.  */
+/*    2. Call bkr94acsRetryStep once per non-silent process; output acts.   */
 /*    3. Verify process-level invariants (Retry act count <= MAX,         */
 /*       SentFig1Count monotone non-decreasing).                 */
 /*    4. Exit when all non-silent processes carry complete.    */
@@ -687,26 +709,16 @@ runWithRetry(
       if (silentProcess >= 0 && (int)w.to == silentProcess)
         continue;
       if (w.cls == BKR94ACS_CLS_ACAST) {
-        n = bkr94acsAcastInput(processes[w.to], w.process, w.type, w.from,
+        n = bkr94acsAcastInput(processes[w.to], w.process, w.type, wireAnnot(&w), w.from,
                                   w.value, out);
         /* BPR ACCEPTED annotation rides on a READY; feed it AFTER Input
          * (which records rdFrom) so acFrom stays a subset of rdFrom. */
-        if (w.accepted)
-          bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
         /* The RECEIVED bit's ABSENCE is the arm: the sender has not
          * recorded our accept, so un-suppress it for the next egress. */
-        if (w.type == BRACHA87_READY && !w.received)
-          bkr94acsAcastResend(processes[w.to], w.process, w.from);
       } else {
         n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                   w.initiator, w.type, w.from,
+                                   w.initiator, w.type, wireAnnot(&w), w.from,
                                    w.baValue, out);
-        if (w.accepted)
-          bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                    w.initiator, w.from);
-        if (w.type == BRACHA87_READY && !w.received)
-          bkr94acsBaResend(processes[w.to], w.process, w.round,
-                                 w.initiator, w.from);
       }
       observeAndOutput(&obs[w.to], w.to, nAct, out, n, vLen,
                      dropPercent, silentProcess);
@@ -729,7 +741,7 @@ runWithRetry(
     for (i = 0; i < nAct; ++i) {
       if (silentProcess >= 0 && (int)i == silentProcess)
         continue;
-      n = bkr94acsRetry(processes[i], &cursors[i], retryOut);
+      n = bkr94acsRetryStep(processes[i], &cursors[i], retryOut);
       if (n > maxRetryActs)
         maxRetryActs = n;
       observeAndOutput(&obs[i], (unsigned char)i, nAct, retryOut, n, vLen,
@@ -746,7 +758,7 @@ runWithRetry(
       unsigned int cur;
       if (silentProcess >= 0 && (int)i == silentProcess)
         continue;
-      cur = bkr94acsSentFig1Count(processes[i]);
+      cur = bkr94acsFig1SentCount(processes[i]);
       if (cur < prevSent[i])
         ++monotoneViolations;
       prevSent[i] = cur;
@@ -814,7 +826,7 @@ feedBAAccept(
   unsigned char sender;
 
   n = bkr94acsBaInput(a, process, round, initiator,
-                             BRACHA87_INITIAL, initiator, value, out);
+                             BRACHA87_INITIAL, ANNOT_NO_ARM, initiator, value, out);
   CHECK(n <= 2, "feedBAAccept: BA input outputs at most 2 acts");
   FeedLastActs = n;
   total += n;
@@ -832,7 +844,7 @@ feedBAAccept(
    * since echoed is set after INITIAL). */
   for (sender = 1; sender <= 3; ++sender) {
     n = bkr94acsBaInput(a, process, round, initiator,
-                               BRACHA87_READY, sender, value, out);
+                               BRACHA87_READY, ANNOT_NO_ARM, sender, value, out);
     CHECK(n <= 2, "feedBAAccept: BA input outputs at most 2 acts");
     FeedLastActs = n;
     total += n;
@@ -898,23 +910,14 @@ fDrive(
         continue;
       if (w.cls == BKR94ACS_CLS_ACAST) {
         n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                  wireAnnot(&w),
                                   w.from, w.value, out);
-        if (w.accepted)
-          bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
         /* The RECEIVED bit's ABSENCE is the arm: the sender has not
          * recorded our accept, so un-suppress it for the next egress. */
-        if (w.type == BRACHA87_READY && !w.received)
-          bkr94acsAcastResend(processes[w.to], w.process, w.from);
       } else {
         n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                   w.initiator, w.type, w.from,
+                                   w.initiator, w.type, wireAnnot(&w), w.from,
                                    w.baValue, out);
-        if (w.accepted)
-          bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                    w.initiator, w.from);
-        if (w.type == BRACHA87_READY && !w.received)
-          bkr94acsBaResend(processes[w.to], w.process, w.round,
-                                 w.initiator, w.from);
       }
       observeAndOutput(&obs[w.to], w.to, 4, out, n, 1, 0, silent);
     }
@@ -924,7 +927,7 @@ fDrive(
 
       if (silent >= 0 && (int)p == silent)
         continue;
-      n = bkr94acsRetry(processes[p], &cursors[p], out);
+      n = bkr94acsRetryStep(processes[p], &cursors[p], out);
       observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, silent);
 
       /* The round turn is drained at ZERO patience before the
@@ -987,7 +990,7 @@ fDrive(
 /*  acts, or a decision act (BKR94ACS_ACT_BA_DECIDED /                 */
 /*  BKR94ACS_ACT_COMPLETE) from a turn.  NOTHING ELSE -- routine       */
 /*  BA_SEND acts from a turn or from the fanout are not progress, and  */
-/*  the bkr94acsRetry egress is not progress (it is the                */
+/*  the bkr94acsRetryStep egress is not progress (it is the               */
 /*  retransmission stream, and its duplicates produce 0 acts at the    */
 /*  receiver, the C8 invariant).  The narrowness is load-bearing:      */
 /*  post-decide continuation turns produce BA_SENDs every sweep until  */
@@ -999,7 +1002,7 @@ fDrive(
 /*  to advance by one, since one call can complete two passes -- or,   */
 /*  for a process already marked quiescent and skipping its Retry      */
 /*  call, one idle sweep per tick.  Counting calls against             */
-/*  bkr94acsSentFig1Count would close late by the retired count.       */
+/*  bkr94acsFig1SentCount would close late by the retired count.       */
 /*                                                                    */
 /*  BARREN = a completed sweep that observed no progress.  The policy  */
 /*  fires after S consecutive barren sweeps; budget compares use >=,   */
@@ -1031,7 +1034,7 @@ spTick(
 
   /* The header's rule: the cursor's wrap count IS the pass boundary.
    * Compare it -- one call can complete two passes -- and never count
-   * calls against bkr94acsSentFig1Count, which is an upper bound that
+   * calls against bkr94acsFig1SentCount, which is an upper bound that
    * drifts longer as instances retire. */
   done = 0;
   if (skipped)
@@ -1138,21 +1141,12 @@ fbDrive(
       qPopHead(&w);
       if (w.cls == BKR94ACS_CLS_ACAST) {
         n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                  wireAnnot(&w),
                                   w.from, w.value, out);
-        if (w.accepted)
-          bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
-        if (w.type == BRACHA87_READY && !w.received)
-          bkr94acsAcastResend(processes[w.to], w.process, w.from);
       } else {
         n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                   w.initiator, w.type, w.from,
+                                   w.initiator, w.type, wireAnnot(&w), w.from,
                                    w.baValue, out);
-        if (w.accepted)
-          bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                    w.initiator, w.from);
-        if (w.type == BRACHA87_READY && !w.received)
-          bkr94acsBaResend(processes[w.to], w.process, w.round,
-                                 w.initiator, w.from);
       }
       if (n)
         ++pol[w.to].progress;
@@ -1160,7 +1154,7 @@ fbDrive(
     }
 
     for (p = 0; p < 4; ++p) {
-      retryActs = bkr94acsRetry(processes[p], &cursors[p], out);
+      retryActs = bkr94acsRetryStep(processes[p], &cursors[p], out);
       observeAndOutput(&obs[p], (unsigned char)p, 4, out, retryActs, 1, 0,
                        -1);
 
@@ -1305,21 +1299,12 @@ jDrive(
         continue;
       if (w.cls == BKR94ACS_CLS_ACAST) {
         n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                  wireAnnot(&w),
                                   w.from, w.value, out);
-        if (w.accepted)
-          bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
-        if (w.type == BRACHA87_READY && !w.received)
-          bkr94acsAcastResend(processes[w.to], w.process, w.from);
       } else {
         n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                   w.initiator, w.type, w.from,
+                                   w.initiator, w.type, wireAnnot(&w), w.from,
                                    w.baValue, out);
-        if (w.accepted)
-          bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                    w.initiator, w.from);
-        if (w.type == BRACHA87_READY && !w.received)
-          bkr94acsBaResend(processes[w.to], w.process, w.round,
-                                 w.initiator, w.from);
       }
       if (n)
         ++pol[w.to].progress;   /* PROGRESS: an Input returning acts */
@@ -1327,7 +1312,7 @@ jDrive(
     }
 
     for (p = 0; p < 4; ++p) {
-      n = bkr94acsRetry(processes[p], &cursors[p], out);
+      n = bkr94acsRetryStep(processes[p], &cursors[p], out);
       if (!n && cutTo >= 0 && (int)p == cutTo)
         ++*zeroRetriesOut;
       observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
@@ -1408,12 +1393,8 @@ iTick(
     if (side[w.from] != side[w.to])
       continue;
     if (w.cls == BKR94ACS_CLS_ACAST) {
-      n = bkr94acsAcastInput(processes[w.to], w.process, w.type, w.from,
+      n = bkr94acsAcastInput(processes[w.to], w.process, w.type, wireAnnot(&w), w.from,
                                 w.value, out);
-      if (w.accepted)
-        bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
-      if (w.type == BRACHA87_READY && !w.received)
-        bkr94acsAcastResend(processes[w.to], w.process, w.from);
       if (wit && wit->armed && w.to == wit->watchTo
        && w.process == wit->watchProcess) {
         if (w.type == BRACHA87_INITIAL)
@@ -1431,14 +1412,8 @@ iTick(
       }
     } else {
       n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                 w.initiator, w.type, w.from,
+                                 w.initiator, w.type, wireAnnot(&w), w.from,
                                  w.baValue, out);
-      if (w.accepted)
-        bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                  w.initiator, w.from);
-      if (w.type == BRACHA87_READY && !w.received)
-        bkr94acsBaResend(processes[w.to], w.process, w.round,
-                               w.initiator, w.from);
     }
     if (n)
       ++pol[w.to].progress;
@@ -1446,7 +1421,7 @@ iTick(
   }
 
   for (p = 0; p < 4; ++p) {
-    n = bkr94acsRetry(processes[p], &cursors[p], out);
+    n = bkr94acsRetryStep(processes[p], &cursors[p], out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
@@ -1507,11 +1482,11 @@ kDeliver(
   unsigned int n;
 
   if (w->cls == BKR94ACS_CLS_ACAST)
-    n = bkr94acsAcastInput(processes[to], w->process, w->type, w->from,
+    n = bkr94acsAcastInput(processes[to], w->process, w->type, wireAnnot(w), w->from,
                               w->value, out);
   else
     n = bkr94acsBaInput(processes[to], w->process, w->round,
-                               w->initiator, w->type, w->from,
+                               w->initiator, w->type, wireAnnot(w), w->from,
                                w->baValue, out);
   observeAndOutput(&obs[to], to, 4, out, n, vBytes, 0, -1);
   return (n);
@@ -1538,22 +1513,12 @@ kTick(
     if (w.to >= K_HONEST)
       continue;
     if (w.cls == BKR94ACS_CLS_ACAST) {
-      n = bkr94acsAcastInput(processes[w.to], w.process, w.type, w.from,
+      n = bkr94acsAcastInput(processes[w.to], w.process, w.type, wireAnnot(&w), w.from,
                                 w.value, out);
-      if (w.accepted)
-        bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
-      if (w.type == BRACHA87_READY && !w.received)
-        bkr94acsAcastResend(processes[w.to], w.process, w.from);
     } else {
       n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                 w.initiator, w.type, w.from,
+                                 w.initiator, w.type, wireAnnot(&w), w.from,
                                  w.baValue, out);
-      if (w.accepted)
-        bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                  w.initiator, w.from);
-      if (w.type == BRACHA87_READY && !w.received)
-        bkr94acsBaResend(processes[w.to], w.process, w.round,
-                               w.initiator, w.from);
     }
     if (n)
       ++pol[w.to].progress;
@@ -1561,7 +1526,7 @@ kTick(
   }
 
   for (p = 0; p < K_HONEST; ++p) {
-    n = bkr94acsRetry(processes[p], &cursors[p], out);
+    n = bkr94acsRetryStep(processes[p], &cursors[p], out);
     if (!n && zeroRetriesOut)
       ++*zeroRetriesOut;
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, vBytes, 0, -1);
@@ -1640,22 +1605,12 @@ lTick(
         ++wit->echoesIn;
     }
     if (w.cls == BKR94ACS_CLS_ACAST) {
-      n = bkr94acsAcastInput(processes[w.to], w.process, w.type, w.from,
+      n = bkr94acsAcastInput(processes[w.to], w.process, w.type, wireAnnot(&w), w.from,
                                 w.value, out);
-      if (w.accepted)
-        bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
-      if (w.type == BRACHA87_READY && !w.received)
-        bkr94acsAcastResend(processes[w.to], w.process, w.from);
     } else {
       n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                 w.initiator, w.type, w.from,
+                                 w.initiator, w.type, wireAnnot(&w), w.from,
                                  w.baValue, out);
-      if (w.accepted)
-        bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                  w.initiator, w.from);
-      if (w.type == BRACHA87_READY && !w.received)
-        bkr94acsBaResend(processes[w.to], w.process, w.round,
-                               w.initiator, w.from);
     }
     if (n)
       ++pol[w.to].progress;
@@ -1665,7 +1620,7 @@ lTick(
   for (p = 0; p < 4; ++p) {
     if (down[p])
       continue;
-    n = bkr94acsRetry(processes[p], &cursors[p], out);
+    n = bkr94acsRetryStep(processes[p], &cursors[p], out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, silent);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
@@ -1712,22 +1667,12 @@ mTick(
     if (*gone && w.to == leaver)
       continue;
     if (w.cls == BKR94ACS_CLS_ACAST) {
-      n = bkr94acsAcastInput(processes[w.to], w.process, w.type, w.from,
+      n = bkr94acsAcastInput(processes[w.to], w.process, w.type, wireAnnot(&w), w.from,
                                 w.value, out);
-      if (w.accepted)
-        bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
-      if (w.type == BRACHA87_READY && !w.received)
-        bkr94acsAcastResend(processes[w.to], w.process, w.from);
     } else {
       n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                 w.initiator, w.type, w.from,
+                                 w.initiator, w.type, wireAnnot(&w), w.from,
                                  w.baValue, out);
-      if (w.accepted)
-        bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                  w.initiator, w.from);
-      if (w.type == BRACHA87_READY && !w.received)
-        bkr94acsBaResend(processes[w.to], w.process, w.round,
-                               w.initiator, w.from);
     }
     if (n)
       ++pol[w.to].progress;
@@ -1748,7 +1693,7 @@ mTick(
   for (p = 0; p < 4; ++p) {
     if (*gone && p == leaver)
       continue;
-    n = bkr94acsRetry(processes[p], &cursors[p], out);
+    n = bkr94acsRetryStep(processes[p], &cursors[p], out);
     announces = 0;
     if (p == leaver)
       for (k = 0; k < n; ++k)
@@ -1843,22 +1788,12 @@ nDrive(
     while (qSize() > 0) {
       qPopHead(&w);
       if (w.cls == BKR94ACS_CLS_ACAST) {
-        n = bkr94acsAcastInput(processes[w.to], w.process, w.type, w.from,
+        n = bkr94acsAcastInput(processes[w.to], w.process, w.type, wireAnnot(&w), w.from,
                                   w.value, out);
-        if (w.accepted)
-          bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
-        if (w.type == BRACHA87_READY && !w.received)
-          bkr94acsAcastResend(processes[w.to], w.process, w.from);
       } else {
         n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                   w.initiator, w.type, w.from,
+                                   w.initiator, w.type, wireAnnot(&w), w.from,
                                    w.baValue, out);
-        if (w.accepted)
-          bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                    w.initiator, w.from);
-        if (w.type == BRACHA87_READY && !w.received)
-          bkr94acsBaResend(processes[w.to], w.process, w.round,
-                                 w.initiator, w.from);
       }
       if (n)
         ++pol[w.to].progress;
@@ -1880,7 +1815,7 @@ nDrive(
         bkr94acsAcast(processes[delayed], &acast[delayed], acastOut);
       }
 
-      n = bkr94acsRetry(processes[p], &cursors[p], out);
+      n = bkr94acsRetryStep(processes[p], &cursors[p], out);
       observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
       sweepDone = spTick(&pol[p], cursors[p].sweeps, 0);
 
@@ -1965,7 +1900,7 @@ main(
 
     CHECK(a->complete == 0,
           "fresh: complete clear");
-    CHECK(bkr94acsSentFig1Count(a) == 0,
+    CHECK(bkr94acsFig1SentCount(a) == 0,
           "fresh: SentFig1Count == 0");
     for (j = 0; j < 4; ++j)
       CHECK(bkr94acsBaDecision(a, (unsigned char)j) == 0xFF,
@@ -1992,6 +1927,66 @@ main(
     free(a);
   }
   a1_done: ;
+
+  /* ---------------------------------------------------------------- */
+  BANNER("A1b: Sz refuses a configuration that cannot be built");
+  /* ---------------------------------------------------------------- */
+  /* Header: "or 0 if the configuration cannot be built ... n and vLen  */
+  /* are refused ... they are WIDER here than bkr94acsInit's unsigned   */
+  /* char, so Sz is the only entry that can see one out of range.       */
+  /* maxPhases is refused rather than clamped ... because bkr94acsInit  */
+  /* refuses the same values by returning uninitialized."               */
+  /*                                                                    */
+  /* Each pair brackets a boundary: the last value Init can carry, then */
+  /* the first it cannot.  The maxPhases pair is what distinguishes     */
+  /* this refusal from bracha87Fig4Sz's clamp of the same parameter.    */
+  /* ---------------------------------------------------------------- */
+  {
+    CHECK(bkr94acsSz(255, 0, 1) != 0, "Sz takes n 255");
+    CHECK(bkr94acsSz(256, 0, 1) == 0, "Sz refuses n 256");
+    CHECK(bkr94acsSz(3, 255, 1) != 0, "Sz takes vLen 255");
+    CHECK(bkr94acsSz(3, 256, 1) == 0, "Sz refuses vLen 256");
+    CHECK(bkr94acsSz(3, 0, BRACHA87_MAX_PHASES) != 0,
+          "Sz takes maxPhases at the ceiling");
+    CHECK(bkr94acsSz(3, 0, BRACHA87_MAX_PHASES + 1) == 0,
+          "Sz refuses maxPhases past the ceiling, never clamps");
+    CHECK(bkr94acsSz(3, 0, 0) == 0, "Sz refuses maxPhases 0");
+
+    /* An Init the size call refused must leave the caller's memory
+     * alone: the refusal is the whole contract, and a partly-built
+     * machine behind a 0 size would be worse than none.
+     *
+     * Probed at maxPhases 0 only, and the buffer is why.  A refused
+     * Init writes nothing, so any buffer would do for the passing
+     * case -- but the check has to SURVIVE a regressed Init to report
+     * one, and a regressed Init lays out mr = maxPhases * 3 rounds of
+     * BA Fig1 while the memset above it copies bkr94acsSz's refusing
+     * 0.  At maxPhases 0 that layout is mr = 0 and fits inside a
+     * buffer sized at the ceiling; at maxPhases 85 + 1 it is three
+     * rounds LARGER than that ceiling and would run off the end
+     * before the check could read intact.  Sz's refusal of the
+     * over-ceiling value is tested above; this arm covers the half
+     * a buffer can hold. */
+    {
+      unsigned long guard;
+      unsigned char *probe;
+      unsigned long j;
+      unsigned int intact;
+
+      guard = bkr94acsSz(3, 0, BRACHA87_MAX_PHASES);
+      CHECK(guard > 0, "probe guard size available");
+      if ((probe = malloc(guard)) != 0) {
+        memset(probe, 0xAA, guard);
+        bkr94acsInit((struct bkr94acs *)probe, 3, 1, 0, 0, 0, testCoin, 0);
+        intact = 1;
+        for (j = 0; j < guard; ++j)
+          if (probe[j] != 0xAA)
+            intact = 0;
+        CHECK(intact, "Init writes nothing when maxPhases is refused");
+        free(probe);
+      }
+    }
+  }
 
   /* ---------------------------------------------------------------- */
   BANNER("A2: A-Cast contract and AcastValue round-trip");
@@ -2051,7 +2046,7 @@ main(
     dv[0] = 0;
 
     CHECK(bkr94acsBaDecision(0, 0) == 0xFF, "BaDecision(NULL): 0xFF");
-    CHECK(bkr94acsSentFig1Count(0) == 0,
+    CHECK(bkr94acsFig1SentCount(0) == 0,
           "SentFig1Count(NULL): 0");
     CHECK(bkr94acsAcast(0, dv, dout) == 0, "A-Cast(NULL a): 0");
     /* Per .h TurnDuty reads HELD on bad args ("no turnable round"),
@@ -2106,6 +2101,7 @@ main(
 
     /* A-Cast INITIAL with from != process: dropped. */
     n = bkr94acsAcastInput(a, /*process=*/1, BRACHA87_INITIAL,
+                              ANNOT_NO_ARM,
                               /*from=*/2, v, out);
     CHECK(n == 0, "forged A-Cast INITIAL (from != process): 0 acts");
     CHECK(bkr94acsAcastValue(a, 1) == 0,
@@ -2113,6 +2109,7 @@ main(
 
     /* A-Cast INITIAL with from == process: echoes (1 act). */
     n = bkr94acsAcastInput(a, /*process=*/1, BRACHA87_INITIAL,
+                              ANNOT_NO_ARM,
                               /*from=*/1, v, out);
     CHECK(n == 1 && out[0].act == BKR94ACS_ACT_ACAST_SEND
                  && out[0].type == BRACHA87_ECHO,
@@ -2121,18 +2118,21 @@ main(
     /* An ECHO from a non-process sender is legitimate (sender-deduped),
      * NOT subject to the INITIAL rule. */
     n = bkr94acsAcastInput(a, /*process=*/1, BRACHA87_ECHO,
+                              ANNOT_NO_ARM,
                               /*from=*/3, v, out);
     CHECK(n <= 1, "non-process ECHO accepted (not dropped as forged)");
 
     /* BA INITIAL with from != initiator: dropped. */
     n = bkr94acsBaInput(a, /*process=*/1, /*round=*/0,
                                /*initiator=*/2, BRACHA87_INITIAL,
+                               ANNOT_NO_ARM,
                                /*from=*/3, /*value=*/1, out);
     CHECK(n == 0, "forged BA INITIAL (from != initiator): 0 acts");
 
     /* BA INITIAL with from == initiator: echoes. */
     n = bkr94acsBaInput(a, /*process=*/1, /*round=*/0,
                                /*initiator=*/2, BRACHA87_INITIAL,
+                               ANNOT_NO_ARM,
                                /*from=*/2, /*value=*/1, out);
     CHECK(n == 1 && out[0].act == BKR94ACS_ACT_BA_SEND
                  && out[0].type == BRACHA87_ECHO,
@@ -2356,6 +2356,7 @@ main(
       /* INITIAL from the process itself (loopback for o=0; "remote"
        * for o=1, 2). */
       n = bkr94acsAcastInput(p0, (unsigned char)o, BRACHA87_INITIAL,
+                                ANNOT_NO_ARM,
                                 (unsigned char)o, &ov, out);
       for (k = 0; k < n; ++k) {
         if (out[k].act == BKR94ACS_ACT_BA_SEND
@@ -2372,6 +2373,7 @@ main(
       /* ECHO from each of 0..3. */
       for (src = 0; src < nAct; ++src) {
         n = bkr94acsAcastInput(p0, (unsigned char)o, BRACHA87_ECHO,
+                                  ANNOT_NO_ARM,
                                   (unsigned char)src, &ov, out);
         for (k = 0; k < n; ++k) {
           if (out[k].act == BKR94ACS_ACT_BA_SEND
@@ -2389,6 +2391,7 @@ main(
       /* READY from each of 0..3. */
       for (src = 0; src < nAct; ++src) {
         n = bkr94acsAcastInput(p0, (unsigned char)o, BRACHA87_READY,
+                                  ANNOT_NO_ARM,
                                   (unsigned char)src, &ov, out);
         for (k = 0; k < n; ++k) {
           if (out[k].act == BKR94ACS_ACT_BA_SEND
@@ -2422,39 +2425,85 @@ main(
           "B6: NO premature step-2 fanout on Fig1-ACCEPT count "
           "(BKR94 Part A Case (i) regression)");
 
-    /* bkr94acsAcastAllEchoed contract: processes 0/1/2 each received an
-     * ECHO from all n processes before any READY, so the bit latched at n
-     * before ACCEPT and holds; process 3 received nothing.  Plus the
-     * documented null / out-of-range guards. */
-    CHECK(bkr94acsAcastAllEchoed(p0, 0) == 1,
+    /* The all-echoed gate, read here through the COMPOSITION --
+     * bkr94acsAcastFig1 for the instance, then the Fig 1 accessor.
+     * bkr94acs.h sends callers to bkr94acsAcastAllEchoed instead, and
+     * that is the right advice; this section spells both on purpose,
+     * so the equivalence block below can pin the purpose-named entry
+     * against what it forwards to.  Everywhere else in this file the
+     * named entry is the one used.
+     *
+     * Processes 0/1/2 each received an ECHO from all n processes
+     * before any READY, so the bit latched at n before ACCEPT and
+     * holds; process 3 received nothing.  The composition inherits the
+     * null / out-of-range guard: bkr94acsAcastFig1 answers 0 for a bad
+     * argument and bracha87Fig1AllEchoed answers 0 for a null Fig 1. */
+    CHECK(bracha87Fig1AllEchoed(bkr94acsAcastFig1(p0, 0)) == 1,
           "B6: AllEchoed 1 for fully-echoed process 0 (latched across accept)");
-    CHECK(bkr94acsAcastAllEchoed(p0, 1) == 1, "B6: AllEchoed 1 for process 1");
-    CHECK(bkr94acsAcastAllEchoed(p0, 2) == 1, "B6: AllEchoed 1 for process 2");
-    CHECK(bkr94acsAcastAllEchoed(p0, 3) == 0,
+    CHECK(bracha87Fig1AllEchoed(bkr94acsAcastFig1(p0, 1)) == 1,
+          "B6: AllEchoed 1 for process 1");
+    CHECK(bracha87Fig1AllEchoed(bkr94acsAcastFig1(p0, 2)) == 1,
+          "B6: AllEchoed 1 for process 2");
+    CHECK(bracha87Fig1AllEchoed(bkr94acsAcastFig1(p0, 3)) == 0,
           "B6: AllEchoed 0 for un-echoed process 3");
-    CHECK(bkr94acsAcastAllEchoed(0, 0) == 0, "B6: AllEchoed NULL -> 0");
-    CHECK(bkr94acsAcastAllEchoed(p0, 200) == 0,
-          "B6: AllEchoed out-of-range process -> 0");
+    CHECK(bkr94acsAcastFig1(0, 0) == 0, "B6: AcastFig1 NULL -> 0");
+    CHECK(bkr94acsAcastFig1(p0, 200) == 0,
+          "B6: AcastFig1 out-of-range process -> 0");
+    CHECK(bracha87Fig1AllEchoed(bkr94acsAcastFig1(p0, 200)) == 0,
+          "B6: AllEchoed out-of-range process -> 0 through the composition");
 
-    /* bkr94acsAcastSkip is the per-process refinement of the same gate:
-     * the A-Cast's echoed-process mask.  Process 0 (fully echoed) -> every
-     * bit set (all processes suppressed, == AllEchoed); process 3 (no echoes)
-     * -> empty mask (nobody suppressed).  Null / out-of-range -> 0. */
+    /* The INITIAL skip mask is the per-process refinement of the same
+     * gate: the A-Cast's echoed-process bitmap.  Process 0 (fully
+     * echoed) -> every bit set (all processes suppressed, == all-echoed);
+     * process 3 (no echoes) -> empty mask (nobody suppressed). */
     {
       const unsigned char *sk0;
       const unsigned char *sk3;
 
-      sk0 = bkr94acsAcastSkip(p0, 0);
-      sk3 = bkr94acsAcastSkip(p0, 3);
-      CHECK(sk0 != 0, "B6: AcastSkip non-null for valid process 0");
+      sk0 = bracha87Fig1Skip(bkr94acsAcastFig1(p0, 0),
+                             BRACHA87_INITIAL_ALL);
+      sk3 = bracha87Fig1Skip(bkr94acsAcastFig1(p0, 3),
+                             BRACHA87_INITIAL_ALL);
+      CHECK(sk0 != 0, "B6: INITIAL skip non-null for valid process 0");
       CHECK(sk0 && BRACHA87_SKIP_TST(sk0, 0) && BRACHA87_SKIP_TST(sk0, 1)
             && BRACHA87_SKIP_TST(sk0, 2) && BRACHA87_SKIP_TST(sk0, 3),
-            "B6: AcastSkip all bits set for fully-echoed process 0");
+            "B6: INITIAL skip all bits set for fully-echoed process 0");
       CHECK(sk3 && !BRACHA87_SKIP_TST(sk3, 0) && !BRACHA87_SKIP_TST(sk3, 1),
-            "B6: AcastSkip empty for un-echoed process 3");
-      CHECK(bkr94acsAcastSkip(0, 0) == 0, "B6: AcastSkip NULL -> 0");
-      CHECK(bkr94acsAcastSkip(p0, 200) == 0,
-            "B6: AcastSkip out-of-range process -> 0");
+            "B6: INITIAL skip empty for un-echoed process 3");
+      CHECK(bracha87Fig1Skip(bkr94acsAcastFig1(0, 0),
+                             BRACHA87_INITIAL_ALL) == 0,
+            "B6: INITIAL skip NULL -> 0");
+      CHECK(bracha87Fig1Skip(bkr94acsAcastFig1(p0, 200),
+                             BRACHA87_INITIAL_ALL) == 0,
+            "B6: INITIAL skip out-of-range process -> 0");
+
+      /* The two purpose-named accessors are the side channel's own
+       * spelling of the same two facts -- bkr94acsAcastAllEchoed for the
+       * all-or-nothing stop, bkr94acsAcastSkip for its per-process
+       * refinement -- and they must agree with the composition above at
+       * every argument, in range and out. */
+      {
+        unsigned int q;
+
+        for (q = 0; q < 4; ++q)
+          CHECK(bkr94acsAcastAllEchoed(p0, (unsigned char)q)
+                == bracha87Fig1AllEchoed(bkr94acsAcastFig1(p0,
+                                           (unsigned char)q)),
+                "B6: AcastAllEchoed agrees with the composition");
+        for (q = 0; q < 4; ++q)
+          CHECK(bkr94acsAcastSkip(p0, (unsigned char)q)
+                == bracha87Fig1Skip(bkr94acsAcastFig1(p0,
+                                      (unsigned char)q),
+                                    BRACHA87_INITIAL_ALL),
+                "B6: AcastSkip agrees with the composition");
+        CHECK(bkr94acsAcastAllEchoed(0, 0) == 0,
+              "B6: AcastAllEchoed NULL -> 0");
+        CHECK(bkr94acsAcastAllEchoed(p0, 200) == 0,
+              "B6: AcastAllEchoed out-of-range -> 0");
+        CHECK(bkr94acsAcastSkip(0, 0) == 0, "B6: AcastSkip NULL -> 0");
+        CHECK(bkr94acsAcastSkip(p0, 200) == 0,
+              "B6: AcastSkip out-of-range -> 0");
+      }
     }
 
     free(p0);
@@ -2506,7 +2555,7 @@ main(
   /* ---------------------------------------------------------------- */
   {
     /*
-     * Per .h bkr94acsAcastAllEchoed: "1 iff A-Cast Fig1[process] has
+     * Per .h bracha87Fig1AllEchoed: "1 iff this instance has
      * recorded an echo from all n processes", and the reason it is
      * exposed at all -- "ACCEPTED can be reached at 2t+1 readys (up to
      * t byzantine, t un-validated above the n=3t+1 boundary) while
@@ -2515,7 +2564,7 @@ main(
      * not."  That contract only holds if an echo arriving AFTER the
      * A-Cast's accept still counts: otherwise the gate a side channel
      * retires on is pinned to ACCEPTED after all, by omission.
-     * bkr94acsAcastSkip is the per-process refinement -- it "drops each
+     * the INITIAL skip mask is the per-process refinement -- it "drops each
      * process from the side channel's recipient set the moment IT
      * echoes" -- so it must gain a late echoer's bit for the same
      * reason.  Per .h bkr94acsAcastInput the return is the number of
@@ -2537,14 +2586,14 @@ main(
     v[0] = 1;
 
     /* Two echoes only -- short of both n and the echo threshold. */
-    bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, 0, v, out);
-    bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 0, v, out);
-    bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 1, v, out);
+    bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, ANNOT_NO_ARM, 0, v, out);
+    bkr94acsAcastInput(a, 0, BRACHA87_ECHO, ANNOT_NO_ARM, 0, v, out);
+    bkr94acsAcastInput(a, 0, BRACHA87_ECHO, ANNOT_NO_ARM, 1, v, out);
     CHECK(bkr94acsAcastAllEchoed(a, 0) == 0, "B8: gate 0 below n echoers");
 
     /* 2t+1 readys accept ahead of the remaining echoes. */
     for (i = 0; i < 3; ++i)
-      bkr94acsAcastInput(a, 0, BRACHA87_READY, (unsigned char)i, v, out);
+      bkr94acsAcastInput(a, 0, BRACHA87_READY, ANNOT_NO_ARM, (unsigned char)i, v, out);
     CHECK(bkr94acsAcastAllEchoed(a, 0) == 0, "B8: gate still 0 at accept");
     m = bkr94acsAcastSkip(a, 0);
     CHECK(m != 0, "B8: skip mask non-null");
@@ -2554,7 +2603,7 @@ main(
 
     /* The remaining echoes arrive after accept. */
     for (late = 2; late < 4; ++late) {
-      nact = bkr94acsAcastInput(a, 0, BRACHA87_ECHO, (unsigned char)late,
+      nact = bkr94acsAcastInput(a, 0, BRACHA87_ECHO, ANNOT_NO_ARM, (unsigned char)late,
                                 v, out);
       CHECK(nact == 0, "B8: post-accept echo outputs 0 acts");
       CHECK(bkr94acsAcastAllEchoed(a, 0) == (late == 3),
@@ -2639,11 +2688,11 @@ main(
     /* The entering evidence for BA_1: process 1's A-Cast ACCEPTs, so
      * step 1 enters 1.  Nothing else is entered by it. */
     val1 = 0x51;
-    bkr94acsAcastInput(p0, 1, BRACHA87_INITIAL, 1, &val1, out);
+    bkr94acsAcastInput(p0, 1, BRACHA87_INITIAL, ANNOT_NO_ARM, 1, &val1, out);
     for (src = 0; src < nAct; ++src)
-      bkr94acsAcastInput(p0, 1, BRACHA87_ECHO, src, &val1, out);
+      bkr94acsAcastInput(p0, 1, BRACHA87_ECHO, ANNOT_NO_ARM, src, &val1, out);
     for (src = 0; src < nAct; ++src)
-      bkr94acsAcastInput(p0, 1, BRACHA87_READY, src, &val1, out);
+      bkr94acsAcastInput(p0, 1, BRACHA87_READY, ANNOT_NO_ARM, src, &val1, out);
     CHECK(bkr94acsBaEntered(p0, 1) == 1,
           "B9: BaEntered 1 after the entering evidence");
     CHECK(bkr94acsBaEntered(p0, 0) == 0 && bkr94acsBaEntered(p0, 2) == 0
@@ -2655,7 +2704,7 @@ main(
     /* Latched: further A-Cast traffic for the same process enters
      * nothing more and cannot clear the record. */
     for (src = 0; src < nAct; ++src)
-      bkr94acsAcastInput(p0, 1, BRACHA87_READY, src, &val1, out);
+      bkr94acsAcastInput(p0, 1, BRACHA87_READY, ANNOT_NO_ARM, src, &val1, out);
     CHECK(bkr94acsBaEntered(p0, 1) == 1,
           "B9: BaEntered latched across duplicate A-Cast traffic");
 
@@ -2776,7 +2825,7 @@ main(
     /* Walk well past the cursor space (A-Cast Fig1s + every owned
      * BA Fig1 slot).  All return 0. */
     for (j = 0; j < 1024; ++j) {
-      n = bkr94acsRetry(a, &cursor, out);
+      n = bkr94acsRetryStep(a, &cursor, out);
       CHECK(n == 0, "C1: fresh process Retry returns 0 every call");
       if (n != 0) break;
     }
@@ -2813,7 +2862,7 @@ main(
     /* 32 calls is plenty: cursor starts at 0 = A-Cast Fig1 initiator 0
      * (= self), so the first call should already output. */
     for (j = 0; j < 32; ++j) {
-      n = bkr94acsRetry(a, &cursor, out);
+      n = bkr94acsRetryStep(a, &cursor, out);
       CHECK(n <= BKR94ACS_RETRY_MAX_ACTS, "C2: Retry within MAX_ACTS bound");
       for (k = 0; k < n; ++k) {
         if (out[k].act == BKR94ACS_ACT_ACAST_SEND
@@ -2890,7 +2939,7 @@ main(
 
     bracha87RetryInit(&cursor);
     for (j = 0; j < 256; ++j) {
-      n = bkr94acsRetry(a, &cursor, out);
+      n = bkr94acsRetryStep(a, &cursor, out);
       if (n == 0) ++zeros;
     }
     CHECK(zeros == 256,
@@ -3055,11 +3104,12 @@ main(
             qPopHead(&w);
             if (w.cls == BKR94ACS_CLS_ACAST)
               nDeliv = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                             wireAnnot(&w),
                                              w.from, w.value, out);
             else
               nDeliv = bkr94acsBaInput(processes[w.to], w.process,
                                               w.round, w.initiator,
-                                              w.type, w.from, w.baValue,
+                                              w.type, wireAnnot(&w), w.from, w.baValue,
                                               out);
             if (nDeliv > 0) {
               if (w.cls == BKR94ACS_CLS_ACAST && !haveAcastSample) {
@@ -3076,7 +3126,7 @@ main(
             observeAndOutput(&obs[w.to], w.to, n, out, nDeliv, vLen, 0, -1);
           }
           for (i = 0; i < n; ++i) {
-            nDeliv = bkr94acsRetry(processes[i], &cursors[i], retryOut);
+            nDeliv = bkr94acsRetryStep(processes[i], &cursors[i], retryOut);
             observeAndOutput(&obs[i], (unsigned char)i, n, retryOut, nDeliv,
                            vLen, 0, -1);
             drainTurns(processes[i], &obs[i], (unsigned char)i, n, vLen, out,
@@ -3105,6 +3155,7 @@ main(
         if (haveAcastSample) {
           nRetry = bkr94acsAcastInput(processes[acastSample.to],
                                           acastSample.process, acastSample.type,
+                                          ANNOT_NO_ARM,
                                           acastSample.from, acastSample.value,
                                           out);
           CHECK(nRetry == 0,
@@ -3114,7 +3165,7 @@ main(
           nRetry = bkr94acsBaInput(processes[baSample.to],
                                            baSample.process, baSample.round,
                                            baSample.initiator,
-                                           baSample.type, baSample.from,
+                                           baSample.type, ANNOT_NO_ARM, baSample.from,
                                            baSample.baValue, out);
           CHECK(nRetry == 0,
                 "C8: re-delivered BA returns 0 acts (Input dedup)");
@@ -3175,7 +3226,7 @@ main(
     /* Subsequent BA input for the exhausted process must NOT
      * retry BA_EXHAUSTED -- neither on the input (which can only
      * output echo/ready) nor on the turn that follows it. */
-    n = bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, 0, 0, out);
+    n = bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
     CHECK(n <= 2, "D1: later BA input within the 2-act bound");
     for (k = 0; k < n; ++k)
       if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
@@ -3219,14 +3270,14 @@ main(
         feedBAAccept(a, 0, (unsigned char)round, (unsigned char)b,
                             (b < 2) ? 0 : 1, synthOut, 1, &exhaustedSeen);
     CHECK(exhaustedSeen == 1, "D2: EXHAUSTED setup OK");
-    CHECK(bkr94acsSentFig1Count(a) > 0,
+    CHECK(bkr94acsFig1SentCount(a) > 0,
           "D2: post-EXHAUSTED SentFig1Count > 0");
 
     /* Sweep Retry enough to traverse all Fig1 slots; count BA_SEND
      * retries for process 0 (the EXHAUSTED process). */
     bracha87RetryInit(&cursor);
     for (j = 0; j < 2048; ++j) {
-      n = bkr94acsRetry(a, &cursor, out);
+      n = bkr94acsRetryStep(a, &cursor, out);
       for (k = 0; k < n; ++k) {
         if (out[k].act == BKR94ACS_ACT_BA_SEND && out[k].process == 0)
           ++process0Retries;
@@ -3325,10 +3376,11 @@ main(
             continue;  /* Byzantine process 0 is also silent on receive */
           if (w.cls == BKR94ACS_CLS_ACAST)
             nact = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                         wireAnnot(&w),
                                          w.from, w.value, out);
           else
             nact = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                          w.initiator, w.type, w.from,
+                                          w.initiator, w.type, wireAnnot(&w), w.from,
                                           w.baValue, out);
           observeAndOutput(&obs[w.to], w.to, n, out, nact, vLen, 0, -1);
           drainTurns(processes[w.to], &obs[w.to], w.to, n, vLen, out, 0, -1);
@@ -3336,7 +3388,7 @@ main(
           observeAndOutput(&obs[w.to], w.to, n, out, nact, vLen, 0, -1);
         }
         for (p = 1; p < n; ++p) {
-          unsigned int nact = bkr94acsRetry(processes[p], &cursors[p], retryOut);
+          unsigned int nact = bkr94acsRetryStep(processes[p], &cursors[p], retryOut);
           observeAndOutput(&obs[p], (unsigned char)p, n, retryOut, nact, vLen,
                          0, -1);
           drainTurns(processes[p], &obs[p], (unsigned char)p, n, vLen, out,
@@ -3558,13 +3610,11 @@ main(
           qPopHead(&w);
           if (w.cls == BKR94ACS_CLS_ACAST) {
             n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                      wireAnnot(&w),
                                       w.from, w.value, out);
-            if (w.accepted)
-              bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
             /* Leaving the rotation is provisional: only a tick can
              * re-send, so an outstanding arm puts the process back. */
             if (w.type == BRACHA87_READY && !w.received) {
-              bkr94acsAcastResend(processes[w.to], w.process, w.from);
               if (quiesced[w.to]) {
                 quiesced[w.to] = 0;
                 --nQuiesced;
@@ -3572,14 +3622,9 @@ main(
             }
           } else {
             n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                       w.initiator, w.type, w.from,
+                                       w.initiator, w.type, wireAnnot(&w), w.from,
                                        w.baValue, out);
-            if (w.accepted)
-              bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                        w.initiator, w.from);
             if (w.type == BRACHA87_READY && !w.received) {
-              bkr94acsBaResend(processes[w.to], w.process, w.round,
-                                     w.initiator, w.from);
               if (quiesced[w.to]) {
                 quiesced[w.to] = 0;
                 --nQuiesced;
@@ -3590,8 +3635,8 @@ main(
         }
         for (p = 0; p < 4; ++p) {
           if (!quiesced[p]) {
-            n = bkr94acsRetry(processes[p], &cursors[p], out);
-            if (!n && bkr94acsSentFig1Count(processes[p])) {
+            n = bkr94acsRetryStep(processes[p], &cursors[p], out);
+            if (!n && bkr94acsFig1SentCount(processes[p])) {
               quiesced[p] = 1;
               ++nQuiesced;
             }
@@ -3623,7 +3668,7 @@ main(
         unsigned char subset[4];
 
         CHECK(processes[p]->complete, "F1b: quiescence past COMPLETE");
-        CHECK(bkr94acsRetry(processes[p], &cursors[p], out) == 0,
+        CHECK(bkr94acsRetryStep(processes[p], &cursors[p], out) == 0,
               "F1b: and the 0 return is stable");
         CHECK(bkr94acsSubset(processes[p], subset) == 3,
               "F1b: |SubSet| == 3");
@@ -3901,23 +3946,14 @@ main(
         qPopHead(&w);
         if (w.cls == BKR94ACS_CLS_ACAST) {
           n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                    wireAnnot(&w),
                                     w.from, w.value, out);
           CHECK(n <= 3, "G1: A-Cast input within its bound");
-          if (w.accepted)
-            bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
-          if (w.type == BRACHA87_READY && !w.received)
-            bkr94acsAcastResend(processes[w.to], w.process, w.from);
         } else {
           n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                     w.initiator, w.type, w.from,
+                                     w.initiator, w.type, wireAnnot(&w), w.from,
                                      w.baValue, out);
           CHECK(n <= 2, "G1: BA input within its bound (echo/ready only)");
-          if (w.accepted)
-            bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                      w.initiator, w.from);
-          if (w.type == BRACHA87_READY && !w.received)
-            bkr94acsBaResend(processes[w.to], w.process, w.round,
-                                   w.initiator, w.from);
         }
         observeAndOutput(&obs[w.to], w.to, 4, out, n, 1, 0, -1);
       }
@@ -3975,12 +4011,12 @@ main(
     CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_TOLERANCE,
           "G2: duty TOLERANCE at n-t of n validated");
 
-    sentBefore = bkr94acsSentFig1Count(a);
+    sentBefore = bkr94acsFig1SentCount(a);
     CHECK(bkr94acsTurn(a, 0, 0, out) == 0,
           "G2: turn without the elapsed signal does not fire");
     CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_TOLERANCE,
           "G2: the refused turn left the duty unchanged");
-    CHECK(bkr94acsSentFig1Count(a) == sentBefore,
+    CHECK(bkr94acsFig1SentCount(a) == sentBefore,
           "G2: the refused turn started no round");
     CHECK(bkr94acsBaDecision(a, 0) == 0xFF, "G2: BA_0 still undecided");
     CHECK(a->complete == 0, "G2: not complete");
@@ -4083,7 +4119,7 @@ main(
   /* ================================================================ */
   /*  Section H -- quiescence is REACHABLE at the ACS surface         */
   /* ================================================================ */
-  /*  bkr94acs.h, bkr94acsRetry: 0 means "every sent instance has     */
+  /*  bkr94acs.h, bkr94acsRetryStep: 0 means "every sent instance has     */
   /*  retired all its retries -- quiescence."  bracha87.h's retry     */
   /*  banner makes that a pair of remote facts: every process has     */
   /*  announced its accept AND holds this one's.  Only the second     */
@@ -4140,15 +4176,13 @@ main(
           qPopHead(&w);
           if (w.cls == BKR94ACS_CLS_ACAST) {
             n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                                      wireAnnot(&w),
                                       w.from, w.value, out);
-            if (w.accepted)
-              bkr94acsAcastAccepted(processes[w.to], w.process, w.from);
             /* Leaving the rotation is PROVISIONAL: an unmarked READY is
              * exactly the evidence that something is still owed, and a
              * process that has stopped ticking can never re-send.
              * Re-enter. */
             if (w.type == BRACHA87_READY && !w.received) {
-              bkr94acsAcastResend(processes[w.to], w.process, w.from);
               if (quiesced[w.to]) {
                 quiesced[w.to] = 0;
                 --nQuiesced;
@@ -4156,14 +4190,9 @@ main(
             }
           } else {
             n = bkr94acsBaInput(processes[w.to], w.process, w.round,
-                                       w.initiator, w.type, w.from,
+                                       w.initiator, w.type, wireAnnot(&w), w.from,
                                        w.baValue, out);
-            if (w.accepted)
-              bkr94acsBaAccepted(processes[w.to], w.process, w.round,
-                                        w.initiator, w.from);
             if (w.type == BRACHA87_READY && !w.received) {
-              bkr94acsBaResend(processes[w.to], w.process, w.round,
-                                     w.initiator, w.from);
               if (quiesced[w.to]) {
                 quiesced[w.to] = 0;
                 --nQuiesced;
@@ -4181,8 +4210,8 @@ main(
           unsigned int b;
 
           if (!quiesced[p]) {
-            n = bkr94acsRetry(processes[p], &cursors[p], out);
-            if (!n && bkr94acsSentFig1Count(processes[p])) {
+            n = bkr94acsRetryStep(processes[p], &cursors[p], out);
+            if (!n && bkr94acsFig1SentCount(processes[p])) {
               quiesced[p] = 1;
               ++nQuiesced;
             }
@@ -4210,7 +4239,7 @@ main(
       CHECK(nQuiesced == 4, "H1: every process reached the Retry 0 return");
       for (p = 0; p < 4; ++p) {
         CHECK(processes[p]->complete, "H1: quiescence past COMPLETE");
-        CHECK(bkr94acsRetry(processes[p], &cursors[p], out) == 0,
+        CHECK(bkr94acsRetryStep(processes[p], &cursors[p], out) == 0,
               "H1: and the 0 return is stable");
       }
       CHECK(qSize() == 0, "H1: the wire is silent at quiescence");
@@ -4219,29 +4248,47 @@ main(
     }
   }
 
-  BANNER("H2: the Resend ingress entries' contracts");
+  BANNER("H2: the annotation ingress contracts, now on the Input entries");
   {
     struct bkr94acs *processes[MAX_PROCESSES];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+    unsigned char val[1];
 
     if (allocCluster(processes, 4, 1, 0, 4) == 0) {
-      /* Defensive: null state and every out-of-range index ignored, no
-       * output actions (these entries return void).  Mirrors the
-       * bkr94acs*Accepted guards in Section A. */
-      bkr94acsAcastResend(0, 0, 0);
-      bkr94acsAcastResend(processes[0], 99, 0);
-      bkr94acsAcastResend(processes[0], 0, 99);
-      bkr94acsBaResend(0, 0, 0, 0, 0);
-      bkr94acsBaResend(processes[0], 99, 0, 0, 0);
-      bkr94acsBaResend(processes[0], 0, 250, 0, 0);
-      bkr94acsBaResend(processes[0], 0, 0, 99, 0);
-      bkr94acsBaResend(processes[0], 0, 0, 0, 99);
-      CHECK(1, "H2: Resend ingress guards survive null / out-of-range");
+      val[0] = 1;
+      /* Defensive: an unmarked READY (annot with no BKR94ACS_RECEIVED)
+       * carrying a null state or any out-of-range index is refused with
+       * 0 acts and routes nothing.  The arm rides the same entry as the
+       * message, so it inherits that entry's guards rather than needing
+       * its own. */
+      CHECK(bkr94acsAcastInput(0, 0, BRACHA87_READY, 0, 0, val, out) == 0,
+            "H2: null state refused");
+      CHECK(bkr94acsAcastInput(processes[0], 99, BRACHA87_READY, 0, 0,
+                                  val, out) == 0,
+            "H2: out-of-range process refused");
+      CHECK(bkr94acsAcastInput(processes[0], 0, BRACHA87_READY, 0, 99,
+                                  val, out) == 0,
+            "H2: out-of-range from refused");
+      CHECK(bkr94acsBaInput(0, 0, 0, 0, BRACHA87_READY, 0, 0, 0, out) == 0,
+            "H2: BA null state refused");
+      CHECK(bkr94acsBaInput(processes[0], 99, 0, 0, BRACHA87_READY, 0, 0,
+                                   0, out) == 0,
+            "H2: BA out-of-range process refused");
+      CHECK(bkr94acsBaInput(processes[0], 0, 250, 0, BRACHA87_READY, 0, 0,
+                                   0, out) == 0,
+            "H2: BA out-of-range round refused");
+      CHECK(bkr94acsBaInput(processes[0], 0, 0, 99, BRACHA87_READY, 0, 0,
+                                   0, out) == 0,
+            "H2: BA out-of-range initiator refused");
+      CHECK(bkr94acsBaInput(processes[0], 0, 0, 0, BRACHA87_READY, 0, 99,
+                                   0, out) == 0,
+            "H2: BA out-of-range from refused");
       /* Pre-accept an arm records nothing, so an A-Cast that nobody has
        * accepted still suppresses nobody and marks nobody -- there is
        * no state for a forged unmarked READY to disturb. */
-      bkr94acsAcastResend(processes[0], 1, 2);
+      bkr94acsAcastInput(processes[0], 1, BRACHA87_READY, 0, 2, val, out);
       CHECK(bkr94acsAcastSkip(processes[0], 1) != 0,
-            "H2: the A-Cast skip accessor is unaffected by an arm");
+            "H2: the A-Cast skip mask is unaffected by an arm");
       freeCluster(processes, 4);
     }
   }
@@ -4364,9 +4411,9 @@ main(
       healEchoes = 0;
       healReadys = 0;
       for (p = 0; p < 3; ++p) {
-        pass = bkr94acsSentFig1Count(processes[p]);
+        pass = bkr94acsFig1SentCount(processes[p]);
         for (tick = 0; tick < pass; ++tick) {
-          n = bkr94acsRetry(processes[p], &cursors[p], out);
+          n = bkr94acsRetryStep(processes[p], &cursors[p], out);
           for (k = 0; k < n; ++k) {
             if (out[k].type == BRACHA87_INITIAL)
               ++healInitials;
@@ -4408,7 +4455,7 @@ main(
       CHECK(bkr94acsAcastValue(processes[3], 2) != 0,
             "I1: and the instance reached ACCEPT at the returner");
       CHECK(bkr94acsAcastAllEchoed(processes[3], 2) == 0,
-            "I1: bracha87Fig1AllEchoed stays 0 there");
+            "I1: bkr94acsAcastAllEchoed stays 0 there");
 
       /* The returner lands on the identical subset, and where the
        * survivors decided a BA 0 its decision matches -- even where
@@ -4512,7 +4559,7 @@ main(
   /*  Section J -- asymmetric flow                                    */
   /* ================================================================ */
   /*  Grounding: bracha87.h's fair-loss posture and its BPR retry     */
-  /*  banner; bkr94acs.h's bkr94acsRetry (0 only on an idle sweep),   */
+  /*  banner; bkr94acs.h's bkr94acsRetryStep (0 only on an idle sweep),   */
   /*  bkr94acsFanoutDuty / bkr94acsFanout (the enter-0 path that      */
   /*  closes over an unheard A-Cast); BKR94ACS.txt steps 1-3.         */
   /*  Cross-reference label: README "Abandonment" / Asymmetric flow.  */
@@ -4660,7 +4707,7 @@ main(
             "J2: its barren counter climbs monotonically");
       CHECK(pol[3].barren >= BARREN_S,
             "J2: it reaches the policy's S -- the only exit it has");
-      CHECK(bkr94acsSentFig1Count(processes[3]) == 1,
+      CHECK(bkr94acsFig1SentCount(processes[3]) == 1,
             "J2: SentFig1Count == 1 (its own A-Cast, nothing else sent)");
       CHECK(zeroRetries == 0,
             "J2: its Retry never idles -- the INITIAL retry never retires");
@@ -4814,7 +4861,7 @@ main(
       }
       CHECK(tick < 20000, "K1: the honest cluster goes barren before the trickle");
       for (p = 0; p < K_HONEST; ++p)
-        sentBefore[p] = bkr94acsSentFig1Count(processes[p]);
+        sentBefore[p] = bkr94acsFig1SentCount(processes[p]);
 
       /* ---- the trickle proper ----------------------------------- */
       /* Ahead-round INITIALs for which the trickler IS the designated
@@ -4925,14 +4972,14 @@ main(
         w.type = BRACHA87_ECHO;
         w.from = 3;
         memcpy(w.value, bogusB, vLen);
-        sentNow = bkr94acsSentFig1Count(processes[p]);
+        sentNow = bkr94acsFig1SentCount(processes[p]);
         n = kDeliver(processes, obs, &w, (unsigned char)p, vLen);
         CHECK(n == 0,
               "K1: a same-sender echo with a different value returns 0 acts");
         pv = bkr94acsAcastValue(processes[p], 0);
         CHECK(pv != 0 && pv[0] == valBefore[p],
               "K1: and changes nothing observable");
-        CHECK(bkr94acsSentFig1Count(processes[p]) == sentNow,
+        CHECK(bkr94acsFig1SentCount(processes[p]) == sentNow,
               "K1: nor the sent count");
       }
 
@@ -4965,8 +5012,8 @@ main(
        * inflate the sweep unit and never shrink; the harness sweep
        * boundary RECOMPUTES the count for exactly this reason. */
       for (p = 0; p < K_HONEST; ++p) {
-        delta = bkr94acsSentFig1Count(processes[p]) - sentBefore[p];
-        CHECK(bkr94acsSentFig1Count(processes[p]) >= sentBefore[p],
+        delta = bkr94acsFig1SentCount(processes[p]) - sentBefore[p];
+        CHECK(bkr94acsFig1SentCount(processes[p]) >= sentBefore[p],
               "K1: the sent count never shrinks under trickle");
         CHECK(delta <= 4 * K_ROUNDS,
               "K1: inflation bounded by n*R per trickler");
@@ -5087,9 +5134,9 @@ main(
       guardEchoes = 0;
       guardReadys = 0;
       for (p = 0; p < 3; ++p) {
-        pass = bkr94acsSentFig1Count(processes[p]);
+        pass = bkr94acsFig1SentCount(processes[p]);
         for (tick = 0; tick < pass; ++tick) {
-          n = bkr94acsRetry(processes[p], &cursors[p], out);
+          n = bkr94acsRetryStep(processes[p], &cursors[p], out);
           for (k = 0; k < n; ++k) {
             if (out[k].type == BRACHA87_INITIAL)
               ++guardInitials;
@@ -5390,7 +5437,7 @@ main(
       CHECK(zeroRetries == 0,
             "M1: no survivor ever reaches the Retry 0 return");
       for (p = 0; p < 3; ++p)
-        CHECK(bkr94acsRetry(processes[p], &cursors[p], out) > 0,
+        CHECK(bkr94acsRetryStep(processes[p], &cursors[p], out) > 0,
               "M1: and the non-zero return is stable");
 
       served = 0;
@@ -5446,7 +5493,7 @@ main(
   /*  the FanoutDuty / TurnDuty semantics, and the sweep-unit block    */
   /*  ("THE UNIT IS THE FULL SWEEP ... a budget denominated in calls   */
   /*  rather than passes re-sends only its own count out of            */
-  /*  bkr94acsSentFig1Count and can buy nothing at all").              */
+  /*  bkr94acsFig1SentCount and can buy nothing at all").              */
   /* ---------------------------------------------------------------- */
 
   /* ---------------------------------------------------------------- */

@@ -18,6 +18,14 @@
 #include <string.h>
 #include "bkr94acs.h"
 
+/*
+ * For the unit drivers here, which inject protocol traffic without
+ * modeling the annotation exchange.  BKR94ACS_RECEIVED says the sender
+ * already holds this process's accept, so no re-send arm is taken and
+ * the driver exercises the Fig 1 rules alone.
+ */
+#define ANNOT_NO_ARM BKR94ACS_RECEIVED
+
 static int Fail;
 
 static void
@@ -305,11 +313,12 @@ runAcs(
     oldTail = Qtail;
 
     if (m->cls == BKR94ACS_CLS_ACAST) {
-      nacts = bkr94acsAcastInput(st, m->process, m->type, m->from,
+      nacts = bkr94acsAcastInput(st, m->process, m->type, ANNOT_NO_ARM, m->from,
                                     m->value, acts);
     } else {
       nacts = bkr94acsBaInput(st, m->process, m->round,
                                      m->initiator, m->type,
+                                     ANNOT_NO_ARM,
                                      m->from, m->value[0], acts);
     }
 
@@ -650,11 +659,12 @@ testValues(
       continue;
 
     if (m->cls == BKR94ACS_CLS_ACAST) {
-      nacts = bkr94acsAcastInput(st, m->process, m->type, m->from,
+      nacts = bkr94acsAcastInput(st, m->process, m->type, ANNOT_NO_ARM, m->from,
                                     m->value, acts);
     } else {
       nacts = bkr94acsBaInput(st, m->process, m->round,
                                      m->initiator, m->type,
+                                     ANNOT_NO_ARM,
                                      m->from, m->value[0], acts);
     }
 
@@ -905,7 +915,7 @@ testPostDecideContinuation(
    * returned zero because of the "already decided" short-circuit.
    */
   value = 1;
-  nacts = bkr94acsBaInput(a, 0, 0, 1, BRACHA87_INITIAL, 1, value, acts);
+  nacts = bkr94acsBaInput(a, 0, 0, 1, BRACHA87_INITIAL, ANNOT_NO_ARM, 1, value, acts);
   check("post-decide input produces output", nacts > 0);
 
   nEcho = 0;
@@ -942,7 +952,7 @@ testPostDecideContinuation(
           unsigned int kk;
 
           (void)bkr94acsBaInput(a, 0, 0, initiator,
-                                       type, from, value, acts);
+                                       type, ANNOT_NO_ARM, from, value, acts);
           while ((nturn = bkr94acsTurn(a, 0, 1, tacts)) > 0)
             for (kk = 0; kk < nturn; ++kk) {
               /*
@@ -1040,6 +1050,7 @@ testStepTwoTrigger(
    */
   for (process = 0; process < N; ++process) {
     nacts = bkr94acsAcastInput(a, (unsigned char)process, BRACHA87_INITIAL,
+                                  ANNOT_NO_ARM,
                                   (unsigned char)process, &val, acts);
     for (k = 0; k < nacts; ++k)
       if (acts[k].act == BKR94ACS_ACT_BA_SEND) {
@@ -1049,6 +1060,7 @@ testStepTwoTrigger(
 
     for (from = 0; from < N; ++from) {
       nacts = bkr94acsAcastInput(a, (unsigned char)process, BRACHA87_ECHO,
+                                    ANNOT_NO_ARM,
                                     from, &val, acts);
       for (k = 0; k < nacts; ++k)
         if (acts[k].act == BKR94ACS_ACT_BA_SEND) {
@@ -1059,6 +1071,7 @@ testStepTwoTrigger(
 
     for (from = 0; from < N; ++from) {
       nacts = bkr94acsAcastInput(a, (unsigned char)process, BRACHA87_READY,
+                                    ANNOT_NO_ARM,
                                     from, &val, acts);
       for (k = 0; k < nacts; ++k)
         if (acts[k].act == BKR94ACS_ACT_BA_SEND) {
@@ -1102,7 +1115,7 @@ testStepTwoTrigger(
 /*--------------------------------------------------------------------------*/
 /*  BPR retry tests                                                         */
 /*                                                                          */
-/*  White-box tests of bkr94acsAcast and bkr94acsRetry:                     */
+/*  White-box tests of bkr94acsAcast and bkr94acsRetryStep:                 */
 /*    - A-Cast marks the local A-Cast Fig1 as initiator and outputs         */
 /*      ACAST_SEND/INITIAL.                                                 */
 /*    - Retry keeps outputting ACAST_SEND/INITIAL on every sweep while      */
@@ -1139,7 +1152,7 @@ testBpr(
   bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
 
   /* Retry on a virgin instance: no sent state -> idle */
-  n = bkr94acsRetry(a, &retry, out);
+  n = bkr94acsRetryStep(a, &retry, out);
   check("BPR retry virgin: 0 actions", n == 0);
 
   /* A-Cast: marks initiator, outputs ACAST_SEND/INITIAL once */
@@ -1163,7 +1176,7 @@ testBpr(
    * finds retries or wraps, so one Retry call must surface our
    * ACAST_SEND/INITIAL. */
   for (i = 0; i < 5; ++i) {
-    n = bkr94acsRetry(a, &retry, out);
+    n = bkr94acsRetryStep(a, &retry, out);
     check("BPR retry pre-loopback: outputs", n >= 1);
     check("BPR retry pre-loopback: ACAST_SEND/INITIAL",
           n >= 1 && out[0].act == BKR94ACS_ACT_ACAST_SEND
@@ -1178,7 +1191,7 @@ testBpr(
    * bootstrap (Note 11). */
   {
     struct bkr94acsAct iout[BKR94ACS_MAX_ACTS(4)];
-    bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, 0, val, iout);
+    bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, ANNOT_NO_ARM, 0, val, iout);
   }
 
   /* Post-loopback, the A-Cast Fig1 is INITIATOR+ECHOED but not yet
@@ -1197,7 +1210,7 @@ testBpr(
     seenEcho = 0;
     /* One full sweep of the cursor space; bound generously. */
     for (sweep = 0; sweep < 4 * (4 + 4 * 12 * 4); ++sweep) {
-      n = bkr94acsRetry(a, &retry, out);
+      n = bkr94acsRetryStep(a, &retry, out);
       if (!n)
         continue;
       for (j = 0; j < n; ++j) {
@@ -1307,10 +1320,10 @@ testBpr(
         m = &MsgQ[Qhead++];
         if (m->cls == BKR94ACS_CLS_ACAST)
           nacts = bkr94acsAcastInput(processes[m->to], m->process,
-                    m->type, m->from, m->value, acts);
+                    m->type, ANNOT_NO_ARM, m->from, m->value, acts);
         else
           nacts = bkr94acsBaInput(processes[m->to], m->process,
-                    m->round, m->initiator, m->type, m->from,
+                    m->round, m->initiator, m->type, ANNOT_NO_ARM, m->from,
                     m->value[0], acts);
 
         for (k = 0; k < nacts; ++k) {
@@ -1355,7 +1368,7 @@ testBpr(
         unsigned int npact;
         unsigned int k;
 
-        npact = bkr94acsRetry(processes[p], &processRetry[p], pact);
+        npact = bkr94acsRetryStep(processes[p], &processRetry[p], pact);
         if (npact)
           progress = 1;
         for (k = 0; k < npact; ++k) {
@@ -1464,6 +1477,7 @@ testBprCursorCoverage(
   for (p = 1; p < 4; ++p) {
     struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
     bkr94acsAcastInput(processes[0], (unsigned char)p, BRACHA87_INITIAL,
+                          ANNOT_NO_ARM,
                           (unsigned char)p, val, iact);
   }
 
@@ -1476,7 +1490,7 @@ testBprCursorCoverage(
   for (call = 0; call < budget; ++call) {
     unsigned int n;
 
-    n = bkr94acsRetry(processes[0], &retry, out);
+    n = bkr94acsRetryStep(processes[0], &retry, out);
     if (!n)
       continue;
     if (out[0].act == BKR94ACS_ACT_ACAST_SEND)
@@ -1538,18 +1552,19 @@ testAcastAllEchoed(
         bkr94acsAcastAllEchoed(a, 200) == 0);
   check("AllEchoed: fresh A-Cast -> 0", bkr94acsAcastAllEchoed(a, 0) == 0);
 
-  bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, 0, val, acts);
+  bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, ANNOT_NO_ARM, 0, val, acts);
   /* ECHO from every process, no readys: echoSenders climbs to n before
    * ACCEPT (which needs 2t+1 readys) can fire -- the echoes-first order. */
   for (from = 0; from < 4; ++from) {
-    bkr94acsAcastInput(a, 0, BRACHA87_ECHO, (unsigned char)from, val, acts);
+    bkr94acsAcastInput(a, 0, BRACHA87_ECHO, ANNOT_NO_ARM, (unsigned char)from, val, acts);
     check("AllEchoed: 1 exactly when echoSenders == n",
           bkr94acsAcastAllEchoed(a, 0) == (from == 3));
   }
 
   /* Drive to ACCEPT via readys; the latched all-echoed bit holds. */
   for (from = 0; from < 4; ++from)
-    bkr94acsAcastInput(a, 0, BRACHA87_READY, (unsigned char)from, val, acts);
+    bkr94acsAcastInput(a, 0, BRACHA87_READY, ANNOT_NO_ARM,
+                          (unsigned char)from, val, acts);
   check("AllEchoed: latched 1 across accept",
         bkr94acsAcastAllEchoed(a, 0) == 1);
   printf("    0 until echoSenders==n, latched 1 across accept\n");
@@ -1595,15 +1610,16 @@ testAcastAllEchoedLate(
 
   /* Echoes from 0 and 1 only -- below the (n+t)/2+1 = 3 echo threshold,
    * so nothing amplifies and echoSenders stays short of n. */
-  bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, 0, val, acts);
-  bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 0, val, acts);
-  bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 1, val, acts);
+  bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, ANNOT_NO_ARM, 0, val, acts);
+  bkr94acsAcastInput(a, 0, BRACHA87_ECHO, ANNOT_NO_ARM, 0, val, acts);
+  bkr94acsAcastInput(a, 0, BRACHA87_ECHO, ANNOT_NO_ARM, 1, val, acts);
   check("AllEchoedLate: 0 with 2 of 4 echoers",
         bkr94acsAcastAllEchoed(a, 0) == 0);
 
   /* 2t+1 = 3 readys accept, ahead of the remaining echoes. */
   for (from = 0; from < 3; ++from)
-    bkr94acsAcastInput(a, 0, BRACHA87_READY, (unsigned char)from, val, acts);
+    bkr94acsAcastInput(a, 0, BRACHA87_READY, ANNOT_NO_ARM,
+                          (unsigned char)from, val, acts);
   check("AllEchoedLate: still 0 at accept",
         bkr94acsAcastAllEchoed(a, 0) == 0);
   m = bkr94acsAcastSkip(a, 0);
@@ -1611,11 +1627,11 @@ testAcastAllEchoedLate(
         m && !BRACHA87_SKIP_TST(m, 2) && !BRACHA87_SKIP_TST(m, 3));
 
   /* The remaining echoes, all post-accept. */
-  nact = bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 2, val, acts);
+  nact = bkr94acsAcastInput(a, 0, BRACHA87_ECHO, ANNOT_NO_ARM, 2, val, acts);
   check("AllEchoedLate: post-accept echo yields no act", nact == 0);
   check("AllEchoedLate: 0 with 3 of 4 echoers",
         bkr94acsAcastAllEchoed(a, 0) == 0);
-  nact = bkr94acsAcastInput(a, 0, BRACHA87_ECHO, 3, val, acts);
+  nact = bkr94acsAcastInput(a, 0, BRACHA87_ECHO, ANNOT_NO_ARM, 3, val, acts);
   check("AllEchoedLate: n-th post-accept echo yields no act", nact == 0);
   check("AllEchoedLate: 1 on the n-th echoer past accept",
         bkr94acsAcastAllEchoed(a, 0) == 1);
@@ -1687,8 +1703,8 @@ testBprProcessGate(
   {
     struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
     bkr94acsAcast(a, val, iact);
-    bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, 0, val, iact);
-    bkr94acsAcastInput(a, 1, BRACHA87_INITIAL, 1, val, iact);
+    bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, ANNOT_NO_ARM, 0, val, iact);
+    bkr94acsAcastInput(a, 1, BRACHA87_INITIAL, ANNOT_NO_ARM, 1, val, iact);
   }
 
   /* Force BA decision: process 1 decided 0 (excluded), process 0
@@ -1703,7 +1719,7 @@ testBprProcessGate(
   for (call = 0; call < budget; ++call) {
     unsigned int n;
 
-    n = bkr94acsRetry(a, &retry, out);
+    n = bkr94acsRetryStep(a, &retry, out);
     if (!n)
       continue;
     if (out[0].act == BKR94ACS_ACT_ACAST_SEND) {
@@ -1731,7 +1747,7 @@ testBprProcessGate(
   for (call = 0; call < budget; ++call) {
     unsigned int n;
 
-    n = bkr94acsRetry(a, &retry, out);
+    n = bkr94acsRetryStep(a, &retry, out);
     if (!n)
       continue;
     if (out[0].act == BKR94ACS_ACT_ACAST_SEND
@@ -1805,11 +1821,11 @@ testBaEnteredGetValid(
 
   /* Step 1: drive process 1's A-Cast to ACCEPT at this process --
    * Q(1) = 1 enters 1 into BA_1 and nothing else. */
-  bkr94acsAcastInput(a, 1, BRACHA87_INITIAL, 1, val, out);
+  bkr94acsAcastInput(a, 1, BRACHA87_INITIAL, ANNOT_NO_ARM, 1, val, out);
   for (from = 0; from < 4; ++from)
-    bkr94acsAcastInput(a, 1, BRACHA87_ECHO, from, val, out);
+    bkr94acsAcastInput(a, 1, BRACHA87_ECHO, ANNOT_NO_ARM, from, val, out);
   for (from = 0; from < 4; ++from)
-    bkr94acsAcastInput(a, 1, BRACHA87_READY, from, val, out);
+    bkr94acsAcastInput(a, 1, BRACHA87_READY, ANNOT_NO_ARM, from, val, out);
   check("BaEntered: 1 for the BA step 1 entered on ACCEPT",
         bkr94acsBaEntered(a, 1) == 1);
   check("BaEntered: 0 for the un-accepted BAs",
@@ -1833,12 +1849,12 @@ testBaEnteredGetValid(
 
   /* Latched: an A-Cast ACCEPT for an already-entered BA enters
    * nothing, and a decision does not clear the record. */
-  bkr94acsAcastInput(a, 2, BRACHA87_INITIAL, 2, val, out);
+  bkr94acsAcastInput(a, 2, BRACHA87_INITIAL, ANNOT_NO_ARM, 2, val, out);
   for (from = 0; from < 4; ++from)
-    bkr94acsAcastInput(a, 2, BRACHA87_ECHO, from, val, out);
+    bkr94acsAcastInput(a, 2, BRACHA87_ECHO, ANNOT_NO_ARM, from, val, out);
   nact = 0;
   for (from = 0; from < 4; ++from)
-    nact += bkr94acsAcastInput(a, 2, BRACHA87_READY, from, val, out);
+    nact += bkr94acsAcastInput(a, 2, BRACHA87_READY, ANNOT_NO_ARM, from, val, out);
   check("BaEntered: latched 1 across a later A-Cast ACCEPT",
         bkr94acsBaEntered(a, 2) == 1);
   testWriteDecision(a, 3, 0);
@@ -1886,9 +1902,9 @@ testBaEnteredGetValid(
     unsigned char sender;
 
     v = (b < 2) ? 0 : 1;
-    bkr94acsBaInput(a, 0, 0, b, BRACHA87_INITIAL, b, v, out);
+    bkr94acsBaInput(a, 0, 0, b, BRACHA87_INITIAL, ANNOT_NO_ARM, b, v, out);
     for (sender = 1; sender <= 3; ++sender)
-      bkr94acsBaInput(a, 0, 0, b, BRACHA87_READY, sender, v, out);
+      bkr94acsBaInput(a, 0, 0, b, BRACHA87_READY, ANNOT_NO_ARM, sender, v, out);
 
     memset(senders, 0xAA, sizeof (senders));
     memset(values, 0xAA, sizeof (values));
@@ -1930,9 +1946,9 @@ testBaEnteredGetValid(
     unsigned char sender;
 
     v = (b < 2) ? 0 : 1;
-    bkr94acsBaInput(a, 0, 1, b, BRACHA87_INITIAL, b, v, out);
+    bkr94acsBaInput(a, 0, 1, b, BRACHA87_INITIAL, ANNOT_NO_ARM, b, v, out);
     for (sender = 1; sender <= 3; ++sender)
-      bkr94acsBaInput(a, 0, 1, b, BRACHA87_READY, sender, v, out);
+      bkr94acsBaInput(a, 0, 1, b, BRACHA87_READY, ANNOT_NO_ARM, sender, v, out);
   }
   memset(senders, 0xAA, sizeof (senders));
   memset(values, 0xAA, sizeof (values));
@@ -1972,9 +1988,9 @@ testBaEnteredGetValid(
         v = (b < 2) ? 0 : 1;
         for (sender = 0; sender <= 3; ++sender) {
           if (sender)
-            bkr94acsBaInput(a, 0, round, b, BRACHA87_READY, sender, v, out);
+            bkr94acsBaInput(a, 0, round, b, BRACHA87_READY, ANNOT_NO_ARM, sender, v, out);
           else
-            bkr94acsBaInput(a, 0, round, b, BRACHA87_INITIAL, b, v, out);
+            bkr94acsBaInput(a, 0, round, b, BRACHA87_INITIAL, ANNOT_NO_ARM, b, v, out);
           while ((nact = bkr94acsTurn(a, 0, 1, tout)) > 0)
             for (k = 0; k < nact; ++k)
               if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
@@ -2082,10 +2098,10 @@ testBprByzantineSilent(
 
       if (m->cls == BKR94ACS_CLS_ACAST)
         nacts = bkr94acsAcastInput(processes[m->to], m->process,
-                  m->type, m->from, m->value, acts);
+                  m->type, ANNOT_NO_ARM, m->from, m->value, acts);
       else
         nacts = bkr94acsBaInput(processes[m->to], m->process,
-                  m->round, m->initiator, m->type, m->from,
+                  m->round, m->initiator, m->type, ANNOT_NO_ARM, m->from,
                   m->value[0], acts);
 
       for (k = 0; k < nacts; ++k) {
@@ -2129,7 +2145,7 @@ testBprByzantineSilent(
       unsigned int npact;
       unsigned int k;
 
-      npact = bkr94acsRetry(processes[p], &processRetry[p], out);
+      npact = bkr94acsRetryStep(processes[p], &processRetry[p], out);
       if (npact)
         progress = 1;
       for (k = 0; k < npact; ++k) {
@@ -2257,10 +2273,10 @@ runRetryOnlyE2e(
       m = &MsgQ[Qhead++];
       if (m->cls == BKR94ACS_CLS_ACAST)
         nacts = bkr94acsAcastInput(processes[m->to], m->process,
-                  m->type, m->from, m->value, acts);
+                  m->type, ANNOT_NO_ARM, m->from, m->value, acts);
       else
         nacts = bkr94acsBaInput(processes[m->to], m->process,
-                  m->round, m->initiator, m->type, m->from,
+                  m->round, m->initiator, m->type, ANNOT_NO_ARM, m->from,
                   m->value[0], acts);
       for (k = 0; k < nacts; ++k) {
         struct bkr94acsAct *act = &acts[k];
@@ -2300,7 +2316,7 @@ runRetryOnlyE2e(
       unsigned int npact;
       unsigned int k;
 
-      npact = bkr94acsRetry(processes[p], &processRetry[p], out);
+      npact = bkr94acsRetryStep(processes[p], &processRetry[p], out);
       if (npact)
         progress = 1;
       for (k = 0; k < npact; ++k) {
@@ -2428,7 +2444,7 @@ feedFig1Accept(
   total = 0;
   /* INITIAL from initiator: process 0 echoes (Rule 1) */
   total += bkr94acsBaInput(a, process, round, initiator,
-                                  BRACHA87_INITIAL, initiator, value, out);
+                                  BRACHA87_INITIAL, ANNOT_NO_ARM, initiator, value, out);
   while ((n = bkr94acsTurn(a, process, 1, tout)) > 0)
     for (k = 0; k < n; ++k)
       if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED
@@ -2443,7 +2459,7 @@ feedFig1Accept(
    */
   for (sender = 1; sender <= 3; ++sender) {
     total += bkr94acsBaInput(a, process, round, initiator,
-                                    BRACHA87_READY, sender, value, out);
+                                    BRACHA87_READY, ANNOT_NO_ARM, sender, value, out);
     while ((n = bkr94acsTurn(a, process, 1, tout)) > 0)
       for (k = 0; k < n; ++k)
         if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED
@@ -2496,7 +2512,7 @@ testExhausted(
    * the turn drain is HELD forever -- the single output is
    * structural.  Drive any further input and check.
    */
-  (void)bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, 0, 0, out);
+  (void)bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
   while ((n = bkr94acsTurn(a, 0, 1, out)) > 0)
     for (k = 0; k < n; ++k)
       if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
@@ -2605,6 +2621,7 @@ testExhaustedAmongDecided(
           (void)bkr94acsBaInput(a, (unsigned char)process,
                  (unsigned char)round, (unsigned char)b,
                  (unsigned char)(sender ? BRACHA87_READY : BRACHA87_INITIAL),
+                 ANNOT_NO_ARM,
                  (unsigned char)(sender ? sender : b), value, out);
           for (q = 0; q < 4; ++q)
             while ((n = bkr94acsTurn(a, (unsigned char)q, 1, tout)) > 0)
@@ -2639,7 +2656,7 @@ testExhaustedAmongDecided(
     for (b = 0; b < 4; ++b)
       for (q = 0; q < 4; ++q) {
         (void)bkr94acsBaInput(a, (unsigned char)q, (unsigned char)round,
-               (unsigned char)b, BRACHA87_READY, 0, 0, out);
+               (unsigned char)b, BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
         while ((n = bkr94acsTurn(a, (unsigned char)q, 1, tout)) > 0)
           for (k = 0; k < n; ++k)
             if (tout[k].act == BKR94ACS_ACT_COMPLETE)
@@ -2730,11 +2747,11 @@ feedFig1AcceptNoTurn(
   /* from == initiator, the only INITIAL the ingress binds (Note 17). */
   if (sendInitial)
     (void)bkr94acsBaInput(a, process, round, initiator,
-                          BRACHA87_INITIAL, initiator, value, out);
+                          BRACHA87_INITIAL, ANNOT_NO_ARM, initiator, value, out);
   /* rdCnt 1, 2, 3 at n=4, t=1: rule 5 at t+1, rule 6 at 2t+1. */
   for (sender = 1; sender <= 3; ++sender)
     (void)bkr94acsBaInput(a, process, round, initiator,
-                          BRACHA87_READY, sender, value, out);
+                          BRACHA87_READY, ANNOT_NO_ARM, sender, value, out);
 }
 
 static void
@@ -2812,7 +2829,7 @@ testExhaustedAdoptBranch(
         bkr94acsBaGetValid(a, 0, senders, values) == 0);
 
   /* Further arrivals cannot make an outputless BA output again. */
-  (void)bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, 0, 0, out);
+  (void)bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
   while ((n = bkr94acsTurn(a, 0, 1, tout)) > 0)
     for (k = 0; k < n; ++k)
       if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
@@ -2874,6 +2891,7 @@ testQuiescenceAfterExhausted(
   struct bracha87Retry cursor[4];
   struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
   struct bkr94acsAct tout[3];   /* bkr94acsTurn bound */
+  struct bkr94acsAct dout[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
   unsigned long sz;
   unsigned int exhausted[4];
   unsigned int quiesced[4];
@@ -2946,7 +2964,7 @@ testQuiescenceAfterExhausted(
   for (p = 0; p < 4; ++p)
     for (j = 0; j < 4; ++j) {
       (void)bkr94acsBaInput(processes[p], (unsigned char)j, 0, 0,
-                            BRACHA87_READY, 0, 0, out);
+                            BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
       while ((n = bkr94acsTurn(processes[p], (unsigned char)j, 1, tout)) > 0)
         for (k = 0; k < n; ++k)
           if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
@@ -2973,8 +2991,8 @@ testQuiescenceAfterExhausted(
     for (p = 0; p < 4; ++p) {
       if (quiesced[p])
         continue;
-      n = bkr94acsRetry(processes[p], &cursor[p], out);
-      if (!n && bkr94acsSentFig1Count(processes[p])) {
+      n = bkr94acsRetryStep(processes[p], &cursor[p], out);
+      if (!n && bkr94acsFig1SentCount(processes[p])) {
         quiesced[p] = 1;
         ++nQuiesced;
         continue;
@@ -2987,12 +3005,14 @@ testQuiescenceAfterExhausted(
           if (q == p
            || (out[k].skip && BRACHA87_SKIP_TST(out[k].skip, q)))
             continue;
-          if (out[k].accepted)
-            bkr94acsBaAccepted(processes[q], out[k].process, out[k].round,
-                               out[k].initiator, (unsigned char)p);
+          bkr94acsBaInput(processes[q], out[k].process, out[k].round,
+                          out[k].initiator, BRACHA87_READY,
+                          (out[k].accepted ? BKR94ACS_ACCEPTED : 0)
+                          | ((out[k].received
+                              && BRACHA87_SKIP_TST(out[k].received, q))
+                             ? BKR94ACS_RECEIVED : 0),
+                          (unsigned char)p, out[k].baValue, dout);
           if (!out[k].received || !BRACHA87_SKIP_TST(out[k].received, q)) {
-            bkr94acsBaResend(processes[q], out[k].process, out[k].round,
-                            out[k].initiator, (unsigned char)p);
             /* Leaving the rotation is provisional -- only a tick can
              * re-send, so the armed process goes back on. */
             if (quiesced[q]) {
@@ -3018,10 +3038,10 @@ testQuiescenceAfterExhausted(
           == BKR94ACS_DUTY_HELD)
         ++held;
     /* Stable: a whole sweep's worth of calls, every one of them idle. */
-    sent = bkr94acsSentFig1Count(processes[p]);
+    sent = bkr94acsFig1SentCount(processes[p]);
     idle = 0;
     for (k = 0; k <= sent; ++k)
-      if (!bkr94acsRetry(processes[p], &cursor[p], out))
+      if (!bkr94acsRetryStep(processes[p], &cursor[p], out))
         ++idle;
     if (sent && idle == sent + 1)
       ++stable;
@@ -3111,9 +3131,12 @@ testTurnDutyVacuityT0(
      * 2t+1 = 1, so two distinct READY senders carry any instance from
      * ECHOED through RDSENT to ACCEPTED. */
     (void)bkr94acsBaInput(a, 0, 0, (unsigned char)b, BRACHA87_INITIAL,
+                          ANNOT_NO_ARM,
                           (unsigned char)b, 0, out);
-    (void)bkr94acsBaInput(a, 0, 0, (unsigned char)b, BRACHA87_READY, 1, 0, out);
-    (void)bkr94acsBaInput(a, 0, 0, (unsigned char)b, BRACHA87_READY, 2, 0, out);
+    (void)bkr94acsBaInput(a, 0, 0, (unsigned char)b, BRACHA87_READY,
+                                 ANNOT_NO_ARM, 1, 0, out);
+    (void)bkr94acsBaInput(a, 0, 0, (unsigned char)b, BRACHA87_READY,
+                                 ANNOT_NO_ARM, 2, 0, out);
 
     cnt = bkr94acsBaGetValid(a, 0, senders, values);
     check("TurnDutyT0: the validated count grows one per initiator",
@@ -3243,6 +3266,7 @@ testAcastValueGate(
    * Post-tightening (current): returns NULL until ACCEPT. */
   val = 0xC1;
   bkr94acsAcastInput(a, /*process=*/1, BRACHA87_INITIAL,
+                        ANNOT_NO_ARM,
                         /*from=*/1, &val, out);
 
   check("AcastValueGate: ECHOED-only non-self returns NULL "
@@ -3254,6 +3278,7 @@ testAcastValueGate(
    * Rule 6 (rdsent && rd>=2t+1=3): sender 3 trips it, ACCEPT. */
   for (sender = 1; sender <= 3; ++sender)
     bkr94acsAcastInput(a, /*process=*/1, BRACHA87_READY,
+                          ANNOT_NO_ARM,
                           sender, &val, out);
 
   check("AcastValueGate: post-ACCEPT non-self returns value",
@@ -3299,7 +3324,7 @@ findAcastReady(
     unsigned int n;
     unsigned int k;
 
-    n = bkr94acsRetry(a, retry, out);
+    n = bkr94acsRetryStep(a, retry, out);
     for (k = 0; k < n; ++k)
       if (out[k].act == BKR94ACS_ACT_ACAST_SEND
        && out[k].process == process
@@ -3340,9 +3365,9 @@ testBprSkipAccept(
 
   val[0] = 1;
   /* Process 2's A-Cast to RDSENT (NOT accepted): INITIAL + 2 readys. */
-  bkr94acsAcastInput(a, 2, BRACHA87_INITIAL, 2, val, iact);
-  bkr94acsAcastInput(a, 2, BRACHA87_READY, 1, val, iact);
-  bkr94acsAcastInput(a, 2, BRACHA87_READY, 3, val, iact);
+  bkr94acsAcastInput(a, 2, BRACHA87_INITIAL, ANNOT_NO_ARM, 2, val, iact);
+  bkr94acsAcastInput(a, 2, BRACHA87_READY, ANNOT_NO_ARM, 1, val, iact);
+  bkr94acsAcastInput(a, 2, BRACHA87_READY, ANNOT_NO_ARM, 3, val, iact);
 
   /* Egress before accept: READY carries a non-null skip mask, accepted=0. */
   skip = 0; accepted = -1;
@@ -3354,7 +3379,8 @@ testBprSkipAccept(
   /* Ingress: process 1 announces accept of process-2 A-Cast; process 3 does
    * not.  The next READY skip marks 1 only -- a single process's accept
    * touches only its own bit (Byzantine-false-accept is thus contained). */
-  bkr94acsAcastAccepted(a, 2, 1);
+  bkr94acsAcastInput(a, 2, BRACHA87_READY,
+                        BKR94ACS_ACCEPTED | BKR94ACS_RECEIVED, 1, val, iact);
   skip = 0; accepted = -1;
   seen = findAcastReady(a, &retry, 2, &skip, &accepted);
   check("Ingress: READY still output (not all accepted)", seen);
@@ -3365,7 +3391,7 @@ testBprSkipAccept(
 
   /* Drive process-2 A-Cast to ACCEPT (3rd ready): self-accept is
    * recorded, so egress .accepted flips to 1 and self's skip bit sets. */
-  bkr94acsAcastInput(a, 2, BRACHA87_READY, 0, val, iact);
+  bkr94acsAcastInput(a, 2, BRACHA87_READY, ANNOT_NO_ARM, 0, val, iact);
   skip = 0; accepted = -1;
   seen = findAcastReady(a, &retry, 2, &skip, &accepted);
   check("Egress: process-2 READY still surfaced post-accept", seen);
@@ -3375,8 +3401,10 @@ testBprSkipAccept(
 
   /* Quiescence: mark the remaining processes (2, 3) accepted.  With self(0)
    * + 1 + 2 + 3 all accepted, process-2's A-Cast READY retires. */
-  bkr94acsAcastAccepted(a, 2, 2);
-  bkr94acsAcastAccepted(a, 2, 3);
+  bkr94acsAcastInput(a, 2, BRACHA87_READY,
+                        BKR94ACS_ACCEPTED | BKR94ACS_RECEIVED, 2, val, iact);
+  bkr94acsAcastInput(a, 2, BRACHA87_READY,
+                        BKR94ACS_ACCEPTED | BKR94ACS_RECEIVED, 3, val, iact);
   skip = 0; accepted = -1;
   seen = findAcastReady(a, &retry, 2, &skip, &accepted);
   check("Quiescence: process-2 A-Cast READY retired at all-accepted",
@@ -3420,6 +3448,7 @@ testForgedInitial(
   /* Forged A-Cast INITIAL for process 0, sent by Byzantine process 1. */
   v = 0x55;
   n = bkr94acsAcastInput(a, /*process=*/0, BRACHA87_INITIAL,
+                            ANNOT_NO_ARM,
                             /*from=*/1, &v, out);
   check("forged A-Cast INITIAL (from!=process) outputs no action", n == 0);
 
@@ -3430,13 +3459,14 @@ testForgedInitial(
    */
   for (from = 0; from <= 3; ++from)
     if (from != 0)
-      (void)bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, from, &v, out);
+      (void)bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, ANNOT_NO_ARM, from, &v, out);
   check("forged INITIAL flood leaves A-Cast Fig1 unsent",
         bkr94acsAcastValue(a, 0) == 0);
 
   /* The honest process's own INITIAL still works (from == process). */
   v = 0x55;
   n = bkr94acsAcastInput(a, /*process=*/0, BRACHA87_INITIAL,
+                            ANNOT_NO_ARM,
                             /*from=*/0, &v, out);
   check("honest A-Cast INITIAL (from==process) outputs ECHO", n == 1);
   check("honest A-Cast INITIAL action is ACAST_SEND/ECHO",
@@ -3446,11 +3476,13 @@ testForgedInitial(
   /* BA path: forged INITIAL with from != initiator is dropped;
    * the legitimate initiator's INITIAL is accepted. */
   n = bkr94acsBaInput(a, /*process=*/0, /*round=*/0, /*initiator=*/1,
-                             BRACHA87_INITIAL, /*from=*/3, /*value=*/1, out);
+                             BRACHA87_INITIAL, ANNOT_NO_ARM,
+                             /*from=*/3, /*value=*/1, out);
   check("forged BA INITIAL (from!=initiator) outputs no action",
         n == 0);
   n = bkr94acsBaInput(a, /*process=*/0, /*round=*/0, /*initiator=*/1,
-                             BRACHA87_INITIAL, /*from=*/1, /*value=*/1, out);
+                             BRACHA87_INITIAL, ANNOT_NO_ARM,
+                             /*from=*/1, /*value=*/1, out);
   check("legitimate BA INITIAL (from==initiator) outputs ECHO",
         n == 1 && out[0].act == BKR94ACS_ACT_BA_SEND
               && out[0].type == BRACHA87_ECHO);

@@ -42,7 +42,7 @@
  *
  *   QUIESCENT   the owing ending (BPR.md Quiescence -- no exit
  *               decision at all), demonstrated here, per process on
- *               its OWN evidence: a bkr94acsRetry pass past its
+ *               its OWN evidence: a bkr94acsRetryStep pass past its
  *               A-Cast owes nothing, so it leaves the retry
  *               rotation.  Completion is then an assertion the
  *               results section checks, not the gate.  Reaching it
@@ -156,12 +156,13 @@
 /*  ACAST carries its value in value[]; BA folds its payload into           */
 /*  clsType and leaves value[] unused.  A READY also carries the two        */
 /*  class-independent BPR annotations: BKR94ACS_ACCEPTED (bit 4) from the   */
-/*  act's .accepted flag, one fact about the sender, routed on ingress to   */
-/*  bkr94acs*Accepted; and BKR94ACS_RECEIVED (bit 5) from the act's         */
-/*  .received mask, decided per RECIPIENT, whose ABSENCE routes to          */
-/*  bkr94acs*Resend.  Together they are the READY retire: the first says    */
-/*  "I have accepted," the second "I have yours," and quiescence needs      */
-/*  both in every direction.                                                */
+/*  act's .accepted flag, one fact about the sender; and                    */
+/*  BKR94ACS_RECEIVED (bit 5) from the act's .received mask, decided per    */
+/*  RECIPIENT.  Together they are the READY retire: the first says "I       */
+/*  have accepted," the second "I have yours," and quiescence needs both    */
+/*  in every direction.  On ingress neither needs a call of its own --      */
+/*  the whole clsType byte goes to bkr94acs*Input as annot, which routes    */
+/*  both, in order, off the one message that carried them.                  */
 /*--------------------------------------------------------------------------*/
 
 struct msg {
@@ -342,8 +343,8 @@ qActs(
          * readied -> ECHO, accepted -> READY).  Sound under loss; here
          * (no loss) it merely trims redundant retries.  The READY
          * suppress mask is fed by the ACCEPTED wire bit this loop
-         * round-trips (egress .accepted -> bit 4 -> ingress
-         * bkr94acs*Accepted); the same round-trip is exercised under
+         * round-trips (egress .accepted -> bit 4 -> the annot argument
+         * of bkr94acs*Input); the same round-trip is exercised under
          * loss in test_bkr94acs_blackbox.c. */
         if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
           continue;
@@ -646,11 +647,11 @@ main(
   /*----------------------------------------------------------------------*/
   /*  Bootstrap: each process A-Casts its value                           */
   /*                                                                      */
-  /*  bkr94acsAcast marks the local A-Cast Fig1 as the broadcast      */
-  /*  initiator and outputs one BKR94ACS_ACT_ACAST_SEND action (.type =     */
-  /*  BRACHA87_INITIAL) for the application to broadcast to all processes.    */
-  /*  Retry thereafter is intrinsic to BPR (bkr94acsRetry) -- no          */
-  /*  application bookkeeping required.                                        */
+  /*  bkr94acsAcast marks the local A-Cast Fig1 as the broadcast          */
+  /*  initiator and outputs one BKR94ACS_ACT_ACAST_SEND action (.type =   */
+  /*  BRACHA87_INITIAL) for the application to broadcast to all           */
+  /*  processes.  Retry thereafter is intrinsic to BPR                    */
+  /*  (bkr94acsRetryStep) -- no application bookkeeping required.         */
   /*----------------------------------------------------------------------*/
 
   for (i = 0; i < n; ++i) {
@@ -794,26 +795,23 @@ main(
                  (unsigned)m->to, typeName(type),
                  (unsigned)m->process, (unsigned)m->from);
 
-        nacts = bkr94acsAcastInput(st, m->process, type, m->from,
-                                      m->value, acts);
         /*
-         * ACCEPTED-annotation ingress: bit 4 on a READY says its sender
-         * has accepted this Fig1 and consumes no further (ready, v) from
-         * us.  Route it AFTER the matching Input above, so rdFrom is
-         * recorded first and acFrom stays a subset of rdFrom.
+         * The whole clsType byte rides in as annot.  The library reads
+         * BKR94ACS_ACCEPTED and BKR94ACS_RECEIVED off it, and only on a
+         * READY: ACCEPTED says the sender has accepted this Fig1 and
+         * consumes no further (ready, v) from us; the ABSENCE of
+         * RECEIVED says the sender has not recorded OUR accept -- it
+         * would have suppressed us otherwise -- so it is un-suppressed
+         * for the next READY egress, which goes out marked.  Ordering
+         * the two against the message's own Fig1 input is the library's.
          */
-        if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
-          bkr94acsAcastAccepted(st, m->process, m->from);
+        nacts = bkr94acsAcastInput(st, m->process, type, m->clsType,
+                                      m->from, m->value, acts);
         /*
-         * RECEIVED-annotation ingress: a READY WITHOUT bit 5 is its
-         * sender showing it has not recorded OUR accept -- it would
-         * have suppressed us otherwise -- so un-suppress it for the
-         * next READY egress, which goes out marked.  Never route a
-         * READY that HAS the bit: a marked READY that re-armed its
-         * receiver would ping-pong and the pair would never fall silent.
+         * The one part that stays here, because it is this program's
+         * parking policy and not the protocol's.
          */
         if (type == BRACHA87_READY && !(m->clsType & BKR94ACS_RECEIVED)) {
-          bkr94acsAcastResend(st, m->process, m->from);
           /*
            * Leaving the rotation is PROVISIONAL: an unmarked READY is
            * evidence that something IS still owed, and a process that
@@ -837,16 +835,12 @@ main(
                  (unsigned)m->process, (unsigned)m->round,
                  (unsigned)baValue, (unsigned)m->from);
 
+        /* Same annotation ingress as the A-Cast class: the byte goes
+         * in as annot and the library routes both bits. */
         nacts = bkr94acsBaInput(st, m->process, m->round,
-                                       m->initiator, type,
+                                       m->initiator, type, m->clsType,
                                        m->from, baValue, acts);
-        /* Same ACCEPTED ingress as the A-Cast class (Input first). */
-        if (type == BRACHA87_READY && (m->clsType & BKR94ACS_ACCEPTED))
-          bkr94acsBaAccepted(st, m->process, m->round,
-                                    m->initiator, m->from);
         if (type == BRACHA87_READY && !(m->clsType & BKR94ACS_RECEIVED)) {
-          bkr94acsBaResend(st, m->process, m->round,
-                                 m->initiator, m->from);
           if (quiescent[m->to]) {
             quiescent[m->to] = 0;
             --quiesced;
@@ -995,17 +989,17 @@ main(
        * fresh Fig 1 for a round nobody has broadcast yet. */
       sweepDone = 0;
       if (!quiescent[i]) {
-        nacts = bkr94acsRetry(processes[i], &retry[i], acts);
+        nacts = bkr94acsRetryStep(processes[i], &retry[i], acts);
         /* The cursor's own wrap count IS the pass boundary; compare
          * it, never assume it advanced by one (a single call can
          * complete two passes).  Counting calls against
-         * bkr94acsSentFig1Count would close late, by the retired
+         * bkr94acsFig1SentCount would close late, by the retired
          * count, and that error grows as a run matures. */
         if (retry[i].sweeps != lastSweeps[i]) {
           lastSweeps[i] = retry[i].sweeps;
           sweepDone = 1;
         }
-        if (!nacts && bkr94acsSentFig1Count(processes[i])) {
+        if (!nacts && bkr94acsFig1SentCount(processes[i])) {
           quiescent[i] = 1;
           quiesceTick[i] = tickCount;
           ++quiesced;

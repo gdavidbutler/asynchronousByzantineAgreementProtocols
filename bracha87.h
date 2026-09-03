@@ -163,11 +163,20 @@ struct bracha87Fig1 {
 
 /* data[] is the variable tail; see bracha87.c for layout. */
 
-/* Size in bytes needed for a Fig1 instance */
+/*
+ * Size in bytes needed for a Fig1 instance, or 0 if the configuration
+ * cannot be built.
+ *
+ * The parameters are WIDER than bracha87Fig1Init's unsigned char on
+ * purpose, and the width is the refusal: an out-of-range n or vLen is
+ * unrepresentable at Init, so Sz is the only entry that can see one,
+ * and 0 is how it declines.  Every *Sz in this library and bkr94acsSz
+ * answer the same way.
+ */
 unsigned long
 bracha87Fig1Sz(
-  unsigned int             /* n: actual process count = n + 1 */
- ,unsigned int             /* vLen: actual value length = vLen + 1 */
+  unsigned int             /* n: actual process count = n + 1; > 255 refused */
+ ,unsigned int             /* vLen: actual value length = vLen + 1; > 255 refused */
 );
 
 /* Initialize a Fig1 instance. Caller has allocated bracha87Fig1Sz bytes. */
@@ -396,6 +405,17 @@ bracha87Fig1AllEchoed(
  * bracha87Fig1Input -- or the local index, supplied by the caller for
  * self-accept (a Fig1 instance does not know its own process index).
  * Out-of-range 'from' and a null instance are ignored.
+ *
+ * THIS STAYS A SEPARATE ENTRY, and the composition above it is not the
+ * precedent.  bkr94acs{Acast,Ba}Input take the same two annotations as
+ * an `annot` argument, on the argument that both are facts about one
+ * message so both belong to the call that carries it.  That argument
+ * does not reach down here: SELF-ACCEPT IS A FACT ABOUT NO MESSAGE.
+ * There is no Input to hang it on, and a bare-Fig1 caller has no other
+ * way to record it -- which is why bkr94acs itself calls this entry
+ * internally at each of its own ACCEPT points.  Folding these two into
+ * bracha87Fig1Input would take self-accept away from every caller that
+ * runs its own Fig 1 and leave the quiescence gate unable to reach n.
  */
 void
 bracha87Fig1ProcessAccepted(
@@ -576,11 +596,12 @@ struct bracha87Fig2 {
  * carries the alignment those counts require.
  */
 
-/* Size in bytes needed for a Fig2 instance */
+/* Size in bytes needed for a Fig2 instance, or 0 if out of range
+ * (same refusal contract as bracha87Fig1Sz). */
 unsigned long
 bracha87Fig2Sz(
-  unsigned int             /* n: actual process count = n + 1 */
- ,unsigned int             /* maxRounds */
+  unsigned int             /* n: actual process count = n + 1; > 255 refused */
+ ,unsigned int             /* maxRounds; > 255 refused */
 );
 
 /* Initialize a Fig2 instance. Caller has allocated bracha87Fig2Sz bytes. */
@@ -715,10 +736,12 @@ struct bracha87Fig3 {
  * carries the alignment those counts require.
  */
 
+/* Size in bytes needed for a Fig3 instance, or 0 if out of range
+ * (same refusal contract as bracha87Fig1Sz). */
 unsigned long
 bracha87Fig3Sz(
-  unsigned int             /* n: actual process count = n + 1 */
- ,unsigned int             /* maxRounds */
+  unsigned int             /* n: actual process count = n + 1; > 255 refused */
+ ,unsigned int             /* maxRounds; > 255 refused */
 );
 
 void
@@ -774,10 +797,11 @@ bracha87Fig3GetValid(
 );
 
 /*
- * Check if round k has reached n-t validated (Fig 2 round completion).
- * Includes rounds completed by cascaded re-evaluation.
+ * Returns 1 iff round k has reached n-t validated (Fig 2 round
+ * completion), else 0 (and 0 for a null pointer or a round out of
+ * range).  Includes rounds completed by cascaded re-evaluation.
  */
-int
+unsigned int
 bracha87Fig3RoundComplete(
   const struct bracha87Fig3 *
  ,unsigned char            /* round k (0-based) */
@@ -888,10 +912,19 @@ struct bracha87Fig4 {
   struct bracha87Fig3 fig3;/* embedded Fig 3; variable tail extends past */
 };
 
+/*
+ * Size in bytes needed for a Fig4 instance, or 0 if n is out of range
+ * (same refusal contract as bracha87Fig1Sz).
+ *
+ * maxPhases is CLAMPED, not refused, because bracha87Fig4Init clamps it
+ * identically -- the allocation and the initialized machine agree on the
+ * ceiling.  n has no such counterpart: Init takes it as an unsigned char
+ * and cannot see an out-of-range value at all, so Sz refuses it.
+ */
 unsigned long
 bracha87Fig4Sz(
-  unsigned int             /* n: actual process count = n + 1 */
- ,unsigned int             /* maxPhases, <= BRACHA87_MAX_PHASES (85) */
+  unsigned int             /* n: actual process count = n + 1; > 255 refused */
+ ,unsigned int             /* maxPhases, clamped to BRACHA87_MAX_PHASES (85) */
 );
 
 /*
@@ -979,10 +1012,48 @@ bracha87Fig4Init(
  * preventing n-t honest validations -- this is the asynchronous
  * impossibility result, not a defect.
  *
- * The round k maps to phase/subRound:
- *   phase = k / 3
- *   subRound = k % 3
- * Convert with BRACHA87_ROUNDS_PER_PHASE rather than a bare 3.
+ * k NAMES THE ROUND THIS CALL COMPUTES, and it must be the machine's
+ * own next round -- phase * BRACHA87_ROUNDS_PER_PHASE + subRound, the
+ * two fields this call then advances.  Any other k is REFUSED (0
+ * actions, no state change) rather than retargeting the machine at the
+ * round the caller named: a Fig 4 is a sequence, and a caller that has
+ * lost its place would otherwise silently recompute a spent round or
+ * skip an unspent one.  Convert with BRACHA87_ROUNDS_PER_PHASE rather
+ * than a bare 3:
+ *   phase = k / BRACHA87_ROUNDS_PER_PHASE
+ *   subRound = k % BRACHA87_ROUNDS_PER_PHASE
+ *
+ * THE GUARD REACHES EVERY ROUND THE MACHINE CAN STILL ADVANCE PAST,
+ * and that is not quite every round.  A machine that decides in its
+ * LAST phase returns BRACHA87_DECIDE without advancing -- there is no
+ * next round to name -- so phase/subRound still spell that round and
+ * it is not refused a second time.  Re-calling it recomputes a spent
+ * round: the dispatch runs again over the values handed in, and the
+ * post-decide arm then rewrites value from decision, so the decision
+ * itself cannot change -- but the call is not the refusal the rule
+ * above promises.  The same holds for a post-decide continuation that
+ * ran out of phase space.  Both are terminals: read
+ * BRACHA87_F4_DECIDED in fig4->flags and stop calling, rather than
+ * driving a terminal round a second time.  The third terminal needs
+ * no such care: an EXHAUSTED instance is refused by its own guard.
+ *
+ * A 0 return is therefore one of four things.  Three are readable off
+ * state the caller already holds: k did not match (fig4->phase /
+ * fig4->subRound say so), the instance is EXHAUSTED
+ * (BRACHA87_F4_EXHAUSTED), or the post-decide continuation ran out of
+ * phase space (BRACHA87_F4_DECIDED set, phase at the ceiling).  The
+ * fourth leaves no trace and is the caller's own argument: an empty
+ * set, n_msgs == 0, which computes nothing and advances nothing, so
+ * the same k stays due.  Only a k mismatch is a caller error; an empty
+ * set is the ordinary state of a round whose sample has not arrived.
+ *
+ * SENDERS ARE NOT A PARAMETER.  Fig 4's computation is over values
+ * alone -- the majority at 3i+1, the d-message counts at 3i+2.  Sender
+ * identity belongs to Fig 3, which consumes it building VALID^k (one
+ * message per sender per round); by the time a set reaches here it is
+ * already deduped, so the round needs only the values.  Callers still
+ * gather senders for bracha87Fig3GetValid; they simply stop passing
+ * them on.
  *
  * WHAT BRACHA87_BROADCAST OBLIGES, and where BPR enters.  Fig 3's
  * round(k) reads "Broadcast(p, k, v)", and Broadcast there is Fig 1 --
@@ -1018,49 +1089,47 @@ bracha87Fig4Init(
 unsigned int
 bracha87Fig4Round(
   struct bracha87Fig4 *
- ,unsigned char            /* round k (0-based) */
+ ,unsigned char            /* round k (0-based); must be this machine's
+                             * next round or the call is refused */
  ,unsigned int             /* n_msgs */
- ,const unsigned char *    /* senders */
  ,const unsigned char *    /* values */
 );
 
 /*************************************************************************/
 /*                                                                       */
-/*  Retry infrastructure (cursor type shared across the library)          */
+/*  Retry infrastructure (cursor type shared across the library)         */
 /*                                                                       */
 /*  The cursor lives in caller storage; the library does not own it      */
 /*  (no library-internal cursor, no hidden mutation, parallel sweeps     */
 /*  over the same state are permitted).  Initialize with                 */
-/*  bracha87RetryInit before first use by any Retry consumer --            */
-/*  bracha87Fig1RetryStep below, or bkr94acsRetry (bkr94acs.h).            */
+/*  bracha87RetryInit before first use by any Retry consumer --          */
+/*  bracha87Fig1RetryStep below, or bkr94acsRetryStep (bkr94acs.h).      */
 /*                                                                       */
-/*  NETWORK FLOOD WARNING.  Every Retry consumer is one-call-per-tick.    */
+/*  NETWORK FLOOD WARNING.  Every Retry consumer is one-call-per-tick.   */
 /*  Do NOT loop.  BPR retries persist until their retire gates close     */
-/*  (ACCEPTED / all-echoed / full READY suppress coverage; sent      */
-/*  flags live                                                            */
-/*  forever), so until convergence every sent instance has          */
-/*  actions; a `while (Retry(...))` loop empties the cursor space onto    */
+/*  (ACCEPTED / all-echoed / full READY suppress coverage; sent flags    */
+/*  live forever), so until convergence every sent instance has          */
+/*  actions; a `while (Retry(...))` loop empties the cursor space onto   */
 /*  the wire as fast as the CPU runs, burning through kernel buffers     */
-/*  and causing the very drops the retry exists to recover from.  The     */
+/*  and causing the very drops the retry exists to recover from.  The    */
 /*  application's tick rate is the rate limit.  In healthy operation a   */
-/*  Retry consumer returns >0 on every call until quiescence.             */
+/*  Retry consumer returns >0 on every call until quiescence.            */
 /*                                                                       */
 /*  The 0 return appears only when a full sweep across the whole cursor  */
-/*  space found no actions: either no sent instance exists yet      */
-/*  (pre-broadcast / fully-shutdown state) or every sent instance   */
-/*  has retired all its retries (quiescence -- every process announced      */
+/*  space found no actions: either no sent instance exists yet           */
+/*  (pre-broadcast / fully-shutdown state) or every sent instance has    */
+/*  retired all its retries (quiescence -- every process announced       */
 /*  accepted and holds this process's own announcement).  Neither is a   */
 /*  termination signal by itself, and a later unmarked READY re-opens    */
 /*  the READY retry for the one tick that re-sends marked.               */
 /*                                                                       */
-/*  Termination is the application's policy, not the library's,          */
-/*  which prescribes none -- see BPR.md.  A policy needing sweep         */
-/*  coverage reads the cursor's `sweeps` wrap count, comparing it        */
-/*  against a saved value; one sweep covers every currently-sent         */
-/*  instance once.  Do NOT count calls against                           */
-/*  bracha87Fig1SentCount -- that is an upper bound on the calls a pass  */
-/*  costs, since a sent instance whose retries have all retired is       */
-/*  walked past without spending one.                                    */
+/*  Termination is the application's policy, not the library's, which    */
+/*  prescribes none -- see BPR.md.  A policy needing sweep coverage      */
+/*  reads the cursor's `sweeps` wrap count, comparing it against a       */
+/*  saved value; one sweep covers every currently-sent instance once.    */
+/*  Do NOT count calls against bracha87Fig1SentCount -- that is an       */
+/*  upper bound on the calls a pass costs, since a sent instance whose   */
+/*  retries have all retired is walked past without spending one.        */
 /*                                                                       */
 /*************************************************************************/
 

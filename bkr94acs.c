@@ -366,7 +366,7 @@ bkr94acsEnter(
   /*
    * Initial broadcast of our BA input.  Mark the corresponding
    * (process, round=0, initiator=self) BA Fig1 as the
-   * initiator and store the value, so bkr94acsRetry's BPR walk
+   * initiator and store the value, so bkr94acsRetryStep's BPR walk
    * keeps outputting BKR94ACS_ACT_BA_SEND with .type=INITIAL for
    * as long as F1_INITIATOR is set on that Fig1 (Implementation
    * Note 11); once F1_ECHOED is set, BA_SEND/ECHO joins the
@@ -401,6 +401,7 @@ bkr94acsAcastInput(
   struct bkr94acs *a
  ,unsigned char process
  ,unsigned char type
+ ,unsigned char annot
  ,unsigned char from
  ,const unsigned char *value
  ,struct bkr94acsAct *out
@@ -477,8 +478,9 @@ bkr94acsAcastInput(
       /*
        * Self-accept: record our own accept in the A-Cast Fig1's
        * acFrom so the READY quiescence count can reach n (the Fig1
-       * does not know self; bkr94acs routes by it).  bkr94acsAcast-
-       * Accepted feeds processes' accepts here from the wire ACCEPTED bit.
+       * does not know self; bkr94acs routes by it).  Processes' accepts
+       * reach the same place from this entry's annot argument, routed
+       * after this loop.
        */
       bracha87Fig1ProcessAccepted(f1, a->self);
       /*
@@ -506,6 +508,21 @@ bkr94acsAcastInput(
     }
   }
 
+  /*
+   * Annotation ingress, both halves of the READY retire, in the only
+   * sound order: after bracha87Fig1Input recorded this sender's ready
+   * (acFrom stays a subset of rdFrom) and after any accept this same
+   * message caused.  Runs whether or not the Fig 1 produced actions --
+   * an unmarked re-send is a duplicate (ready, v) that Input dedups to
+   * zero, and it is exactly the message whose arm must not be lost.
+   */
+  if (type == BRACHA87_READY) {
+    if (annot & BKR94ACS_ACCEPTED)
+      bracha87Fig1ProcessAccepted(f1, from);
+    if (!(annot & BKR94ACS_RECEIVED))
+      bracha87Fig1ProcessResend(f1, from);
+  }
+
   return (nact);
 }
 
@@ -516,6 +533,7 @@ bkr94acsBaInput(
  ,unsigned char round
  ,unsigned char initiator
  ,unsigned char type
+ ,unsigned char annot
  ,unsigned char from
  ,unsigned char value
  ,struct bkr94acsAct *out
@@ -593,7 +611,8 @@ bkr94acsBaInput(
       /*
        * Self-accept: record our own accept in this BA Fig1's
        * acFrom (round, initiator) so its READY quiescence count can
-       * reach n.  Processes' accepts arrive via bkr94acsBaAccepted.
+       * reach n.  Processes' accepts arrive on this entry's annot
+       * argument, routed after this loop.
        */
       bracha87Fig1ProcessAccepted(f1, a->self);
 
@@ -641,6 +660,21 @@ bkr94acsBaInput(
                          && (f1->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
       ++nact;
     }
+  }
+
+  /*
+   * Annotation ingress, both halves of the READY retire, in the only
+   * sound order: after bracha87Fig1Input recorded this sender's ready
+   * (acFrom stays a subset of rdFrom) and after any accept this same
+   * message caused.  Runs whether or not the Fig 1 produced actions --
+   * an unmarked re-send is a duplicate (ready, v) that Input dedups to
+   * zero, and it is exactly the message whose arm must not be lost.
+   */
+  if (type == BRACHA87_READY) {
+    if (annot & BKR94ACS_ACCEPTED)
+      bracha87Fig1ProcessAccepted(f1, from);
+    if (!(annot & BKR94ACS_RECEIVED))
+      bracha87Fig1ProcessResend(f1, from);
   }
 
   return (nact);
@@ -713,7 +747,7 @@ bkr94acsAcast(
    * Rule 1 still fires from bkr94acsAcastInput receiving
    * (initial, v) via the network loopback).
    *
-   * Thereafter bkr94acsRetry keeps outputting BKR94ACS_ACT_
+   * Thereafter bkr94acsRetryStep keeps outputting BKR94ACS_ACT_
    * ACAST_SEND with .type=INITIAL for as long as F1_INITIATOR
    * is set (Implementation Note 11); once F1_ECHOED is set
    * by loopback or process echoes, ACAST_SEND/ECHO outputs
@@ -876,7 +910,7 @@ bkr94acsRetryOutputBa(
 }
 
 unsigned int
-bkr94acsRetry(
+bkr94acsRetryStep(
   struct bkr94acs *a
  ,struct bracha87Retry *p
  ,struct bkr94acsAct *out
@@ -1063,7 +1097,6 @@ bkr94acsTurn(
   struct bracha87Fig4 *f4;
   struct bracha87Fig3 *f3;
   unsigned char *nextRound;
-  unsigned char rsnd[256];
   unsigned char rval[256];
   unsigned int rcnt;
   unsigned int act;
@@ -1088,8 +1121,12 @@ bkr94acsTurn(
   f4 = baF4(a, process);
   f3 = &f4->fig3;
   nextRound = &bkr94acsNextRound(a)[process];
-  rcnt = bracha87Fig3GetValid(f3, *nextRound, rsnd, rval);
-  act = bracha87Fig4Round(f4, *nextRound, rcnt, rsnd, rval);
+  /* Values only: Fig 4 computes over values alone, and Fig 3 already
+   * deduped by sender building VALID^k.  Senders are not lost to the
+   * caller -- bkr94acsBaGetValid hands them over for the BA's next
+   * round, which is this one until the turn below advances it. */
+  rcnt = bracha87Fig3GetValid(f3, *nextRound, 0, rval);
+  act = bracha87Fig4Round(f4, *nextRound, rcnt, rval);
   ++*nextRound;
   nact = 0;
 
@@ -1177,7 +1214,7 @@ bkr94acsTurn(
      * (self is initiator).  Mark the corresponding
      * (process, round=*nextRound, initiator=self)
      * BA Fig1 as the initiator and store the
-     * value so bkr94acsRetry keeps retrying this INITIAL
+     * value so bkr94acsRetryStep keeps retrying this INITIAL
      * on subsequent ticks while F1_INITIATOR is set, plus
      * BA_SEND/ECHO and BA_SEND/READY once F1_ECHOED /
      * F1_RDSENT join (Implementation Note 11).  Same
@@ -1252,80 +1289,6 @@ bkr94acsTurn(
   }
 
   return (nact);
-}
-
-/*--------------------------------------------------------------------------*/
-/*  ACCEPTED-annotation ingress (BPR per-process READY retire)              */
-/*                                                                          */
-/*  The transport decodes the BKR94ACS_ACCEPTED wire bit off a received     */
-/*  READY and routes it here: 'from' (the message sender) has accepted      */
-/*  the named Fig1 instance, so this process retires its per-process READY  */
-/*  retry to 'from' (bracha87Fig1Skip(READY)).  Call AFTER the             */
-/*  matching bkr94acs*Input for the same READY (which records rdFrom);      */
-/*  acFrom is then a subset of rdFrom.  Out-of-range indices are ignored.   */
-/*--------------------------------------------------------------------------*/
-
-void
-bkr94acsAcastAccepted(
-  struct bkr94acs *a
- ,unsigned char process
- ,unsigned char from
-){
-  if (!a || process > a->n || from > a->n)
-    return;
-  bracha87Fig1ProcessAccepted(acastF1(a, process), from);
-}
-
-void
-bkr94acsBaAccepted(
-  struct bkr94acs *a
- ,unsigned char process
- ,unsigned char round
- ,unsigned char initiator
- ,unsigned char from
-){
-  if (!a || process > a->n || round >= maxRounds(a)
-   || initiator > a->n || from > a->n)
-    return;
-  bracha87Fig1ProcessAccepted(baF1(a, process, round, initiator), from);
-}
-
-/*--------------------------------------------------------------------------*/
-/*  RECEIVED-annotation ingress (the retire's other half)                   */
-/*                                                                          */
-/*  A received READY WITHOUT the BKR94ACS_RECEIVED wire bit is its sender   */
-/*  saying it has not recorded this process's accept of the named Fig1 --   */
-/*  it would have suppressed us otherwise.  Route it here and the Fig1      */
-/*  un-suppresses that sender for one READY egress, so the announcement it  */
-/*  is waiting for goes out (bracha87Fig1ProcessResend).  Call AFTER the    */
-/*  matching bkr94acs*Input, and never for a READY that DOES carry the      */
-/*  bit -- a marked READY re-arms nothing, or the exchange would ping-pong. */
-/*  Out-of-range indices are ignored.                                       */
-/*--------------------------------------------------------------------------*/
-
-void
-bkr94acsAcastResend(
-  struct bkr94acs *a
- ,unsigned char process
- ,unsigned char from
-){
-  if (!a || process > a->n || from > a->n)
-    return;
-  bracha87Fig1ProcessResend(acastF1(a, process), from);
-}
-
-void
-bkr94acsBaResend(
-  struct bkr94acs *a
- ,unsigned char process
- ,unsigned char round
- ,unsigned char initiator
- ,unsigned char from
-){
-  if (!a || process > a->n || round >= maxRounds(a)
-   || initiator > a->n || from > a->n)
-    return;
-  bracha87Fig1ProcessResend(baF1(a, process, round, initiator), from);
 }
 
 /*--------------------------------------------------------------------------*/
@@ -1421,7 +1384,7 @@ bkr94acsBaFig1(
 }
 
 unsigned int
-bkr94acsSentFig1Count(
+bkr94acsFig1SentCount(
   const struct bkr94acs *a
 ){
   unsigned int N;

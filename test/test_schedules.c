@@ -64,7 +64,7 @@
  *   - example/bracha87Fig1.c:629 re-initializes the cursor inside the
  *     tick over a ONE-element array, so one bracha87Fig1RetryStep
  *     call IS a full pass.  Surface 2's cursor is persistent per
- *     process (retry[i]) and one bkr94acsRetry call advances ONE
+ *     process (retry[i]) and one bkr94acsRetryStep call advances ONE
  *     cursor position over a space of N + N*(3*maxPhases)*N.  That is
  *     the whole reason the tick allowance below differs by two orders
  *     of magnitude between config 1 and config 3.
@@ -432,6 +432,15 @@
 
 #define KEY_FLD(k, sh, w) (((k) >> (sh)) & ((1UL << (w)) - 1))
 
+
+/*
+ * The two READY annotations packed for bkr94acs{Acast,Ba}Input's annot
+ * argument.  The library reads them off the byte itself, and only when
+ * the type is a READY.
+ */
+#define KEY_ANNOT(k) \
+  ((KEY_FLD((k), KEY_ACC_SH, 1) ? BKR94ACS_ACCEPTED : 0) \
+ | (KEY_FLD((k), KEY_RCV_SH, 1) ? BKR94ACS_RECEIVED : 0))
 #define FNV_PRIME 1099511628211UL
 #define FNV_BASE  14695981039346656037UL
 
@@ -1395,30 +1404,26 @@ explore(
       NActs = bkr94acsAcastInput(Acsp,
                 (unsigned char)KEY_FLD(key, KEY_PROC_SH, 4),
                 (unsigned char)KEY_FLD(key, KEY_TYPE_SH, 2),
+                KEY_ANNOT(key),
                 (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4),
                 &Aval[KEY_FLD(key, KEY_PROC_SH, 4)], Acts);
       if (NActs > 3) {
         FailMsg = "bkr94acsAcastInput output more than 3 acts";
         goto fail;
       }
-      if (KEY_FLD(key, KEY_TYPE_SH, 2) == BRACHA87_READY) {
-        if (KEY_FLD(key, KEY_ACC_SH, 1))
-          bkr94acsAcastAccepted(Acsp,
-            (unsigned char)KEY_FLD(key, KEY_PROC_SH, 4),
-            (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4));
-        if (!KEY_FLD(key, KEY_RCV_SH, 1)) {
-          bkr94acsAcastResend(Acsp,
-            (unsigned char)KEY_FLD(key, KEY_PROC_SH, 4),
-            (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4));
-          Quiescent[Self] = 0;
-        }
-      }
+      /* The annotations rode in on annot above; what stays here is this
+       * harness's parking policy -- an unmarked READY says something is
+       * still owed, so the process rejoins the rotation. */
+      if (KEY_FLD(key, KEY_TYPE_SH, 2) == BRACHA87_READY
+       && !KEY_FLD(key, KEY_RCV_SH, 1))
+        Quiescent[Self] = 0;
     } else {
       NActs = bkr94acsBaInput(Acsp,
                 (unsigned char)KEY_FLD(key, KEY_PROC_SH, 4),
                 (unsigned char)KEY_FLD(key, KEY_ROUND_SH, 6),
                 (unsigned char)KEY_FLD(key, KEY_INIT_SH, 4),
                 (unsigned char)KEY_FLD(key, KEY_TYPE_SH, 2),
+                KEY_ANNOT(key),
                 (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4),
                 (unsigned char)((KEY_FLD(key, KEY_BAV_SH, 2) & 1)
                                 | ((KEY_FLD(key, KEY_BAV_SH, 2) & 2)
@@ -1428,22 +1433,9 @@ explore(
         FailMsg = "bkr94acsBaInput output more than 2 acts";
         goto fail;
       }
-      if (KEY_FLD(key, KEY_TYPE_SH, 2) == BRACHA87_READY) {
-        if (KEY_FLD(key, KEY_ACC_SH, 1))
-          bkr94acsBaAccepted(Acsp,
-            (unsigned char)KEY_FLD(key, KEY_PROC_SH, 4),
-            (unsigned char)KEY_FLD(key, KEY_ROUND_SH, 6),
-            (unsigned char)KEY_FLD(key, KEY_INIT_SH, 4),
-            (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4));
-        if (!KEY_FLD(key, KEY_RCV_SH, 1)) {
-          bkr94acsBaResend(Acsp,
-            (unsigned char)KEY_FLD(key, KEY_PROC_SH, 4),
-            (unsigned char)KEY_FLD(key, KEY_ROUND_SH, 6),
-            (unsigned char)KEY_FLD(key, KEY_INIT_SH, 4),
-            (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4));
-          Quiescent[Self] = 0;
-        }
-      }
+      if (KEY_FLD(key, KEY_TYPE_SH, 2) == BRACHA87_READY
+       && !KEY_FLD(key, KEY_RCV_SH, 1))
+        Quiescent[Self] = 0;
     }
     ActsRet = 1;
     goto qActs;
@@ -1497,12 +1489,12 @@ explore(
     Acsp = (struct bkr94acs *)Img[Self];
 
     if (!Quiescent[Self]) {
-      NActs = bkr94acsRetry(Acsp, &Cursor[Self], Acts);
+      NActs = bkr94acsRetryStep(Acsp, &Cursor[Self], Acts);
       if (NActs > BKR94ACS_RETRY_MAX_ACTS) {
-        FailMsg = "bkr94acsRetry exceeded BKR94ACS_RETRY_MAX_ACTS";
+        FailMsg = "bkr94acsRetryStep exceeded BKR94ACS_RETRY_MAX_ACTS";
         goto fail;
       }
-      if (!NActs && bkr94acsSentFig1Count(Acsp))
+      if (!NActs && bkr94acsFig1SentCount(Acsp))
         Quiescent[Self] = 1;
       ActsRet = 2;
       goto qActs;

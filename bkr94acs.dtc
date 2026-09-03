@@ -209,7 +209,7 @@ no,"Q(j) = 1",
 # live at the BKR endpoint, so the retire-or-retry decision is
 # made here rather than below.
 #
-# bkr94acsRetry walks per-process A-Cast Fig1 instances and
+# bkr94acsRetryStep walks per-process A-Cast Fig1 instances and
 # decides whether to output retries based on the local BA
 # decision state ({ undecided, decided 0, decided 1,
 # exhausted }):
@@ -235,4 +235,4 @@ no,"Q(j) = 1",
 # byte rather than a sub-table (same call as the Fig1 initiator
 # INITIAL retry gate -- see bracha87Fig1.dtc BPR section).
 # The Note 1 (post-decide continuation) reasoning lives in
-# the comment at the bkr94acsRetry cursor site.
+# the comment at the bkr94acsRetryStep cursor site.

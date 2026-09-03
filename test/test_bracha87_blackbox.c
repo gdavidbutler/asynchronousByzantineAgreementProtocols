@@ -221,6 +221,47 @@ main(int argc, char **argv)
     CHECK(s_large > s_small, "Fig4Sz grows with maxPhases");
   }
 
+  /* ---------------------------------------------------------------- */
+  /* Header: "Size in bytes needed for a Fig1 instance, or 0 if the    */
+  /* configuration cannot be built ... The parameters are WIDER than   */
+  /* bracha87Fig1Init's unsigned char on purpose, and the width is the */
+  /* refusal ... 0 is how it declines."                                */
+  /*                                                                   */
+  /* 255 is the last representable encoded value (actual count 256);   */
+  /* 256 is the first one Init could not carry, so the pair brackets   */
+  /* the boundary rather than probing one side of it.                  */
+  /* ---------------------------------------------------------------- */
+  {
+    CHECK(bracha87Fig1Sz(255, VLEN_BIN) != 0, "Fig1Sz takes n 255");
+    CHECK(bracha87Fig1Sz(256, VLEN_BIN) == 0, "Fig1Sz refuses n 256");
+    CHECK(bracha87Fig1Sz(N_ENC, 255) != 0, "Fig1Sz takes vLen 255");
+    CHECK(bracha87Fig1Sz(N_ENC, 256) == 0, "Fig1Sz refuses vLen 256");
+
+    CHECK(bracha87Fig2Sz(255, 4) != 0, "Fig2Sz takes n 255");
+    CHECK(bracha87Fig2Sz(256, 4) == 0, "Fig2Sz refuses n 256");
+    CHECK(bracha87Fig2Sz(N_ENC, 255) != 0, "Fig2Sz takes maxRounds 255");
+    CHECK(bracha87Fig2Sz(N_ENC, 256) == 0, "Fig2Sz refuses maxRounds 256");
+
+    CHECK(bracha87Fig3Sz(255, 4) != 0, "Fig3Sz takes n 255");
+    CHECK(bracha87Fig3Sz(256, 4) == 0, "Fig3Sz refuses n 256");
+    CHECK(bracha87Fig3Sz(N_ENC, 255) != 0, "Fig3Sz takes maxRounds 255");
+    CHECK(bracha87Fig3Sz(N_ENC, 256) == 0, "Fig3Sz refuses maxRounds 256");
+
+    CHECK(bracha87Fig4Sz(255, 1) != 0, "Fig4Sz takes n 255");
+    CHECK(bracha87Fig4Sz(256, 1) == 0, "Fig4Sz refuses n 256");
+
+    /* maxPhases is CLAMPED, not refused -- the header says so, and the
+     * discriminating property is that the clamped call answers the
+     * SAME size as the ceiling rather than 0, so the allocation and
+     * bracha87Fig4Init's identical clamp agree on one machine. */
+    CHECK(bracha87Fig4Sz(N_ENC, BRACHA87_MAX_PHASES + 1)
+       == bracha87Fig4Sz(N_ENC, BRACHA87_MAX_PHASES),
+          "Fig4Sz clamps maxPhases past the ceiling, not refuses");
+    CHECK(bracha87Fig4Sz(N_ENC, 60000)
+       == bracha87Fig4Sz(N_ENC, BRACHA87_MAX_PHASES),
+          "Fig4Sz clamps a far-past maxPhases to the same size");
+  }
+
   /* Init clears stored fields exposed by struct definition. */
   {
     struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
@@ -1080,7 +1121,6 @@ main(int argc, char **argv)
   {
     static unsigned char fig4Buf[32 * 1024];
     struct bracha87Fig4 *fig4 = (struct bracha87Fig4 *) fig4Buf;
-    unsigned char senders[N_ACT];
     unsigned char values[N_ACT];
     unsigned int nact;
     int sawExhausted = 0;
@@ -1088,10 +1128,10 @@ main(int argc, char **argv)
     CHECK(sz <= sizeof (fig4Buf), "fig4Buf size for EXHAUSTED test");
     bracha87Fig4Init(fig4, N_ENC, T_VAL, 1, 0, 0, testCoinAlt, 0);
     /* Round 0: 3 messages (n-t=3), no D_FLAG legal here.             */
-    senders[0] = 0; values[0] = 0;
-    senders[1] = 1; values[1] = 1;
-    senders[2] = 2; values[2] = 0;
-    nact = bracha87Fig4Round(fig4, 0, 3, senders, values);
+    values[0] = 0;
+    values[1] = 1;
+    values[2] = 0;
+    nact = bracha87Fig4Round(fig4, 0, 3, values);
     /* Should advance to next sub-round; expect BROADCAST */
     {
       unsigned int hadBroadcast = 0;
@@ -1100,10 +1140,10 @@ main(int argc, char **argv)
     }
     /* Round 1: legal values are {0, 1, D_FLAG|0, D_FLAG|1}.  Use no- */
     /* D_FLAG mixed values so no >n/2 majority sets D_FLAG.            */
-    senders[0] = 0; values[0] = 0;
-    senders[1] = 1; values[1] = 1;
-    senders[2] = 2; values[2] = 0;
-    nact = bracha87Fig4Round(fig4, 1, 3, senders, values);
+    values[0] = 0;
+    values[1] = 1;
+    values[2] = 0;
+    nact = bracha87Fig4Round(fig4, 1, 3, values);
     {
       unsigned int hadBroadcast = 0;
       if (nact & BRACHA87_BROADCAST) hadBroadcast = 1;
@@ -1111,10 +1151,10 @@ main(int argc, char **argv)
     }
     /* Round 2 (sub=2 of phase 0): no D_FLAG -> no decideV / no >t    */
     /* majority -> coin, then EXHAUSTED because phase 0 was last.     */
-    senders[0] = 0; values[0] = 0;
-    senders[1] = 1; values[1] = 1;
-    senders[2] = 2; values[2] = 0;
-    nact = bracha87Fig4Round(fig4, 2, 3, senders, values);
+    values[0] = 0;
+    values[1] = 1;
+    values[2] = 0;
+    nact = bracha87Fig4Round(fig4, 2, 3, values);
     if (nact & BRACHA87_EXHAUSTED) sawExhausted = 1;
     CHECK(sawExhausted, "EXHAUSTED output at sub=2 of last phase");
     CHECK((nact & BRACHA87_DECIDE) == 0,
@@ -1124,15 +1164,78 @@ main(int argc, char **argv)
     /* instance are safe and return 0 actions; the state machine      */
     /* remains in EXHAUSTED" AND "BRACHA87_EXHAUSTED is also returned */
     /* at most once."                                                 */
-    nact = bracha87Fig4Round(fig4, 2, 3, senders, values);
+    nact = bracha87Fig4Round(fig4, 2, 3, values);
     CHECK(nact == 0, "post-EXHAUSTED Round(2) returns 0");
     /* Try other rounds too -- still 0 */
-    nact = bracha87Fig4Round(fig4, 0, 3, senders, values);
+    nact = bracha87Fig4Round(fig4, 0, 3, values);
     CHECK(nact == 0, "post-EXHAUSTED Round(round=0) returns 0");
-    nact = bracha87Fig4Round(fig4, 1, 3, senders, values);
+    nact = bracha87Fig4Round(fig4, 1, 3, values);
     CHECK(nact == 0, "post-EXHAUSTED Round(round=1) returns 0");
     /* No DECIDE, no decision recorded */
     CHECK(!(fig4->flags & BRACHA87_F4_DECIDED), "post-EXHAUSTED decided flag still 0");
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("Fig4Round refuses a round that is not the machine's next");
+  /* ---------------------------------------------------------------- */
+  /* Header: "k NAMES THE ROUND THIS CALL COMPUTES, and it must be    */
+  /* the machine's own next round ... Any other k is REFUSED (0        */
+  /* actions, no state change) rather than retargeting the machine."   */
+  /*                                                                  */
+  /* The discriminating property is NO STATE CHANGE: a machine that    */
+  /* silently retargeted would advance phase/subRound to follow the    */
+  /* k it was handed, so the check reads those fields on both sides.  */
+  {
+    static unsigned char fig4Buf[32 * 1024];
+    struct bracha87Fig4 *fig4 = (struct bracha87Fig4 *) fig4Buf;
+    unsigned char values[N_ACT];
+    unsigned int nact;
+    unsigned char ph;
+    unsigned char sub;
+
+    sz = bracha87Fig4Sz(N_ENC, 2);
+    CHECK(sz <= sizeof (fig4Buf), "fig4Buf size for round-k test");
+    bracha87Fig4Init(fig4, N_ENC, T_VAL, 2, 0, 0, testCoinAlt, 0);
+    values[0] = 0;
+    values[1] = 1;
+    values[2] = 0;
+
+    /* Fresh machine sits at round 0.  Every other k is refused. */
+    ph = fig4->phase;
+    sub = fig4->subRound;
+    CHECK(ph == 0 && sub == 0, "fresh Fig4 is at round 0");
+    nact = bracha87Fig4Round(fig4, 1, 3, values);
+    CHECK(nact == 0, "round 1 on a machine at round 0 is refused");
+    CHECK(fig4->phase == ph && fig4->subRound == sub,
+          "refused round leaves phase/subRound untouched");
+    nact = bracha87Fig4Round(fig4, 5, 3, values);
+    CHECK(nact == 0, "round 5 on a machine at round 0 is refused");
+    CHECK(fig4->phase == ph && fig4->subRound == sub,
+          "far-ahead refused round leaves phase/subRound untouched");
+
+    /* The machine's own next round is accepted and advances it. */
+    nact = bracha87Fig4Round(fig4, 0, 3, values);
+    CHECK(nact != 0, "round 0 on a machine at round 0 is taken");
+    CHECK(fig4->phase == 0 && fig4->subRound == 1,
+          "taken round advances to sub 1");
+
+    /* A round already spent is refused on the same rule. */
+    nact = bracha87Fig4Round(fig4, 0, 3, values);
+    CHECK(nact == 0, "replay of a spent round is refused");
+    CHECK(fig4->phase == 0 && fig4->subRound == 1,
+          "replay leaves phase/subRound untouched");
+
+    /* Crossing a phase boundary: after sub 2 the next k is 3. */
+    nact = bracha87Fig4Round(fig4, 1, 3, values);
+    CHECK(nact != 0, "round 1 taken after round 0");
+    nact = bracha87Fig4Round(fig4, 2, 3, values);
+    CHECK(nact != 0, "round 2 taken after round 1");
+    CHECK(fig4->phase == 1 && fig4->subRound == 0,
+          "phase advanced past sub 2");
+    nact = bracha87Fig4Round(fig4, 2, 3, values);
+    CHECK(nact == 0, "round 2 refused once the machine is at round 3");
+    nact = bracha87Fig4Round(fig4, 3, 3, values);
+    CHECK(nact != 0, "round 3 taken across the phase boundary");
   }
 
   /* ---------------------------------------------------------------- */

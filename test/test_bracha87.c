@@ -402,7 +402,7 @@ simFig4(
     for (i = 0; i < n; ++i) {
       if ((inst[i]->flags & BRACHA87_F4_DECIDED))
         continue;
-      act = bracha87Fig4Round(inst[i], (unsigned char)k, n, senders, vals);
+      act = bracha87Fig4Round(inst[i], (unsigned char)k, n, vals);
       if (act & BRACHA87_DECIDE)
         anyDecided = 1;
     }
@@ -1669,14 +1669,14 @@ testFig4Steps(
   }
 
   /* Round 0 (step 1): majority of {0,0,0,0} = 0 */
-  act = bracha87Fig4Round(b, 0, 4, senders, vals);
+  act = bracha87Fig4Round(b, 0, 4, vals);
   printf("    Round 0 (step 1)       : act=%u value=%u\n", act, b->value);
   check("Step 1: BROADCAST", act == BRACHA87_BROADCAST);
   check("Step 1: majority 0", (b->value & (unsigned char)~BRACHA87_D_FLAG) == 0);
 
   /* Round 1 (step 2): all send 0, >n/2 agree -> (d,0) */
   for (i = 0; i < 4; ++i) vals[i] = 0;
-  act = bracha87Fig4Round(b, 1, 4, senders, vals);
+  act = bracha87Fig4Round(b, 1, 4, vals);
   printf("    Round 1 (step 2)       : act=%u value=0x%02x\n", act, b->value);
   check("Step 2: BROADCAST", act == BRACHA87_BROADCAST);
   check("Step 2: D_FLAG set", (b->value & BRACHA87_D_FLAG) != 0);
@@ -1684,7 +1684,7 @@ testFig4Steps(
 
   /* Round 2 (step 3): all send (d,0), dc[0]=4 > 2t=2 -> decide 0 */
   for (i = 0; i < 4; ++i) vals[i] = 0 | BRACHA87_D_FLAG;
-  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  act = bracha87Fig4Round(b, 2, 4, vals);
   printf("    Round 2 (step 3)       : act=%u decided=%u decision=%u\n",
          act, (b->flags & BRACHA87_F4_DECIDED) ? 1 : 0, b->decision);
   check("Step 3: DECIDE", (act & BRACHA87_DECIDE) != 0);
@@ -1704,12 +1704,12 @@ testFig4Steps(
 
   /* Skip to step 3 by processing rounds 0 and 1 */
   for (i = 0; i < 4; ++i) vals[i] = 0;
-  bracha87Fig4Round(b, 0, 4, senders, vals);
-  bracha87Fig4Round(b, 1, 4, senders, vals);
+  bracha87Fig4Round(b, 0, 4, vals);
+  bracha87Fig4Round(b, 1, 4, vals);
 
   /* Round 2: no d flags -> coin */
   vals[0] = 0; vals[1] = 0; vals[2] = 1; vals[3] = 1;
-  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  act = bracha87Fig4Round(b, 2, 4, vals);
   printf("    Step 3 coin flip       : act=%u value=%u (coin=%u)\n",
          act, b->value, CoinVal);
   check("Step 3 coin: BROADCAST (next phase)", act == BRACHA87_BROADCAST);
@@ -1729,15 +1729,15 @@ testFig4Steps(
   bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) vals[i] = 0;
-  bracha87Fig4Round(b, 0, 4, senders, vals);
-  bracha87Fig4Round(b, 1, 4, senders, vals);
+  bracha87Fig4Round(b, 0, 4, vals);
+  bracha87Fig4Round(b, 1, 4, vals);
 
   /* Round 2: 2 d-flagged 1, 2 plain 0 */
   vals[0] = 1 | BRACHA87_D_FLAG;
   vals[1] = 1 | BRACHA87_D_FLAG;
   vals[2] = 0;
   vals[3] = 0;
-  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  act = bracha87Fig4Round(b, 2, 4, vals);
   printf("    Step 3 adopt           : act=%u value=%u\n", act, b->value);
   check("Step 3 adopt: BROADCAST (next phase)", act == BRACHA87_BROADCAST);
   check("Step 3 adopt: adopted value 1", b->value == 1);
@@ -1775,14 +1775,14 @@ testFig4Step3Boundary(
   for (i = 0; i < 4; ++i) senders[i] = (unsigned char)i;
 
   for (i = 0; i < 4; ++i) vals[i] = 0;
-  bracha87Fig4Round(b, 0, 4, senders, vals);
-  bracha87Fig4Round(b, 1, 4, senders, vals);
+  bracha87Fig4Round(b, 0, 4, vals);
+  bracha87Fig4Round(b, 1, 4, vals);
 
   vals[0] = 0 | BRACHA87_D_FLAG;
   vals[1] = 1;
   vals[2] = 1;
   vals[3] = 1;
-  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  act = bracha87Fig4Round(b, 2, 4, vals);
   printf("    n=4 dc==t(1)           : act=%u val=%u coin=%u\n",
          act, b->value, CoinVal);
   check("Boundary dc==t n=4: coin not adopt", b->value == CoinVal);
@@ -1799,14 +1799,14 @@ testFig4Step3Boundary(
   bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) vals[i] = 0;
-  bracha87Fig4Round(b, 0, 4, senders, vals);
-  bracha87Fig4Round(b, 1, 4, senders, vals);
+  bracha87Fig4Round(b, 0, 4, vals);
+  bracha87Fig4Round(b, 1, 4, vals);
 
   vals[0] = 1 | BRACHA87_D_FLAG;
   vals[1] = 1 | BRACHA87_D_FLAG;
   vals[2] = 0;
   vals[3] = 0;
-  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  act = bracha87Fig4Round(b, 2, 4, vals);
   printf("    n=4 dc==t+1(2)         : act=%u val=%u\n", act, b->value);
   check("Boundary dc==t+1 n=4: adopt value 1", b->value == 1);
   check("Boundary dc==t+1 n=4: not decided", !(b->flags & BRACHA87_F4_DECIDED));
@@ -1821,14 +1821,14 @@ testFig4Step3Boundary(
   bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) vals[i] = 0;
-  bracha87Fig4Round(b, 0, 4, senders, vals);
-  bracha87Fig4Round(b, 1, 4, senders, vals);
+  bracha87Fig4Round(b, 0, 4, vals);
+  bracha87Fig4Round(b, 1, 4, vals);
 
   vals[0] = 0 | BRACHA87_D_FLAG;
   vals[1] = 0 | BRACHA87_D_FLAG;
   vals[2] = 0 | BRACHA87_D_FLAG;
   vals[3] = 1;
-  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  act = bracha87Fig4Round(b, 2, 4, vals);
   printf("    n=4 dc==2t+1(3)        : act=%u decided=%u dec=%u\n",
          act, (b->flags & BRACHA87_F4_DECIDED) ? 1 : 0, b->decision);
   check("Boundary dc==2t+1 n=4: DECIDE", (act & BRACHA87_DECIDE) != 0);
@@ -1846,13 +1846,13 @@ testFig4Step3Boundary(
   for (i = 0; i < 7; ++i) senders[i] = (unsigned char)i;
 
   for (i = 0; i < 7; ++i) vals[i] = 0;
-  bracha87Fig4Round(b, 0, 7, senders, vals);
-  bracha87Fig4Round(b, 1, 7, senders, vals);
+  bracha87Fig4Round(b, 0, 7, vals);
+  bracha87Fig4Round(b, 1, 7, vals);
 
   vals[0] = 0 | BRACHA87_D_FLAG;
   vals[1] = 0 | BRACHA87_D_FLAG;
   for (i = 2; i < 7; ++i) vals[i] = 1;
-  act = bracha87Fig4Round(b, 2, 7, senders, vals);
+  act = bracha87Fig4Round(b, 2, 7, vals);
   printf("    n=7 dc==t(2)           : act=%u val=%u coin=%u\n",
          act, b->value, CoinVal);
   check("Boundary dc==t n=7: coin", b->value == CoinVal);
@@ -1867,14 +1867,14 @@ testFig4Step3Boundary(
   bracha87Fig4Init(b, 6, 2, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 7; ++i) vals[i] = 0;
-  bracha87Fig4Round(b, 0, 7, senders, vals);
-  bracha87Fig4Round(b, 1, 7, senders, vals);
+  bracha87Fig4Round(b, 0, 7, vals);
+  bracha87Fig4Round(b, 1, 7, vals);
 
   vals[0] = 0 | BRACHA87_D_FLAG;
   vals[1] = 0 | BRACHA87_D_FLAG;
   vals[2] = 0 | BRACHA87_D_FLAG;
   for (i = 3; i < 7; ++i) vals[i] = 1;
-  act = bracha87Fig4Round(b, 2, 7, senders, vals);
+  act = bracha87Fig4Round(b, 2, 7, vals);
   printf("    n=7 dc==t+1(3)         : act=%u val=%u\n", act, b->value);
   check("Boundary dc==t+1 n=7: adopt 0", b->value == 0);
   check("Boundary dc==t+1 n=7: not decided", !(b->flags & BRACHA87_F4_DECIDED));
@@ -1888,13 +1888,13 @@ testFig4Step3Boundary(
   bracha87Fig4Init(b, 6, 2, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 7; ++i) vals[i] = 0;
-  bracha87Fig4Round(b, 0, 7, senders, vals);
-  bracha87Fig4Round(b, 1, 7, senders, vals);
+  bracha87Fig4Round(b, 0, 7, vals);
+  bracha87Fig4Round(b, 1, 7, vals);
 
   for (i = 0; i < 5; ++i) vals[i] = 1 | BRACHA87_D_FLAG;
   vals[5] = 0;
   vals[6] = 0;
-  act = bracha87Fig4Round(b, 2, 7, senders, vals);
+  act = bracha87Fig4Round(b, 2, 7, vals);
   printf("    n=7 dc==2t+1(5)        : act=%u decided=%u dec=%u\n",
          act, (b->flags & BRACHA87_F4_DECIDED) ? 1 : 0, b->decision);
   check("Boundary dc==2t+1 n=7: DECIDE", (act & BRACHA87_DECIDE) != 0);
@@ -1948,14 +1948,14 @@ testFig4AdoptFinalExhausted(
     vals[i] = 0;
   }
 
-  act = bracha87Fig4Round(b, 0, 4, senders, vals);
+  act = bracha87Fig4Round(b, 0, 4, vals);
   check("AdoptExhaust: step 1 broadcasts", act == BRACHA87_BROADCAST);
-  act = bracha87Fig4Round(b, 1, 4, senders, vals);
+  act = bracha87Fig4Round(b, 1, 4, vals);
   check("AdoptExhaust: step 2 broadcasts", act == BRACHA87_BROADCAST);
 
   vals[0] = 0 | BRACHA87_D_FLAG;
   vals[1] = 0 | BRACHA87_D_FLAG;
-  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  act = bracha87Fig4Round(b, 2, 4, vals);
   printf("    n=4 t=1 dc==t+1(2), last phase: act=%u val=%u coin=%u\n",
          act, b->value, CoinVal);
 
@@ -1972,9 +1972,9 @@ testFig4AdoptFinalExhausted(
 
   /* The round space is spent, so every further round is a no-op. */
   check("AdoptExhaust: subsequent Round(2) returns 0",
-        bracha87Fig4Round(b, 2, 4, senders, vals) == 0);
+        bracha87Fig4Round(b, 2, 4, vals) == 0);
   check("AdoptExhaust: subsequent Round(0) returns 0",
-        bracha87Fig4Round(b, 0, 4, senders, vals) == 0);
+        bracha87Fig4Round(b, 0, 4, vals) == 0);
   check("AdoptExhaust: still EXHAUSTED, still undecided",
         (b->flags & BRACHA87_F4_EXHAUSTED)
         && !(b->flags & BRACHA87_F4_DECIDED));
@@ -2011,10 +2011,10 @@ testFig4PostDecide(
   }
 
   /* Drive to decision at phase 0 step 3 */
-  bracha87Fig4Round(b, 0, 4, senders, vals);
-  bracha87Fig4Round(b, 1, 4, senders, vals);
+  bracha87Fig4Round(b, 0, 4, vals);
+  bracha87Fig4Round(b, 1, 4, vals);
   for (i = 0; i < 4; ++i) vals[i] = 0 | BRACHA87_D_FLAG;
-  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  act = bracha87Fig4Round(b, 2, 4, vals);
   check("Post-decide: decided", (b->flags & BRACHA87_F4_DECIDED));
   check("Post-decide: DECIDE|BROADCAST",
         act == (BRACHA87_DECIDE | BRACHA87_BROADCAST));
@@ -2022,14 +2022,14 @@ testFig4PostDecide(
 
   /* Subsequent round: process continues, value frozen at decision */
   for (i = 0; i < 4; ++i) vals[i] = 0;
-  act = bracha87Fig4Round(b, 3, 4, senders, vals);
+  act = bracha87Fig4Round(b, 3, 4, vals);
   printf("    Post-decide round 3    : act=%u value=%u\n", act, b->value);
   check("Post-decide: BROADCAST", act == BRACHA87_BROADCAST);
   check("Post-decide: value frozen", b->value == 0);
   check("Post-decide: decision unchanged", b->decision == 0);
 
   /* Another round: still continues */
-  act = bracha87Fig4Round(b, 4, 4, senders, vals);
+  act = bracha87Fig4Round(b, 4, 4, vals);
   check("Post-decide round 4: BROADCAST", act == BRACHA87_BROADCAST);
   check("Post-decide: decision still unchanged", b->decision == 0);
   free(b);
@@ -2074,10 +2074,10 @@ testFig4PostDecideAdversarial(
   bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) vals[i] = 0;
-  bracha87Fig4Round(b, 0, 4, senders, vals);
-  bracha87Fig4Round(b, 1, 4, senders, vals);
+  bracha87Fig4Round(b, 0, 4, vals);
+  bracha87Fig4Round(b, 1, 4, vals);
   for (i = 0; i < 4; ++i) vals[i] = 0 | BRACHA87_D_FLAG;
-  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  act = bracha87Fig4Round(b, 2, 4, vals);
   check("Decide 0: decided", (b->flags & BRACHA87_F4_DECIDED) && b->decision == 0);
   check("Decide 0: DECIDE|BROADCAST",
         act == (BRACHA87_DECIDE | BRACHA87_BROADCAST));
@@ -2085,7 +2085,7 @@ testFig4PostDecideAdversarial(
   /* Phase 1 sub=0: 4 plain 1s. Buggy: b->value = majority = 1.
    * Paper-faithful: b->value preserved at decision = 0. */
   for (i = 0; i < 4; ++i) vals[i] = 1;
-  act = bracha87Fig4Round(b, 3, 4, senders, vals);
+  act = bracha87Fig4Round(b, 3, 4, vals);
   printf("    decide=0, sub=0 maj=1  : act=%u value=%u\n", act, b->value);
   check("Adversarial sub=0: BROADCAST", act == BRACHA87_BROADCAST);
   check("Adversarial sub=0: value=decision (not majority)", b->value == 0);
@@ -2093,7 +2093,7 @@ testFig4PostDecideAdversarial(
   /* Phase 1 sub=1: 4 plain 1s. cnt[1]*2 > B_N(=4), so n2Half fires.
    * Buggy: b->value = 1 | D_FLAG = 0x81. Paper-faithful: 0. */
   for (i = 0; i < 4; ++i) vals[i] = 1;
-  act = bracha87Fig4Round(b, 4, 4, senders, vals);
+  act = bracha87Fig4Round(b, 4, 4, vals);
   printf("    decide=0, sub=1 (d,1)? : act=%u value=0x%02x\n", act, b->value);
   check("Adversarial sub=1: BROADCAST", act == BRACHA87_BROADCAST);
   check("Adversarial sub=1: value=decision (no D_FLAG drift)",
@@ -2102,7 +2102,7 @@ testFig4PostDecideAdversarial(
   /* Phase 1 sub=2: 4 d-flagged 1s. Original C explicitly assigns
    * b->value = b->decision here; new code does too. Either way 0. */
   for (i = 0; i < 4; ++i) vals[i] = 1 | BRACHA87_D_FLAG;
-  act = bracha87Fig4Round(b, 5, 4, senders, vals);
+  act = bracha87Fig4Round(b, 5, 4, vals);
   check("Adversarial sub=2: BROADCAST", act == BRACHA87_BROADCAST);
   check("Adversarial sub=2: value=decision", b->value == 0);
   check("Adversarial: decision unchanged", b->decision == 0);
@@ -2114,23 +2114,23 @@ testFig4PostDecideAdversarial(
   bracha87Fig4Init(b, 3, 1, 10, 1, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) vals[i] = 1;
-  bracha87Fig4Round(b, 0, 4, senders, vals);
-  bracha87Fig4Round(b, 1, 4, senders, vals);
+  bracha87Fig4Round(b, 0, 4, vals);
+  bracha87Fig4Round(b, 1, 4, vals);
   for (i = 0; i < 4; ++i) vals[i] = 1 | BRACHA87_D_FLAG;
-  bracha87Fig4Round(b, 2, 4, senders, vals);
+  bracha87Fig4Round(b, 2, 4, vals);
   check("Mirror decide 1: decided", (b->flags & BRACHA87_F4_DECIDED) && b->decision == 1);
 
   for (i = 0; i < 4; ++i) vals[i] = 0;
-  bracha87Fig4Round(b, 3, 4, senders, vals);
+  bracha87Fig4Round(b, 3, 4, vals);
   printf("    decide=1, sub=0 maj=0  : value=%u\n", b->value);
   check("Mirror sub=0: value=decision", b->value == 1);
 
-  bracha87Fig4Round(b, 4, 4, senders, vals);
+  bracha87Fig4Round(b, 4, 4, vals);
   printf("    decide=1, sub=1 (d,0)? : value=0x%02x\n", b->value);
   check("Mirror sub=1: value=decision", b->value == 1);
 
   for (i = 0; i < 4; ++i) vals[i] = 0 | BRACHA87_D_FLAG;
-  bracha87Fig4Round(b, 5, 4, senders, vals);
+  bracha87Fig4Round(b, 5, 4, vals);
   check("Mirror sub=2: value=decision", b->value == 1);
   check("Mirror: decision unchanged", b->decision == 1);
   free(b);
@@ -2159,10 +2159,10 @@ testFig4EdgeCases(
 
   for (i = 0; i < 4; ++i) senders[i] = (unsigned char)i;
 
-  act = bracha87Fig4Round(0, 0, 4, senders, vals);
+  act = bracha87Fig4Round(0, 0, 4, vals);
   check("Fig4 null instance", act == 0);
 
-  act = bracha87Fig4Round(b, 0, 0, senders, vals);
+  act = bracha87Fig4Round(b, 0, 0, vals);
   check("Fig4 n_msgs=0", act == 0);
 
   free(b);
@@ -2607,7 +2607,7 @@ testFig4MaxPhasesClamp(
   values[0] = 0;
   /* Skip Fig3 wiring; just confirm Fig4Round operates on a non-corrupt
    * embedded Fig3 (would dereference past end if size was 2 rounds). */
-  act = bracha87Fig4Round(b, 0, 0, senders, values);
+  act = bracha87Fig4Round(b, 0, 0, values);
   check("maxPhases: Fig4Round(0 msgs) returns 0 cleanly", act == 0);
 
   free(b);
@@ -2719,7 +2719,7 @@ simFig4Byz(
     for (i = (unsigned int)t; i < n; ++i) {
       if ((inst[i]->flags & BRACHA87_F4_DECIDED))
         continue;
-      act = bracha87Fig4Round(inst[i], (unsigned char)k, n, senders, vals);
+      act = bracha87Fig4Round(inst[i], (unsigned char)k, n, vals);
       if (act & BRACHA87_DECIDE)
         anyDecided = 1;
     }
@@ -3050,7 +3050,7 @@ simComposed(
           rcnt = bracha87Fig3GetValid(st->fig3,
                    st->nextRound, rsnd, rval);
           act = bracha87Fig4Round(st->fig4, st->nextRound,
-                                  rcnt, rsnd, rval);
+                                  rcnt, rval);
           ++st->nextRound;
 
           if (act & BRACHA87_DECIDE) {
@@ -3405,10 +3405,10 @@ testPostDecideMultiPhase(
   }
 
   /* Drive to decision at phase 0 */
-  bracha87Fig4Round(b, 0, 4, senders, vals);
-  bracha87Fig4Round(b, 1, 4, senders, vals);
+  bracha87Fig4Round(b, 0, 4, vals);
+  bracha87Fig4Round(b, 1, 4, vals);
   for (i = 0; i < 4; ++i) vals[i] = 0 | BRACHA87_D_FLAG;
-  act = bracha87Fig4Round(b, 2, 4, senders, vals);
+  act = bracha87Fig4Round(b, 2, 4, vals);
   check("MultiPhase: decided", (b->flags & BRACHA87_F4_DECIDED));
   check("MultiPhase: decide+broadcast",
         act == (BRACHA87_DECIDE | BRACHA87_BROADCAST));
@@ -3423,7 +3423,7 @@ testPostDecideMultiPhase(
     for (i = 0; i < 4; ++i)
       vals[i] = b->value;
 
-    act = bracha87Fig4Round(b, (unsigned char)k, 4, senders, vals);
+    act = bracha87Fig4Round(b, (unsigned char)k, 4, vals);
 
     sub = k % 3;
 

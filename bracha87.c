@@ -98,6 +98,11 @@ bracha87Fig1Sz(
   unsigned int N;
   unsigned int L;
 
+  /* Refuse what bracha87Fig1Init cannot represent: it takes n and vLen
+   * as unsigned char, so a caller's out-of-range value is visible only
+   * here.  0 is the refusal (bkr94acsSz answers the same way). */
+  if (n > 255 || vLen > 255)
+    return (0);
   /* actual counts: n/vLen encode 0..255 as 1..256 */
   N = n + 1;
   L = vLen + 1;
@@ -725,6 +730,9 @@ bracha87Fig2Sz(
 ){
   unsigned int N;
 
+  /* Refusal, as bracha87Fig1Sz. */
+  if (n > 255 || maxRounds > 255)
+    return (0);
   N = n + 1;
   return (sizeof (struct bracha87Fig2) - sizeof (unsigned short)
     + maxRounds * sizeof (unsigned short)
@@ -849,6 +857,9 @@ bracha87Fig3Sz(
 ){
   unsigned int N;
 
+  /* Refusal, as bracha87Fig1Sz. */
+  if (n > 255 || maxRounds > 255)
+    return (0);
   N = n + 1;
   return (sizeof (struct bracha87Fig3) - sizeof (unsigned short)
     + maxRounds * sizeof (unsigned short)
@@ -1148,7 +1159,7 @@ bracha87Fig3GetValid(
   return (cnt);
 }
 
-int
+unsigned int
 bracha87Fig3RoundComplete(
   const struct bracha87Fig3 *b
  ,unsigned char k
@@ -1337,6 +1348,10 @@ bracha87Fig4Sz(
   unsigned int n
  ,unsigned int maxPhases
 ){
+  /* Refusal, as bracha87Fig1Sz.  maxPhases is clamped rather than
+   * refused because bracha87Fig4Init clamps it identically. */
+  if (n > 255)
+    return (0);
   /* Clamp: maxPhases * 3 must fit in unsigned char round count. */
   if (maxPhases > BRACHA87_MAX_PHASES)
     maxPhases = BRACHA87_MAX_PHASES;
@@ -1387,7 +1402,6 @@ bracha87Fig4Round(
   struct bracha87Fig4 *b
  ,unsigned char k
  ,unsigned int n_msgs
- ,const unsigned char *senders
  ,const unsigned char *values
 ){
   unsigned int cnt[2];
@@ -1408,14 +1422,23 @@ bracha87Fig4Round(
   unsigned char adoptV;
   unsigned char setCoin;
 
-  (void)senders;
   if (!b || !n_msgs)
     return (0);
   if (b->flags & BRACHA87_F4_EXHAUSTED)
     return (0);
+  /*
+   * k must be this machine's next round.  The fields below are the
+   * machine's place in the sequence, and this call advances them; a k
+   * that disagrees means the caller has lost its place, and computing
+   * the round it named would silently re-run a spent round or skip an
+   * unspent one.  Refuse instead (the caller can read phase/subRound
+   * to see where the machine actually is).
+   */
+  if (k != b->phase * BRACHA87_ROUNDS_PER_PHASE + b->subRound)
+    return (0);
 
-  sub = (k % 3);
-  ph = (k / 3);
+  sub = (k % BRACHA87_ROUNDS_PER_PHASE);
+  ph = (k / BRACHA87_ROUNDS_PER_PHASE);
 
   /* Count base values (strip d flag) and d-flagged values separately */
   cnt[0] = cnt[1] = 0;
@@ -1511,11 +1534,11 @@ bracha87Fig4Round(
 }
 
 /*************************************************************************/
-/*  Retry infrastructure (cursor type shared across the library)          */
+/*  Retry infrastructure (cursor type shared across the library)         */
 /*                                                                       */
-/*  Mirrors the bracha87.h "Retry infrastructure" section.  The cursor    */
-/*  struct + init are shared between bracha87Fig1RetryStep below and      */
-/*  bkr94acsRetry (bkr94acs.c).                                           */
+/*  Mirrors the bracha87.h "Retry infrastructure" section.  The cursor   */
+/*  struct + init are shared between bracha87Fig1RetryStep below and     */
+/*  bkr94acsRetryStep (bkr94acs.c).                                      */
 /*************************************************************************/
 
 void
