@@ -347,9 +347,11 @@ static unsigned char CoinVal;
 static unsigned char
 testCoin(
   void *closure
+ ,unsigned char instance
  ,unsigned char phase
 ){
   (void)closure;
+  (void)instance;
   (void)phase;
   return (CoinVal);
 }
@@ -386,7 +388,7 @@ simFig4(
       fprintf(stderr, "simFig4 OoR\n");
       return (0);
     }
-    bracha87Fig4Init(inst[i], n - 1, t, maxPhases, initVals[i], testCoin, 0);
+    bracha87Fig4Init(inst[i], n - 1, t, maxPhases, initVals[i], 0, testCoin, 0);
     senders[i] = (unsigned char)i;
   }
 
@@ -1659,7 +1661,7 @@ testFig4Steps(
   sz = bracha87Fig4Sz(3, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) {
     senders[i] = (unsigned char)i;
@@ -1698,7 +1700,7 @@ testFig4Steps(
    */
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 1;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   /* Skip to step 3 by processing rounds 0 and 1 */
   for (i = 0; i < 4; ++i) vals[i] = 0;
@@ -1724,7 +1726,7 @@ testFig4Steps(
    */
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) vals[i] = 0;
   bracha87Fig4Round(b, 0, 4, senders, vals);
@@ -1769,7 +1771,7 @@ testFig4Step3Boundary(
   sz = bracha87Fig4Sz(3, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 1;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
   for (i = 0; i < 4; ++i) senders[i] = (unsigned char)i;
 
   for (i = 0; i < 4; ++i) vals[i] = 0;
@@ -1794,7 +1796,7 @@ testFig4Step3Boundary(
    */
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) vals[i] = 0;
   bracha87Fig4Round(b, 0, 4, senders, vals);
@@ -1816,7 +1818,7 @@ testFig4Step3Boundary(
    */
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 1;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) vals[i] = 0;
   bracha87Fig4Round(b, 0, 4, senders, vals);
@@ -1840,7 +1842,7 @@ testFig4Step3Boundary(
   sz = bracha87Fig4Sz(6, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 6, 2, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 6, 2, 10, 0, 0, testCoin, 0);
   for (i = 0; i < 7; ++i) senders[i] = (unsigned char)i;
 
   for (i = 0; i < 7; ++i) vals[i] = 0;
@@ -1862,7 +1864,7 @@ testFig4Step3Boundary(
    */
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 1;
-  bracha87Fig4Init(b, 6, 2, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 6, 2, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 7; ++i) vals[i] = 0;
   bracha87Fig4Round(b, 0, 7, senders, vals);
@@ -1883,7 +1885,7 @@ testFig4Step3Boundary(
    */
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 1;
-  bracha87Fig4Init(b, 6, 2, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 6, 2, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 7; ++i) vals[i] = 0;
   bracha87Fig4Round(b, 0, 7, senders, vals);
@@ -1940,7 +1942,7 @@ testFig4AdoptFinalExhausted(
     return;
   }
   CoinVal = 1;
-  bracha87Fig4Init(b, 3, 1, 1, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 1, 0, 0, testCoin, 0);
   for (i = 0; i < 4; ++i) {
     senders[i] = (unsigned char)i;
     vals[i] = 0;
@@ -2001,7 +2003,7 @@ testFig4PostDecide(
   sz = bracha87Fig4Sz(3, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) {
     senders[i] = (unsigned char)i;
@@ -2036,7 +2038,7 @@ testFig4PostDecide(
 /*
  * Test Fig4 post-decide value preservation under adversarial inputs.
  *
- * Bracha post-decide-continuation (pitfall #1) requires a decided
+ * Bracha post-decide-continuation (Note 1) requires a decided
  * process to keep broadcasting its decision value -- not whatever
  * majority/(d, majority) the next phase's validated set would suggest.
  * The .dtc-faithful Fig4 dispatch zeroes setMajority and setDMajority
@@ -2069,7 +2071,7 @@ testFig4PostDecideAdversarial(
   /* Decide 0; then feed phase 1 inputs whose majority is 1. */
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) vals[i] = 0;
   bracha87Fig4Round(b, 0, 4, senders, vals);
@@ -2109,7 +2111,7 @@ testFig4PostDecideAdversarial(
 
   /* Mirror: decide 1, then feed adversarial 0-majority. */
   b = (struct bracha87Fig4 *)calloc(1, sz);
-  bracha87Fig4Init(b, 3, 1, 10, 1, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 1, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) vals[i] = 1;
   bracha87Fig4Round(b, 0, 4, senders, vals);
@@ -2153,7 +2155,7 @@ testFig4EdgeCases(
   sz = bracha87Fig4Sz(3, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) senders[i] = (unsigned char)i;
 
@@ -2200,7 +2202,7 @@ testFig4SubsetMajority(
   sz = bracha87Fig4Sz(4, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 4, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 4, 1, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   /* Round 0: 2 zeros, 3 ones (all 5 processes) */
@@ -2232,7 +2234,7 @@ testFig4SubsetMajority(
   sz = bracha87Fig4Sz(3, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   bracha87Fig3Accept(f3, 0, 0, 0, &vc);
@@ -2261,7 +2263,7 @@ testFig4SubsetMajority(
   sz = bracha87Fig4Sz(7, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 7, 2, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 7, 2, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   bracha87Fig3Accept(f3, 0, 0, 0, &vc);
@@ -2294,7 +2296,7 @@ testFig4SubsetMajority(
   sz = bracha87Fig4Sz(4, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 4, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 4, 1, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   bracha87Fig3Accept(f3, 0, 0, 0, &vc);
@@ -2345,7 +2347,7 @@ testFig4SubsetMajorityBoundary(
   sz = bracha87Fig4Sz(8, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 8, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 8, 1, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   bracha87Fig3Accept(f3, 0, 0, 0, &vc);
@@ -2368,7 +2370,7 @@ testFig4SubsetMajorityBoundary(
    * Permissive branch not consulted.  Exact via tie-break to 0.
    * v=0 accepted, v=1 rejected. */
   b = (struct bracha87Fig4 *)calloc(1, sz);
-  bracha87Fig4Init(b, 8, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 8, 1, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   bracha87Fig3Accept(f3, 0, 0, 0, &vc);
@@ -2390,7 +2392,7 @@ testFig4SubsetMajorityBoundary(
    * Permissive check: cnt[0]=2 < 4 so 0 unreachable.  Exact, result=1.
    * v=0 rejected, v=1 accepted. */
   b = (struct bracha87Fig4 *)calloc(1, sz);
-  bracha87Fig4Init(b, 8, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 8, 1, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   bracha87Fig3Accept(f3, 0, 0, 0, &vc);
@@ -2435,7 +2437,7 @@ testFig4DflagInjection(
   sz = bracha87Fig4Sz(3, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   bracha87Fig3Accept(f3, 0, 0, 0, &vc);
@@ -2452,7 +2454,7 @@ testFig4DflagInjection(
    * Round 1 v=0|D_FLAG and v=1|D_FLAG both rejected; plain 0 and 1 OK. */
   sz = bracha87Fig4Sz(4, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
-  bracha87Fig4Init(b, 4, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 4, 1, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   bracha87Fig3Accept(f3, 0, 0, 0, &vc);
@@ -2483,7 +2485,7 @@ testFig4DflagInjection(
    */
   sz = bracha87Fig4Sz(4, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
-  bracha87Fig4Init(b, 4, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 4, 1, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   /* Round 0: 5 zeros (full set).  Validates round 1 v=0 exact. */
@@ -2518,7 +2520,7 @@ testFig4DflagInjection(
    * *result = 0 (no D_FLAG).  Round 2 v|D_FLAG must be rejected.
    */
   b = (struct bracha87Fig4 *)calloc(1, sz);
-  bracha87Fig4Init(b, 4, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 4, 1, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   /* Round 0: 5 zeros so round 1 v=0 validates exact. */
@@ -2537,7 +2539,7 @@ testFig4DflagInjection(
 
   /* Reset: round 0 mixed permissive so round 1 accepts both values. */
   b = (struct bracha87Fig4 *)calloc(1, sz);
-  bracha87Fig4Init(b, 4, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 4, 1, 10, 0, 0, testCoin, 0);
   f3 = &b->fig3;
 
   /* Round 0: cnt[0]=2 cnt[1]=3 n_msgs=5 -> permissive (case 0 fix).
@@ -2594,7 +2596,7 @@ testFig4MaxPhasesClamp(
   /* Init with out-of-range value should not crash and should produce
    * a Fig4 with the clamped capacity (round indices 0..254 valid). */
   b = (struct bracha87Fig4 *)calloc(1, sz);
-  bracha87Fig4Init(b, 3, 1, 100, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 100, 0, 0, testCoin, 0);
 
   check("maxPhases: Init clamps maxPhases field",
         b->maxPhases == BRACHA87_MAX_PHASES);
@@ -2698,7 +2700,7 @@ simFig4Byz(
       fprintf(stderr, "simFig4Byz OoR\n");
       return (0);
     }
-    bracha87Fig4Init(inst[i], n - 1, t, maxPhases, initVals[i], testCoin, 0);
+    bracha87Fig4Init(inst[i], n - 1, t, maxPhases, initVals[i], 0, testCoin, 0);
   }
   for (i = 0; i < n; ++i)
     senders[i] = (unsigned char)i;
@@ -2973,7 +2975,7 @@ simComposed(
       bracha87Fig1Init(states[i].fig1[j], n - 1, t, 0);
     }
     bracha87Fig4Init(states[i].fig4, n - 1, t, maxPhases,
-                     initVals[i], testCoin, 0);
+                     initVals[i], 0, testCoin, 0);
     states[i].fig3 = &states[i].fig4->fig3;
     states[i].nextRound = 0;
   }
@@ -3395,7 +3397,7 @@ testPostDecideMultiPhase(
   sz = bracha87Fig4Sz(3, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
   CoinVal = 0;
-  bracha87Fig4Init(b, 3, 1, 10, 0, testCoin, 0);
+  bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
 
   for (i = 0; i < 4; ++i) {
     senders[i] = (unsigned char)i;
@@ -3635,7 +3637,7 @@ testFig1Bpr(
    * remaining correct process reaches accept via ready-amplification
    * alone -- INITIAL and ECHO are bootstrap-only and provably dead
    * past this point, so they retire (the minimal-retry gate).
-   * READY does NOT retire (pitfall 10): it is exactly what that
+   * READY does NOT retire (Note 10): it is exactly what that
    * amplification tail consumes; an accepted process still owes its
    * ready to processes below 2t+1.  The application's abandon policy
    * retires the instance.
@@ -3815,8 +3817,8 @@ testFig1Bpr(
    * via Rule 1, rdSent via Rule 4 / 5, accepted via Rule 6) just
    * like a non-initiator Fig1.  Verify Bpr retry outputs at each
    * combination match the minimal-retry rules: ECHOED does NOT
-   * retire INITIAL (pitfall 11); RDSENT adds READY retry; ACCEPTED
-   * retires INITIAL and ECHO, leaving READY only (pitfall 10).
+   * retire INITIAL (Note 11); RDSENT adds READY retry; ACCEPTED
+   * retires INITIAL and ECHO, leaving READY only (Note 10).
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
@@ -3846,8 +3848,8 @@ testFig1Bpr(
   /* Initiator + ACCEPTED (Rule 6 fires).  ACCEPTED retires both INITIAL
    * and ECHO (bootstrap-only; t+1 correct readys now circulate, so
    * ready-amplification carries every correct process to accept with no
-   * initial/echo consumed).  Only READY retries (pitfall 10).  The
-   * accept witness is strictly stronger than the ECHOED gate pitfall
+   * initial/echo consumed).  Only READY retries (Note 10).  The
+   * accept witness is strictly stronger than the ECHOED gate Note
    * 11 forbids, so retiring here is sound. */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
@@ -4047,7 +4049,7 @@ testFig1SkipAccept(
    * process consumes a ready anywhere and Bpr stops outputting it.  This is
    * the remote-all-accepted gate (sound: full coverage requires every
    * correct process's true accept), distinct from the forbidden local-
-   * accept gate (pitfall 10).
+   * accept gate (Note 10).
    */
   b = (struct bracha87Fig1 *)calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
@@ -4551,23 +4553,22 @@ testFig1ArrayRetry(
   bracha87RetryInit(&retry);
   check("Fig1Retry: init pos=0", retry.pos == 0);
   check("Fig1Retry: init sweepActs=0", retry.sweepActs == 0);
+  check("Fig1Retry: init sweeps=0", retry.sweeps == 0);
 
   /*
-   * Defensive: NULL array, count=0, NULL out, undersized outCap all
+   * Defensive: NULL array, count=0, NULL retry and NULL out all
    * return 0 actions without crashing.
    */
   for (i = 0; i < 5; ++i)
     array[i] = 0;
-  n = bracha87Fig1RetryStep(0, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  n = bracha87Fig1RetryStep(0, 5, &retry, out);
   check("Fig1Retry: NULL instances -> 0", n == 0);
-  n = bracha87Fig1RetryStep(array, 0, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  n = bracha87Fig1RetryStep(array, 0, &retry, out);
   check("Fig1Retry: count=0 -> 0", n == 0);
-  n = bracha87Fig1RetryStep(array, 5, 0, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  n = bracha87Fig1RetryStep(array, 5, 0, out);
   check("Fig1Retry: NULL retry -> 0", n == 0);
-  n = bracha87Fig1RetryStep(array, 5, &retry, 0, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  n = bracha87Fig1RetryStep(array, 5, &retry, 0);
   check("Fig1Retry: NULL out -> 0", n == 0);
-  n = bracha87Fig1RetryStep(array, 5, &retry, out, 1);
-  check("Fig1Retry: undersized outCap -> 0", n == 0);
 
   check("Fig1Retry: NULL array SentCount=0",
         bracha87Fig1SentCount(0, 5) == 0);
@@ -4585,7 +4586,7 @@ testFig1ArrayRetry(
   check("Fig1Retry: fresh array SentCount=0",
         bracha87Fig1SentCount(array, 5) == 0);
   bracha87RetryInit(&retry);
-  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  n = bracha87Fig1RetryStep(array, 5, &retry, out);
   check("Fig1Retry: idle sweep returns 0", n == 0);
 
   /*
@@ -4597,7 +4598,7 @@ testFig1ArrayRetry(
         bracha87Fig1SentCount(array, 5) == 1);
 
   bracha87RetryInit(&retry);
-  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  n = bracha87Fig1RetryStep(array, 5, &retry, out);
   check("Fig1Retry: initiator -> 1 act", n == 1);
   check("Fig1Retry: act INITIAL_ALL",
         n >= 1 && out[0].act == BRACHA87_INITIAL_ALL);
@@ -4611,7 +4612,7 @@ testFig1ArrayRetry(
    * Repeat call wraps and re-finds inst[2].  Cursor is monotone within
    * a sweep; a fresh sweep starts when pos exhausts count.
    */
-  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  n = bracha87Fig1RetryStep(array, 5, &retry, out);
   check("Fig1Retry: wrap revisits inst[2]",
         n == 1 && out[0].idx == 2);
 
@@ -4625,11 +4626,11 @@ testFig1ArrayRetry(
         bracha87Fig1SentCount(array, 5) == 2);
 
   bracha87RetryInit(&retry);
-  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  n = bracha87Fig1RetryStep(array, 5, &retry, out);
   check("Fig1Retry: visits inst[1] first (ECHOED)",
         n == 1 && out[0].idx == 1
          && out[0].act == BRACHA87_ECHO_ALL);
-  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  n = bracha87Fig1RetryStep(array, 5, &retry, out);
   check("Fig1Retry: visits inst[2] next (INITIATOR)",
         n == 1 && out[0].idx == 2
          && out[0].act == BRACHA87_INITIAL_ALL);
@@ -4646,8 +4647,7 @@ testFig1ArrayRetry(
   seenInitiator = 0;
   seenEchoed = 0;
   for (sweep = 0; sweep < 5; ++sweep) {
-    n = bracha87Fig1RetryStep(array, 5, &retry, out,
-                             BRACHA87_FIG1_RETRY_MAX_ACTS);
+    n = bracha87Fig1RetryStep(array, 5, &retry, out);
     if (!n)
       break;
     if (out[0].idx == 1)
@@ -4662,7 +4662,7 @@ testFig1ArrayRetry(
   /*
    * Drive inst[0] to RDSENT (Rule 5 via 2 readys after Rule 1):
    * sweep visits inst[0] first, returns 2 actions (ECHO_ALL, READY_ALL)
-   * in a single RetryStep call.  Confirms outCap >= 3 paths through
+   * in a single RetryStep call -- the three-action path through
    * fan-out logic.
    */
   bracha87Fig1Input(inst[0], BRACHA87_INITIAL, 0, val, tmpOut);
@@ -4672,7 +4672,7 @@ testFig1ArrayRetry(
         (inst[0]->flags & BRACHA87_F1_RDSENT));
 
   bracha87RetryInit(&retry);
-  n = bracha87Fig1RetryStep(array, 5, &retry, out, BRACHA87_FIG1_RETRY_MAX_ACTS);
+  n = bracha87Fig1RetryStep(array, 5, &retry, out);
   check("Fig1Retry rdSent: 2 acts at inst[0]",
         n == 2 && out[0].idx == 0 && out[1].idx == 0);
   check("Fig1Retry rdSent: ECHO_ALL first",
@@ -4836,7 +4836,7 @@ waSweeps(
           heldNew[nHeldNew++] = q[k];
           continue;
         }
-        /* Pitfall 17: the bare entry cannot bind its own initiator. */
+        /* Note 17: the bare entry cannot bind its own initiator. */
         if (ty == BRACHA87_INITIAL && q[k].from != 0)
           continue;
         f = inst[q[k].to];
@@ -4883,8 +4883,7 @@ waSweeps(
 
       arr[0] = inst[i];
       bracha87RetryInit(&rt);
-      na = bracha87Fig1RetryStep(arr, 1, &rt, acts,
-                                 BRACHA87_FIG1_RETRY_MAX_ACTS);
+      na = bracha87Fig1RetryStep(arr, 1, &rt, acts);
       if (!na && bracha87Fig1SentCount(arr, 1)) {
         ++quiesced;
         continue;

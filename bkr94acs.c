@@ -56,10 +56,12 @@
  * Pointer alignment for carving Fig1/Fig4 instances out of a single
  * buffer.  bracha87Fig4 begins with function-pointer fields, and
  * bracha87Fig1 begins with 2-byte shorts; rounding up to pointer
- * alignment subsumes both.  The struct bkr94acs header is 8 bytes
- * so a->data is already pointer-aligned without an explicit pad
- * field; the BKR94ACS_ALIGN_UP applications below pad each carved
- * sub-region up to the same boundary.
+ * alignment subsumes both.  The struct bkr94acs header is 8 bytes --
+ * six named bytes plus the explicit pad[2] the struct declares for
+ * exactly this purpose -- so a->data lands pointer-aligned; the
+ * BKR94ACS_ALIGN_UP applications below pad each carved sub-region up
+ * to the same boundary.  A re-implementation must reproduce the pad;
+ * without it data[] starts at offset 6.
  */
 #define BKR94ACS_ALIGN_P  ((unsigned long)sizeof (void *))
 #define BKR94ACS_ALIGN_UP(x)  (((unsigned long)(x) + BKR94ACS_ALIGN_P - 1) \
@@ -319,8 +321,15 @@ bkr94acsInit(
       for (r = 0; r < mr2; ++r)
         for (j = 0; j < N; ++j)
           bracha87Fig1Init(baF1(a, i, r, j), n, t, 0);
+      /*
+       * instance = the process index this BA decides on.  The N BAs
+       * share one (coin, coinClosure), so without it every BA in a
+       * phase would name the same coin; a common coin would then hand
+       * all N the identical value.  i is the discriminator the coin
+       * names them by.  A local coin ignores it.
+       */
       bracha87Fig4Init(baF4(a, i), n, t, maxPhases, 0,
-                       coin, coinClosure);
+                       i, coin, coinClosure);
     }
   }
 }
@@ -415,7 +424,7 @@ bkr94acsAcastInput(
    * decided all N BAs, but other processes may still be working on
    * some BAs and depend on THIS process's continued Fig1 echoes and
    * readys to reach their own n-t thresholds.  Bracha requires
-   * post-decide continuation at the BA level (pitfall #1); the
+   * post-decide continuation at the BA level (Note 1); the
    * same obligation applies at the BKR94 ACS level -- a
    * locally-complete process must keep participating until the
    * application decides to exit (e.g. the barren-sweep gate).
@@ -541,7 +550,7 @@ bkr94acsBaInput(
 
   /*
    * Two intentional non-short-circuits -- both are Bracha post-decide
-   * continuation (pitfall #1) applied at different layers.
+   * continuation (Note 1) applied at different layers.
    *
    * 1. We do NOT short-circuit on bkr94acsDecision[process] != 0xFF.
    *    Bracha Fig4 requires a decided process to continue
@@ -749,7 +758,7 @@ bkr94acsAcast(
  * Internal helpers fold each cursor advance step into the
  * walker.  Plain-C three-arm switch over BA decision is the
  * BPR gate (see bkr94acs.dtc BPR documentation block); the
- * pitfall #1 reasoning is captured in the .dtc, the C
+ * Note 1 reasoning is captured in the .dtc, the C
  * implementation is the trivial mechanical guard.
  */
 static int
@@ -898,6 +907,7 @@ bkr94acsRetry(
   for (;;) {
     if (p->pos >= total) {
       p->pos = 0;
+      ++p->sweeps;
       if (p->sweepActs == 0)
         return (0);
       p->sweepActs = 0;
@@ -984,6 +994,7 @@ bkr94acsFanoutDuty(
 unsigned int
 bkr94acsFanout(
   struct bkr94acs *a
+ ,unsigned char patienceElapsed
  ,struct bkr94acsAct *out
 ){
   unsigned int N;
@@ -998,8 +1009,14 @@ bkr94acsFanout(
    * could force SubSet empty).  At MET nothing is unentered and
    * the loop below would output nothing; returning early keeps the
    * call cheap for a caller that fires unconditionally each sweep.
+   *
+   * patienceElapsed carries the caller's verdict, the same shape
+   * bkr94acsTurn takes.  The two seams differ only in what MET means:
+   * Turn's is a full sample and fires free, this one is an empty
+   * unentered set and is moot, so here MET needs no elapsed signal
+   * because there is nothing left to do.
    */
-  if (bkr94acsFanoutDuty(a) != BKR94ACS_DUTY_TOLERANCE)
+  if (bkr94acsFanoutDuty(a) != BKR94ACS_DUTY_TOLERANCE || !patienceElapsed)
     return (0);
   N = A_N(a);
   nact = 0;
@@ -1422,7 +1439,7 @@ bkr94acsSentFig1Count(
   /*
    * Sent = any of F1_INITIATOR / F1_ECHOED / F1_RDSENT set.
    * These are the flags that drive Bpr retry output; F1_ACCEPTED
-   * piggybacks on F1_RDSENT remaining set post-accept (pitfall 10),
+   * piggybacks on F1_RDSENT remaining set post-accept (Note 10),
    * so it is implicitly counted.
    */
   sentMask = (BRACHA87_F1_ECHOED

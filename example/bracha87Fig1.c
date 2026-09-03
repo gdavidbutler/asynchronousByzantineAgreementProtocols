@@ -505,7 +505,7 @@ main(
       type = (unsigned char)(m->type & BRACHA87_TYPE_MASK);
 
       /*
-       * INITIAL sender obligation (bracha87Fig1Input header, pitfall
+       * INITIAL sender obligation (bracha87Fig1Input header, Note
        * 17): the bare Fig 1 entry does not know its designated
        * initiator, so the CALLER must drop any INITIAL whose
        * authenticated sender is not it -- a forged non-initiator INITIAL
@@ -632,8 +632,7 @@ main(
 
       processArr[0] = fig1[i];
       bracha87RetryInit(&retry);
-      n_pacts = bracha87Fig1RetryStep(processArr, 1, &retry, pacts,
-                                     BRACHA87_FIG1_RETRY_MAX_ACTS);
+      n_pacts = bracha87Fig1RetryStep(processArr, 1, &retry, pacts);
       if (!n_pacts && bracha87Fig1SentCount(processArr, 1)) {
         quiescent[i] = 1;
         quiesceSweep[i] = sweepCount;

@@ -277,9 +277,11 @@ qShuffle(
 static unsigned char
 demoCoin(
   void *closure
+ ,unsigned char instance
  ,unsigned char phase
 ){
   (void)closure;
+  (void)instance;
   return (phase % 2);
 }
 
@@ -444,16 +446,15 @@ main(
    * when the count reaches the budget, evaluating the verdict on
    * every tick so a zero budget stays eager; reset whenever duty
    * leaves TOLERANCE.  THE UNIT IS THE FULL SWEEP -- one complete
-   * pass of the Retry cursor over every sent Fig 1 instance,
-   * bkr94acsSentFig1Count calls -- per bkr94acs.h.  One loop pass
-   * here is a TICK (one Retry call per process, the header's
-   * application-loop template), so a sweep boundary for a process
-   * is its Retry returning 0 (an idle pass), its call count
-   * reaching bkr94acsSentFig1Count, or a quiescent tick (the pass
+   * pass of the Retry cursor over every sent Fig 1 instance, read
+   * off the cursor's own `sweeps` wrap count, per bkr94acs.h.  One
+   * loop pass here is a TICK (one Retry call per process, the
+   * header's application-loop template), so a sweep boundary for a
+   * process is that count changing, or a quiescent tick (the pass
    * it would have made owes nothing). */
   unsigned int turnSweeps[MAX_PROCESSES][MAX_PROCESSES];
   unsigned int fanoutSweeps[MAX_PROCESSES];
-  unsigned int retryCalls[MAX_PROCESSES];
+  unsigned int lastSweeps[MAX_PROCESSES];
   unsigned int fanoutFires;
   unsigned int tickCount;
   unsigned int released;
@@ -728,7 +729,7 @@ main(
   memset(quiesceTick, 0, sizeof (quiesceTick));
   memset(turnSweeps, 0, sizeof (turnSweeps));
   memset(fanoutSweeps, 0, sizeof (fanoutSweeps));
-  memset(retryCalls, 0, sizeof (retryCalls));
+  memset(lastSweeps, 0, sizeof (lastSweeps));
   pokeArmed = 0;
   pokeSent = 0;
   pokeActs = 0;
@@ -747,7 +748,7 @@ main(
     while (Qhead < Qtail) {
       struct msg *m;
       struct bkr94acs *st;
-      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
+      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
       unsigned int nacts;
       unsigned int oldTail;
       unsigned char cls;
@@ -960,7 +961,7 @@ main(
     /*--------------------------------------------------------------------*/
 
     for (i = 0; i < n; ++i) {
-      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
+      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
       unsigned int nacts;
       unsigned int p;
       unsigned int sweepDone;
@@ -975,11 +976,10 @@ main(
       /* One retry call per process per TICK -- looping until idle
        * would flood the network; see bracha87.h's flood warning.  A
        * full BPR SWEEP -- one complete pass of the cursor over every
-       * sent Fig 1 instance, bkr94acsSentFig1Count calls -- spans
-       * many ticks, and its boundary here is what the tolerance
-       * clocks below count: a 0 return (an idle pass), the call
-       * count reaching bkr94acsSentFig1Count, or a quiescent tick
-       * (the pass it would have made owes nothing).
+       * sent Fig 1 instance -- spans many ticks, and its boundary
+       * here is what the tolerance clocks below count: the cursor's
+       * `sweeps` wrap count changing, or a quiescent tick (the pass
+       * it would have made owes nothing).
        * Receivers dedup at Fig1Input, so under perfect delivery a
        * retry's duplicates produce no new state; here it carries the
        * -d laggard's late INITIAL and re-carries anything a lossy
@@ -996,10 +996,13 @@ main(
       sweepDone = 0;
       if (!quiescent[i]) {
         nacts = bkr94acsRetry(processes[i], &retry[i], acts);
-        ++retryCalls[i];
-        if (!nacts
-         || retryCalls[i] >= bkr94acsSentFig1Count(processes[i])) {
-          retryCalls[i] = 0;
+        /* The cursor's own wrap count IS the pass boundary; compare
+         * it, never assume it advanced by one (a single call can
+         * complete two passes).  Counting calls against
+         * bkr94acsSentFig1Count would close late, by the retired
+         * count, and that error grows as a run matures. */
+        if (retry[i].sweeps != lastSweeps[i]) {
+          lastSweeps[i] = retry[i].sweeps;
           sweepDone = 1;
         }
         if (!nacts && bkr94acsSentFig1Count(processes[i])) {
@@ -1071,7 +1074,7 @@ main(
       } else
         fanoutSweeps[i] = 0;
       if (fanoutSweeps[i] >= patience) {
-        nacts = bkr94acsFanout(processes[i], acts);
+        nacts = bkr94acsFanout(processes[i], 1, acts);
         if (nacts) {
           fanoutFires += nacts;
           if (quiescent[i]) {

@@ -157,7 +157,7 @@ struct bracha87Fig1 {
   unsigned char n;        /* process count encoding: actual = n + 1 */
   unsigned char t;        /* max Byzantine (n + 1 > 3t) */
   unsigned char vLen;     /* value length encoding: actual = vLen + 1 */
-  unsigned char flags;    /* BRACHA87_F1_ECHOED/RDSENT/ACCEPTED */
+  unsigned char flags;    /* BRACHA87_F1_ECHOED/RDSENT/ACCEPTED/INITIATOR */
   unsigned char data[1];  /* variable: see bracha87Fig1Sz */
 };
 
@@ -507,12 +507,22 @@ bracha87Fig1Received(
  * broadcast loop reads it without re-deriving the layout:
  *
  *   for (p = 0; p < n; ++p)
- *     if (p != self && !(skip && BRACHA87_SKIP_TST(skip, p)))
- *       send_to(p, ...);
+ *     if (!(skip && BRACHA87_SKIP_TST(skip, p)))
+ *       deliver_to(p, ...);
+ *
+ * SELF IS IN THE LOOP, and the protocol does not converge without it.
+ * A Fig 1 instance counts a process's own echo and ready only when they
+ * arrive through bracha87Fig1Input with from == self; sending them sets
+ * the ECHOED / RDSENT flags and nothing else.  At n = 3t+1 the echo
+ * threshold (n+t)/2 + 1 equals the count of correct processes, so a
+ * process that omits itself is one short of its own threshold forever
+ * and no ready is ever sent anywhere.  Delivering to self is a LOCAL
+ * hand-back, not a packet: a hairpin through the network is both
+ * wasteful and, behind NAT, unreliable.
  *
  * Macro, not a function, so it inlines in the per-process loop; 'mask' is
  * evaluated once, 'p' twice (pass a simple expression).  A null mask
- * means "broadcast to all" -- guard with `skip &&` as above.
+ * means "deliver to all" -- guard with `skip &&` as above.
  */
 #define BRACHA87_SKIP_TST(mask, p) \
   ((mask)[(unsigned int)(p) >> 3] & (1 << ((unsigned int)(p) & 7)))
@@ -532,7 +542,13 @@ bracha87Fig1Received(
 /*                                                                       */
 /*************************************************************************/
 
-/* Figure 2 output action */
+/*
+ * Figure 2 output action.  It reports that the round's threshold is
+ * CROSSED, which enables the round; it is not an instruction to compute
+ * it now.  The received set keeps growing past n-t, and any sample of
+ * at least n-t is proof-covered -- see WHEN TO CALL IT at
+ * bracha87Fig4Round.  Reported once, on the crossing arrival only.
+ */
 #define BRACHA87_ROUND_COMPLETE 2  /* n-t messages received for round k */
 
 /*
@@ -598,14 +614,14 @@ bracha87Fig2RecvCount(
 
 /*
  * Retrieve received messages for round k.
- * Returns count, fills senders[] and values[] (caller-provided, n entries).
+ * Returns count, fills senders[] and values[] (caller-provided, n + 1 entries).
  */
 unsigned int
 bracha87Fig2GetReceived(
   const struct bracha87Fig2 *
  ,unsigned char            /* round k (0-based) */
- ,unsigned char *          /* senders out, n entries */
- ,unsigned char *          /* values out, n entries */
+ ,unsigned char *          /* senders out, n + 1 entries */
+ ,unsigned char *          /* values out, n + 1 entries */
 );
 
 /*************************************************************************/
@@ -648,6 +664,19 @@ bracha87Fig2GetReceived(
  *   When n_msgs > n-t, N should return >0 if different n-t subsets
  *   could produce different results (paper's existential quantifier).
  * Returns <0: error, message is invalid.
+ *
+ * WRITE result ON EVERY NON-ERROR RETURN, the permissive one included.
+ * The permissive return does NOT mean "result is unused": the caller
+ * reads it to police BRACHA87_D_FLAG, which the free choice of a binary
+ * value does not extend to.  On a >0 return set BRACHA87_D_FLAG in
+ * result iff a d-message is legitimate at this round, and when it is,
+ * set result's low bit to the one base value it is legitimate for (at
+ * most one of (0|D_FLAG), (1|D_FLAG) can be, per Fig 4 step 2).  An
+ * incoming d-message is rejected unless result marks D_FLAG legitimate
+ * and its base matches.  Leaving result untouched on this path is
+ * undefined behavior -- it is an ordinary uninitialized local in the
+ * caller's frame, and the D_FLAG gate would read whatever it held.
+ * Only the <0 error return may leave result alone.
  */
 typedef int (*bracha87Nfn)(
   void *                   /* closure */
@@ -707,7 +736,9 @@ bracha87Fig3Init(
  *
  * Returns:
  *   BRACHA87_VALIDATED if message is in VALID^k
- *   0 if not valid or round out of range
+ *   0 if not valid, round out of range, or this sender was already
+ *     stored for round k (one message per sender per round; the
+ *     duplicate is dropped before validation is attempted)
  *
  * validCount receives the number of validated messages for round k
  * (so caller can check for n-t completion).
@@ -732,14 +763,14 @@ bracha87Fig3ValidCount(
 
 /*
  * Retrieve validated messages for round k.
- * Returns count, fills senders[] and values[] (caller-provided, n entries).
+ * Returns count, fills senders[] and values[] (caller-provided, n + 1 entries).
  */
 unsigned int
 bracha87Fig3GetValid(
   const struct bracha87Fig3 *
  ,unsigned char            /* round k (0-based) */
- ,unsigned char *          /* senders out, n entries */
- ,unsigned char *          /* values out, n entries */
+ ,unsigned char *          /* senders out, n + 1 entries */
+ ,unsigned char *          /* values out, n + 1 entries */
 );
 
 /*
@@ -779,9 +810,35 @@ bracha87Fig3RoundComplete(
 /*                                                                       */
 /*************************************************************************/
 
-/* Coin function: return 0 or 1 for given phase */
+/*
+ * Coin function: return 0 or 1 for the coin named by (instance, phase).
+ *
+ * The coin is an ORACLE, not a protocol.  Randomization is how Bracha
+ * meets FLP: deterministic asynchronous consensus is impossible, and
+ * the paper does not evade that -- it changes the termination
+ * requirement, buying probabilistic termination with a source of
+ * randomness taken as given.  That source must come from OUTSIDE the
+ * asynchronous system.  So this call returns a value, always and
+ * immediately: it cannot fail, cannot decline, and must not block or
+ * perform I/O.  An interactive construction -- one that broadcasts and
+ * waits for peers before it can answer -- does not belong behind this
+ * callback; it would relocate the impossibility into the coin rather
+ * than escape it, and make the protocol's termination rest on a
+ * liveness condition no paper here proves.  See README (Coin Choice).
+ *
+ * instance names WHICH state machine is asking; phase names WHICH coin
+ * within it.  Together with whatever the closure carries (a session or
+ * epoch identity), they are the coin's NAME, and the name is what a
+ * common coin must agree on across processes.  A caller running one
+ * Fig 4 can pass anything for instance and ignore it; bkr94acs sets it
+ * to the BA's process index, so the N concurrent BAs of one ACS draw
+ * distinct coins rather than sharing a phase's value.  A local coin
+ * (independent randomness per call) ignores both parameters -- it needs
+ * entropy, not a name.
+ */
 typedef unsigned char (*bracha87CoinFn)(
   void *                   /* closure */
+ ,unsigned char            /* instance */
  ,unsigned char            /* phase */
 );
 
@@ -821,6 +878,8 @@ struct bracha87Fig4 {
   unsigned char n;        /* process count encoding: actual = n + 1 */
   unsigned char t;        /* max Byzantine (n + 1 > 3t) */
   unsigned char maxPhases;
+  unsigned char instance;  /* passed to coin as the caller's own name
+                            * for this state machine; never interpreted */
   unsigned char phase;     /* current phase (0-based) */
   unsigned char subRound;  /* 0, 1, or 2 within phase */
   unsigned char value;     /* current estimate */
@@ -839,10 +898,15 @@ bracha87Fig4Sz(
  * Initialize a Fig 4 instance.
  *
  * coin must NOT be 0.  Step 3 case (iii) (no decision-candidate
- * majority) invokes coin(coinClosure, phase) to derive value_p.
- * Even on input traces where case (iii) never fires, callers must
- * supply a valid coin: the library does not branch on a null coin
+ * majority) invokes coin(coinClosure, instance, phase) to derive
+ * value_p.  Even on input traces where case (iii) never fires, callers
+ * must supply a valid coin: the library does not branch on a null coin
  * pointer, and supplying 0 is undefined behavior.
+ *
+ * instance is stored and handed back to the coin unexamined -- the
+ * library never interprets it.  It exists so a caller running several
+ * Fig 4 machines can tell them apart when naming a coin; a caller
+ * running one can pass 0.
  */
 void
 bracha87Fig4Init(
@@ -851,6 +915,7 @@ bracha87Fig4Init(
  ,unsigned char            /* t */
  ,unsigned char            /* maxPhases, <= BRACHA87_MAX_PHASES (85) */
  ,unsigned char            /* initialValue: 0 or 1 */
+ ,unsigned char            /* instance: opaque, passed to coin */
  ,bracha87CoinFn           /* coin, must not be 0 */
  ,void *                   /* coinClosure */
 );
@@ -858,7 +923,11 @@ bracha87Fig4Init(
 /*
  * Process a validated round message (from Fig3).
  * Returns a bitmask of actions: 0, BRACHA87_BROADCAST,
- * BRACHA87_DECIDE | BRACHA87_BROADCAST, or BRACHA87_EXHAUSTED.
+ * BRACHA87_DECIDE | BRACHA87_BROADCAST, BRACHA87_DECIDE alone, or
+ * BRACHA87_EXHAUSTED.  TEST THE BITS, never the whole value: the
+ * decision arrives with or without a companion BROADCAST depending on
+ * where in the phase space it lands, so an equality comparison against
+ * one of the combinations above drops decisions.
  *
  * On BRACHA87_BROADCAST: caller reads fig4->value for the broadcast value
  *   and fig4->phase/fig4->subRound for the round number.
@@ -868,12 +937,20 @@ bracha87Fig4Init(
  *   See the success-vs-stop note below.
  *
  * BRACHA87_DECIDE is returned exactly once (the first time >2t d-messages
- * are seen), combined with BRACHA87_BROADCAST. Per the paper, a decided
- * process continues participating so others can reach consensus.
+ * are seen).  It carries BRACHA87_BROADCAST whenever a next round exists
+ * to broadcast into -- per the paper, a decided process continues
+ * participating so others can reach consensus.  A decision taken on the
+ * LAST phase has no next round, so there it is returned alone: the
+ * decision stands, and the continuation the paper asks for is simply
+ * over.  This is the one path that yields a bare BRACHA87_DECIDE.
  *
  * DECIDE is a success signal, NOT a stop condition.  A decided
- * process keeps broadcasting (post-decide continuation, above), so
- * the caller must never treat DECIDE as "done, stop."  The same
+ * process keeps broadcasting (post-decide continuation, above) for as
+ * long as the phase space lasts, so the caller must never treat DECIDE
+ * as "done, stop."  Past the ceiling the continuation rounds run out
+ * and Round returns 0 without setting BRACHA87_F4_EXHAUSTED -- that
+ * flag reports a phase space spent WITHOUT a decision, and a decided
+ * instance never earns it.  The same
  * holds for Fig 1's BRACHA87_ACCEPT -- reliable broadcast has no stop
  * condition at all (no EXHAUSTED, no phase ceiling).  Under unbounded
  * latency no process can know that stopping is safe, so when to stop
@@ -905,9 +982,38 @@ bracha87Fig4Init(
  * The round k maps to phase/subRound:
  *   phase = k / 3
  *   subRound = k % 3
+ * Convert with BRACHA87_ROUNDS_PER_PHASE rather than a bare 3.
  *
- * This function is called when Fig3 reports n-t validated messages
- * for round k. The caller passes the validated set.
+ * WHAT BRACHA87_BROADCAST OBLIGES, and where BPR enters.  Fig 3's
+ * round(k) reads "Broadcast(p, k, v)", and Broadcast there is Fig 1 --
+ * the reliable broadcast this file opens with, not a bare send.  So the
+ * caller owns one Fig 1 instance per (round, initiator), calls
+ * bracha87Fig1Initiator on its own for round k, and feeds arriving
+ * round-k traffic through that instance; a Fig 1 ACCEPT is then what
+ * bracha87Fig3Accept consumes.  This matters beyond fidelity: BPR lives
+ * entirely on Fig 1 (bracha87Fig1Bpr, bracha87Fig1RetryStep).  A caller
+ * that broadcasts a round value directly instead of through a Fig 1
+ * gets NO retransmission for it, and under fair loss the round simply
+ * stalls.  bkr94acs.c does this wiring for the BA rounds it owns and is
+ * the worked example.
+ *
+ * WHEN TO CALL IT is the caller's, and n-t is a floor, not a moment.
+ * Fig 3's "wait till n-t k-messages validated" names the evidence that
+ * ENABLES the round; the asynchronous model has no moments to fire at.
+ * The validated set keeps growing past n-t -- to n, via cascades and
+ * late arrivals -- and the proofs hold for ANY sample of at least n-t,
+ * so the sample this call consumes is purely a function of when the
+ * caller makes it.  Calling on the n-t'th validation takes the smallest
+ * legal sample; waiting takes a superset.  At sub 2 the gain is
+ * one-directional (decide and adopt are monotone thresholds, so a
+ * fuller sample can only turn coin phases into deterministic decides);
+ * at sub 1 the majority is a comparison a fuller sample can flip, and
+ * both outcomes are proof-covered, so the flip trades between sound
+ * broadcasts and never against safety.  Deferring an enabled round
+ * therefore costs liveness only.  bkr94acs.h's bkr94acsTurnDuty /
+ * bkr94acsTurn make this pacing an explicit caller decision; a
+ * bare-layer caller that wants the eager schedule simply calls here on
+ * the n-t'th validation, which is sound and is the smallest sample.
  */
 unsigned int
 bracha87Fig4Round(
@@ -948,15 +1054,22 @@ bracha87Fig4Round(
 /*  the READY retry for the one tick that re-sends marked.               */
 /*                                                                       */
 /*  Termination is the application's policy, not the library's,          */
-/*  which prescribes none -- see BPR.md.  Count Retry calls across       */
-/*  ticks if a policy needs sweep coverage; one sweep covers every       */
-/*  currently-sent instance once.                                        */
+/*  which prescribes none -- see BPR.md.  A policy needing sweep         */
+/*  coverage reads the cursor's `sweeps` wrap count, comparing it        */
+/*  against a saved value; one sweep covers every currently-sent         */
+/*  instance once.  Do NOT count calls against                           */
+/*  bracha87Fig1SentCount -- that is an upper bound on the calls a pass  */
+/*  costs, since a sent instance whose retries have all retired is       */
+/*  walked past without spending one.                                    */
 /*                                                                       */
 /*************************************************************************/
 
 struct bracha87Retry {
   unsigned int pos;        /* next index to visit */
   unsigned int sweepActs;  /* actions output in current sweep */
+  unsigned int sweeps;     /* completed passes; COMPARE against a saved
+                            * value, never assume +1 -- one call can
+                            * complete two passes */
 };
 
 void
@@ -970,10 +1083,12 @@ bracha87RetryInit(
 /*  Wraps the per-instance bracha87Fig1Bpr above with a cursor that         */
 /*  walks an application-owned array of Fig 1 instances.                    */
 /*                                                                          */
-/*  bracha87Fig1RetryStep's outCap parameter must be >= 3                   */
-/*  (BRACHA87_FIG1_RETRY_MAX_ACTS); the library does not range-check it,    */
-/*  and supplying a smaller value is undefined behavior (the library        */
-/*  may write past out[]).                                                  */
+/*  out[] holds BRACHA87_FIG1_RETRY_MAX_ACTS entries.  The bound is a       */
+/*  constant, not a function of the configuration -- one call advances to   */
+/*  one instance and a Fig 1 has three retryable actions -- so the caller   */
+/*  declares the array with that constant and passes no size.  There is no  */
+/*  under-sizing to diagnose and therefore no refusal that could be         */
+/*  mistaken for the quiescent 0 return below.                              */
 /*--------------------------------------------------------------------------*/
 
 #define BRACHA87_FIG1_RETRY_MAX_ACTS 3
@@ -999,9 +1114,6 @@ bracha87RetryInit(
  *             persistence is required past that boundary.
  */
 struct bracha87Fig1Act {
-  unsigned char act;
-  unsigned char accepted;     /* READY_ALL: 1 = set wire ACCEPTED bit */
-  unsigned int  idx;
   const unsigned char *value;
   const unsigned char *skip;  /* BPR per-process suppress mask, or 0 = all;
                                * see bracha87Fig1Skip.  Borrowed, valid
@@ -1014,6 +1126,9 @@ struct bracha87Fig1Act {
                                  * recipient; see
                                  * bracha87Fig1Received.  Borrowed, same
                                  * lifetime as .skip. */
+  unsigned int  idx;
+  unsigned char act;
+  unsigned char accepted;     /* READY_ALL: 1 = set wire ACCEPTED bit */
 };
 
 /*
@@ -1034,15 +1149,24 @@ bracha87Fig1RetryStep(
   struct bracha87Fig1 *const *  /* instances */
  ,unsigned int                  /* count */
  ,struct bracha87Retry *         /* init with bracha87RetryInit */
- ,struct bracha87Fig1Act *      /* out */
- ,unsigned int                  /* outCap, must be >= BRACHA87_FIG1_RETRY_MAX_ACTS */
+ ,struct bracha87Fig1Act *      /* out, room for
+                                 * BRACHA87_FIG1_RETRY_MAX_ACTS entries */
 );
 
 /*
  * Count of instances with any sent flag (INITIATOR, ECHOED, or
- * RDSENT) -- i.e., the number of instances the retry will visit per
- * sweep.  Useful for sweep-cadence calibration in the caller's
- * termination policy.
+ * RDSENT).
+ *
+ * DIAGNOSTIC, and an UPPER BOUND on the calls a sweep costs -- never
+ * the sweep's length.  Sent flags are never cleared, so an instance
+ * whose retries have all retired still counts here while
+ * bracha87Fig1RetryStep walks past it inside a call without spending
+ * one; the gap is the retired count and it grows as a run matures.  To
+ * close a pass, compare the cursor's `sweeps` wrap count.  This
+ * remains sound wherever an over-estimate is what is wanted: telling a
+ * quiescent 0 return from the pre-broadcast one (nonzero here means
+ * something was sent), and bounding a worst-case time to an
+ * abandonment gate from above.
  */
 unsigned int
 bracha87Fig1SentCount(

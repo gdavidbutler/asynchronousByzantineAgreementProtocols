@@ -114,9 +114,11 @@ static const char *CurTest = "<none>";
 static unsigned char
 testCoin(
   void *closure
+ ,unsigned char instance
  ,unsigned char phase
 ){
   (void)closure;
+  (void)instance;
   return ((unsigned char)(phase & 1));
 }
 
@@ -424,7 +426,7 @@ deliverWire(
    * cannot make a round turnable -- it writes only entered[] and
    * round-0 initiator state, which no turn duty reads). */
   drainTurns(process, obs, w->to, nAct, vBytes, out, 0, -1);
-  n = bkr94acsFanout(process, out);
+  n = bkr94acsFanout(process, 1, out);
   CHECK(n <= outCap, "fanout act count within MAX_ACTS bound");
   observeAndOutput(obs, w->to, nAct, out, n, vBytes, 0, -1);
 }
@@ -441,7 +443,6 @@ static int
 runHonest(
   unsigned int nAct
  ,unsigned int vLen
- ,unsigned int maxPhases
  ,const unsigned char *acasts  /* nAct * vLen bytes */
  ,int shuffled
  ,struct bkr94acs **processes          /* allocated and Init'd by caller */
@@ -455,7 +456,7 @@ runHonest(
 
   qReset();
 
-  actsCap = BKR94ACS_MAX_ACTS(nAct - 1, maxPhases);
+  actsCap = BKR94ACS_MAX_ACTS(nAct - 1);
   out = (struct bkr94acsAct *)malloc(actsCap * sizeof (*out));
   if (!out)
     return (-1);
@@ -636,7 +637,6 @@ static int
 runWithRetry(
   unsigned int nAct
  ,unsigned int vLen
- ,unsigned int maxPhases
  ,const unsigned char *acasts  /* nAct * vLen bytes; entry for silent process ignored */
  ,unsigned int dropPercent        /* 0..99 */
  ,int silentProcess                  /* -1 = none */
@@ -664,7 +664,7 @@ runWithRetry(
     prevSent[i] = 0;
   }
 
-  actsCap = BKR94ACS_MAX_ACTS(nAct - 1, maxPhases);
+  actsCap = BKR94ACS_MAX_ACTS(nAct - 1);
   out = (struct bkr94acsAct *)malloc(actsCap * sizeof (*out));
   if (!out)
     return (-1);
@@ -716,7 +716,7 @@ runWithRetry(
        * here stays loss-safe. */
       drainTurns(processes[w.to], &obs[w.to], w.to, nAct, vLen, out,
                  dropPercent, silentProcess);
-      n = bkr94acsFanout(processes[w.to], out);
+      n = bkr94acsFanout(processes[w.to], 1, out);
       observeAndOutput(&obs[w.to], w.to, nAct, out, n, vLen,
                      dropPercent, silentProcess);
     }
@@ -736,7 +736,7 @@ runWithRetry(
                      dropPercent, silentProcess);
       drainTurns(processes[i], &obs[i], (unsigned char)i, nAct, vLen, out,
                  dropPercent, silentProcess);
-      n = bkr94acsFanout(processes[i], out);
+      n = bkr94acsFanout(processes[i], 1, out);
       observeAndOutput(&obs[i], (unsigned char)i, nAct, out, n, vLen,
                      dropPercent, silentProcess);
     }
@@ -876,7 +876,7 @@ fDrive(
  ,unsigned int *toleranceSweepsMax  /* out: max per-process TOLERANCE sweeps */
  ,unsigned int *fanoutActsTotal     /* out: total fanout acts, all processes */
 ){
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   struct wire w;
   unsigned int sweeps[4];
   unsigned char prevDuty[4];
@@ -950,7 +950,7 @@ fDrive(
         if (sweeps[p] > *toleranceSweepsMax)
           *toleranceSweepsMax = sweeps[p];
         if (patience >= 0 && sweeps[p] > (unsigned int)patience) {
-          n = bkr94acsFanout(processes[p], out);
+          n = bkr94acsFanout(processes[p], 1, out);
           *fanoutActsTotal += n;
           observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0,
                          silent);
@@ -994,12 +994,12 @@ fDrive(
 /*  the round space is spent, so a definition that counted them would  */
 /*  make M1's monotone climb false against a CORRECT machine.          */
 /*                                                                    */
-/*  SWEEP boundary at a process, the application loop's operational    */
-/*  rule: a Retry 0 return (an idle pass), the per-pass call count     */
-/*  reaching a RECOMPUTED bkr94acsSentFig1Count (the count grows as    */
-/*  the BAs advance, so a stored constant mis-counts the unit), or --  */
+/*  SWEEP boundary at a process, the header's rule: the retry          */
+/*  cursor's `sweeps` wrap count changed -- compared, never assumed    */
+/*  to advance by one, since one call can complete two passes -- or,   */
 /*  for a process already marked quiescent and skipping its Retry      */
-/*  call -- one idle sweep per tick.                                   */
+/*  call, one idle sweep per tick.  Counting calls against             */
+/*  bkr94acsSentFig1Count would close late by the retired count.       */
 /*                                                                    */
 /*  BARREN = a completed sweep that observed no progress.  The policy  */
 /*  fires after S consecutive barren sweeps; budget compares use >=,   */
@@ -1012,7 +1012,7 @@ fDrive(
 #define BARREN_S 8    /* the harness policy's S */
 
 struct sweepPolicy {
-  unsigned int calls;    /* Retry calls made in the pass under way */
+  unsigned int lastSweeps; /* last-seen cursor wrap count */
   unsigned int progress; /* progress events seen in the sweep under way */
   unsigned int sweeps;   /* completed sweeps */
   unsigned int barren;   /* consecutive barren sweeps */
@@ -1024,22 +1024,23 @@ struct sweepPolicy {
 static unsigned int
 spTick(
   struct sweepPolicy *sp
- ,unsigned int retryActs
- ,unsigned int sentCount
+ ,unsigned int cursorSweeps
  ,unsigned int skipped
 ){
   unsigned int done;
 
+  /* The header's rule: the cursor's wrap count IS the pass boundary.
+   * Compare it -- one call can complete two passes -- and never count
+   * calls against bkr94acsSentFig1Count, which is an upper bound that
+   * drifts longer as instances retire. */
   done = 0;
   if (skipped)
     done = 1;
-  else {
-    ++sp->calls;
-    if (!retryActs || sp->calls >= sentCount)
-      done = 1;
+  else if (cursorSweeps != sp->lastSweeps) {
+    sp->lastSweeps = cursorSweeps;
+    done = 1;
   }
   if (done) {
-    sp->calls = 0;
     ++sp->sweeps;
     if (sp->progress)
       sp->barren = 0;
@@ -1092,7 +1093,7 @@ fbDrive(
   struct processObs obs[4];
   struct bracha87Retry cursors[4];
   struct sweepPolicy pol[4];
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   struct bkr94acsAct acastOut[1];
   struct wire w;
   unsigned char acast[4];
@@ -1176,8 +1177,7 @@ fbDrive(
           observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
         }
 
-      sweepDone = spTick(&pol[p], retryActs,
-                         bkr94acsSentFig1Count(processes[p]), 0);
+      sweepDone = spTick(&pol[p], cursors[p].sweeps, 0);
       if (pol[p].barren > *barrenMaxOut)
         *barrenMaxOut = pol[p].barren;
 
@@ -1216,7 +1216,7 @@ fbDrive(
                 " sweep boundary");
         }
         if (spent[p] > patience) {
-          n = bkr94acsFanout(processes[p], out);
+          n = bkr94acsFanout(processes[p], 1, out);
           *fanoutActsOut += n;
           observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
         }
@@ -1284,7 +1284,7 @@ jDrive(
  ,unsigned int *barrenDropsOut  /* out: barren regressions at the cut process */
  ,unsigned int *itersOut
 ){
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 2)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   struct wire w;
   unsigned int iter, p, b, n, k;
   unsigned int prevBarren[4];
@@ -1331,7 +1331,7 @@ jDrive(
       if (!n && cutTo >= 0 && (int)p == cutTo)
         ++*zeroRetriesOut;
       observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
-      spTick(&pol[p], n, bkr94acsSentFig1Count(processes[p]), 0);
+      spTick(&pol[p], cursors[p].sweeps, 0);
       if (pol[p].barren < prevBarren[p]
        && cutTo >= 0 && (int)p == cutTo)
         ++*barrenDropsOut;
@@ -1346,7 +1346,7 @@ jDrive(
               ++pol[p].progress;  /* PROGRESS: a decision act from a turn */
           observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
         }
-      n = bkr94acsFanout(processes[p], out);
+      n = bkr94acsFanout(processes[p], 1, out);
       observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
     }
 
@@ -1399,7 +1399,7 @@ iTick(
  ,const unsigned char *side
  ,struct iWitness *wit
 ){
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 2)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   struct wire w;
   unsigned int p, b, n, k;
 
@@ -1448,7 +1448,7 @@ iTick(
   for (p = 0; p < 4; ++p) {
     n = bkr94acsRetry(processes[p], &cursors[p], out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
-    spTick(&pol[p], n, bkr94acsSentFig1Count(processes[p]), 0);
+    spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
       while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
         for (k = 0; k < n; ++k)
@@ -1457,7 +1457,7 @@ iTick(
             ++pol[p].progress;
         observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
       }
-    n = bkr94acsFanout(processes[p], out);
+    n = bkr94acsFanout(processes[p], 1, out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
   }
 }
@@ -1503,7 +1503,7 @@ kDeliver(
  ,unsigned char to
  ,unsigned int vBytes
 ){
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 2)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   unsigned int n;
 
   if (w->cls == BKR94ACS_CLS_ACAST)
@@ -1529,7 +1529,7 @@ kTick(
  ,unsigned int vBytes
  ,unsigned int *zeroRetriesOut
 ){
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 2)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   struct wire w;
   unsigned int p, b, n, k;
 
@@ -1565,7 +1565,7 @@ kTick(
     if (!n && zeroRetriesOut)
       ++*zeroRetriesOut;
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, vBytes, 0, -1);
-    spTick(&pol[p], n, bkr94acsSentFig1Count(processes[p]), 0);
+    spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
       while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
         for (k = 0; k < n; ++k)
@@ -1574,7 +1574,7 @@ kTick(
             ++pol[p].progress;
         observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, vBytes, 0, -1);
       }
-    n = bkr94acsFanout(processes[p], out);
+    n = bkr94acsFanout(processes[p], 1, out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, vBytes, 0, -1);
   }
 }
@@ -1606,7 +1606,7 @@ lTick(
  ,unsigned int maxDeliver     /* wires to deliver this tick; 0 = drain */
  ,struct lWitness *wit
 ){
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 2)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   struct wire w;
   unsigned int p, b, n, k;
   unsigned int delivered;
@@ -1667,7 +1667,7 @@ lTick(
       continue;
     n = bkr94acsRetry(processes[p], &cursors[p], out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, silent);
-    spTick(&pol[p], n, bkr94acsSentFig1Count(processes[p]), 0);
+    spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
       while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
         for (k = 0; k < n; ++k)
@@ -1676,7 +1676,7 @@ lTick(
             ++pol[p].progress;
         observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, silent);
       }
-    n = bkr94acsFanout(processes[p], out);
+    n = bkr94acsFanout(processes[p], 1, out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, silent);
   }
 }
@@ -1703,7 +1703,7 @@ mTick(
  ,unsigned int *deliveredOut
  ,unsigned int *zeroRetriesOut
 ){
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 2)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   struct wire w;
   unsigned int p, b, n, k, announces;
 
@@ -1761,7 +1761,7 @@ mTick(
     if (!n && p != leaver && zeroRetriesOut)
       ++*zeroRetriesOut;
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
-    spTick(&pol[p], n, bkr94acsSentFig1Count(processes[p]), 0);
+    spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
       while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
         for (k = 0; k < n; ++k)
@@ -1770,7 +1770,7 @@ mTick(
             ++pol[p].progress;
         observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
       }
-    n = bkr94acsFanout(processes[p], out);
+    n = bkr94acsFanout(processes[p], 1, out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
   }
 }
@@ -1808,7 +1808,7 @@ nDrive(
   struct processObs obs[4];
   struct bracha87Retry cursors[4];
   struct sweepPolicy pol[4];
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   struct bkr94acsAct acastOut[1];
   struct wire w;
   unsigned char acast[4];
@@ -1882,7 +1882,7 @@ nDrive(
 
       n = bkr94acsRetry(processes[p], &cursors[p], out);
       observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
-      sweepDone = spTick(&pol[p], n, bkr94acsSentFig1Count(processes[p]), 0);
+      sweepDone = spTick(&pol[p], cursors[p].sweeps, 0);
 
       for (b = 0; b < 4; ++b)
         while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
@@ -1899,7 +1899,7 @@ nDrive(
       } else
         spent[p] = 0;
       if (spent[p] >= patience) {
-        n = bkr94acsFanout(processes[p], out);
+        n = bkr94acsFanout(processes[p], 1, out);
         *fanoutActsOut += n;
         observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
       }
@@ -1951,7 +1951,7 @@ main(
     unsigned long sz;
     struct bkr94acs *a;
     unsigned char buf[MAX_PROCESSES];
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 10)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     unsigned int j;
 
     sz = bkr94acsSz(3, 0, 10);
@@ -2081,12 +2081,12 @@ main(
   a4_done: ;
 
   /* ---------------------------------------------------------------- */
-  BANNER("A5: forged INITIAL rejection (Note 14 / pitfall 17)");
+  BANNER("A5: forged INITIAL rejection (Note 17)");
   /* ---------------------------------------------------------------- */
   {
     unsigned long sz;
     struct bkr94acs *a;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, 10)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
     unsigned char v[1];
     unsigned int n;
 
@@ -2158,7 +2158,7 @@ main(
       for (i = 0; i < n; ++i)
         acasts[i * vLen] = (unsigned char)('A' + i);
 
-      runHonest(n, vLen, mp, acasts, 0 /*ordered*/, processes, obs);
+      runHonest(n, vLen, acasts, 0 /*ordered*/, processes, obs);
       assertLemma2(processes, obs, n, t);
 
       /* Lemma 2 Part D -- explicit value-match check (the implementation
@@ -2195,7 +2195,7 @@ main(
       for (i = 0; i < n; ++i)
         acasts[i * vLen] = (unsigned char)('a' + i);
 
-      runHonest(n, vLen, mp, acasts, 1 /*shuffled*/, processes, obs);
+      runHonest(n, vLen, acasts, 1 /*shuffled*/, processes, obs);
       assertLemma2(processes, obs, n, t);
 
       freeCluster(processes, n);
@@ -2214,7 +2214,7 @@ main(
       for (i = 0; i < n; ++i)
         acasts[i * vLen] = (unsigned char)(0x10 + i);
 
-      runHonest(n, vLen, mp, acasts, 1 /*shuffled*/, processes, obs);
+      runHonest(n, vLen, acasts, 1 /*shuffled*/, processes, obs);
       assertLemma2(processes, obs, n, t);
 
       freeCluster(processes, n);
@@ -2233,7 +2233,7 @@ main(
       for (i = 0; i < n; ++i)
         acasts[i * vLen] = 0x42;  /* every process A-Casts the same byte */
 
-      runHonest(n, vLen, mp, acasts, 1, processes, obs);
+      runHonest(n, vLen, acasts, 1, processes, obs);
       assertLemma2(processes, obs, n, t);
 
       freeCluster(processes, n);
@@ -2254,7 +2254,7 @@ main(
         for (j = 0; j < vLen; ++j)
           acasts[i * vLen + j] = (unsigned char)((i << 4) | (j & 0x0F));
 
-      runHonest(n, vLen, mp, acasts, 1, processes, obs);
+      runHonest(n, vLen, acasts, 1, processes, obs);
       assertLemma2(processes, obs, n, t);
 
       /* Multi-byte value-match check. */
@@ -2314,7 +2314,7 @@ main(
     unsigned int nAct = 4, t = 1, vLen = 1, mp = 10;
     unsigned long sz;
     struct bkr94acs *p0;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 10)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     unsigned char val0;
     unsigned int o, src, k;
     unsigned int countProcess0 = 0;
@@ -2491,7 +2491,7 @@ main(
       for (i = 0; i < n; ++i)
         acasts[i * vLen] = (unsigned char)i;
 
-      runHonest(n, vLen, mp, acasts, 1, processes, obs);
+      runHonest(n, vLen, acasts, 1, processes, obs);
       sz = bkr94acsSubset(processes[0], subset);
       CHECK(sz >= n - t, "B7: |SubSet| >= n-t (lower bound is contractual)");
       CHECK(sz <= n, "B7: |SubSet| <= n (upper bound is structural)");
@@ -2524,7 +2524,7 @@ main(
      */
     unsigned long sz;
     struct bkr94acs *a;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, 4)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
     unsigned char v[1];
     const unsigned char *m;
     unsigned int nact;
@@ -2596,7 +2596,7 @@ main(
     unsigned int nAct = 4, t = 1, vLen = 1, mp = 10;
     unsigned long sz;
     struct bkr94acs *p0;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 10)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     unsigned char senders[MAX_PROCESSES];
     unsigned char values[MAX_PROCESSES];
     unsigned char fedValue[MAX_PROCESSES];
@@ -2715,7 +2715,7 @@ main(
       for (i = 0; i < nAct; ++i)
         acasts[i * vLen] = 0x70 + i;
 
-      runHonest(nAct, vLen, mp, acasts, 0 /*ordered*/, processes, obs);
+      runHonest(nAct, vLen, acasts, 0 /*ordered*/, processes, obs);
 
       for (p = 0; p < nAct; ++p) {
         CHECK(bkr94acsFanoutDuty(processes[p]) == BKR94ACS_DUTY_MET,
@@ -2790,7 +2790,7 @@ main(
   {
     /* A-Cast sets the INITIATOR bit on self's A-Cast Fig1.  Per .h
      * BPR rules: INITIATOR -> output INITIAL_ALL on every Bpr call
-     * until ACCEPTED or all-echoed (pitfall 11).
+     * until ACCEPTED or all-echoed (Note 11).
      * The cursor must visit self's A-Cast Fig1 in finite calls and
      * surface the retry. */
     unsigned long sz;
@@ -2854,7 +2854,7 @@ main(
       for (i = 0; i < n; ++i)
         acasts[i * vLen] = (unsigned char)('p' + i);
 
-      rc = runWithRetry(n, vLen, mp, acasts, 0, -1, 1000, processes, obs,
+      rc = runWithRetry(n, vLen, acasts, 0, -1, 1000, processes, obs,
                        &maxRetryActs, &monotoneViolations);
       CHECK(rc == 0, "C3+C4: all-honest Retry run converges");
       CHECK(maxRetryActs <= BKR94ACS_RETRY_MAX_ACTS,
@@ -2921,7 +2921,7 @@ main(
       for (i = 0; i < n; ++i)
         acasts[i * vLen] = (unsigned char)(i + 1);
 
-      rc = runWithRetry(n, vLen, mp, acasts, 50, -1, 5000, processes, obs,
+      rc = runWithRetry(n, vLen, acasts, 50, -1, 5000, processes, obs,
                        &maxRetryActs, &monotoneViolations);
       CHECK(rc == 0, "C6: 50% drop run converges");
       CHECK(maxRetryActs <= BKR94ACS_RETRY_MAX_ACTS,
@@ -2936,14 +2936,14 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("C7: Silent Byzantine process canary (pitfall 11 regression)");
+  BANNER("C7: Silent Byzantine process canary (Note 11 regression)");
   /* ---------------------------------------------------------------- */
   {
     /* n=4 t=1, process 3 is Byzantine-silent: never A-Casts, never
      * receives, never outputs.  Honest processes 0/1/2 must converge --
      * SubSet excludes process 3 via step-2 enter-0 fanout for process 3.
      *
-     * This is the regression for pitfall 11: the initiator INITIAL
+     * This is the regression for Note 11: the initiator INITIAL
      * retry must NOT short-circuit on local ECHOED.  Each honest
      * process is an initiator of its own A-Cast; their Retry calls must
      * keep retrying INITIAL until that A-Cast is accepted (the
@@ -2969,7 +2969,7 @@ main(
 
       /* 12.5% drop on top of the silent process, matching the
        * white-box testBprByzantineSilent setup. */
-      rc = runWithRetry(n, vLen, mp, acasts, 12, 3 /* silentProcess */,
+      rc = runWithRetry(n, vLen, acasts, 12, 3 /* silentProcess */,
                        5000, processes, obs,
                        &maxRetryActs, &monotoneViolations);
       CHECK(rc == 0, "C7: silent Byzantine process -- honest processes converge");
@@ -3004,7 +3004,7 @@ main(
      * exit: the per-process progress count advances only when AcastInput /
      * BAInput returns nacts > 0.  BPR Retry keeps retrying
      * un-retired actions (READY forever; INITIAL/ECHO until accept)
-     * onto already-delivered wires (pitfalls 10/11); if those
+     * onto already-delivered wires (Notes 10/11); if those
      * re-deliveries returned acts > 0, the barren-sweep count would
      * never reach S and the exit could never form.
      *
@@ -3034,7 +3034,7 @@ main(
       for (i = 0; i < n; ++i)
         acasts[i * vLen] = (unsigned char)(0xA0 + i);
 
-      actsCap = BKR94ACS_MAX_ACTS(n - 1, mp);
+      actsCap = BKR94ACS_MAX_ACTS(n - 1);
       out = (struct bkr94acsAct *)malloc(actsCap * sizeof (*out));
       if (out) {
         qReset();
@@ -3072,7 +3072,7 @@ main(
             }
             observeAndOutput(&obs[w.to], w.to, n, out, nDeliv, vLen, 0, -1);
             drainTurns(processes[w.to], &obs[w.to], w.to, n, vLen, out, 0, -1);
-            nDeliv = bkr94acsFanout(processes[w.to], out);
+            nDeliv = bkr94acsFanout(processes[w.to], 1, out);
             observeAndOutput(&obs[w.to], w.to, n, out, nDeliv, vLen, 0, -1);
           }
           for (i = 0; i < n; ++i) {
@@ -3081,7 +3081,7 @@ main(
                            vLen, 0, -1);
             drainTurns(processes[i], &obs[i], (unsigned char)i, n, vLen, out,
                        0, -1);
-            nDeliv = bkr94acsFanout(processes[i], out);
+            nDeliv = bkr94acsFanout(processes[i], 1, out);
             observeAndOutput(&obs[i], (unsigned char)i, n, out, nDeliv,
                            vLen, 0, -1);
           }
@@ -3148,7 +3148,7 @@ main(
      * forever -- the round space is consumed). */
     unsigned long sz;
     struct bkr94acs *a;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
     unsigned int round, b, n, k;
     unsigned int exhaustedSeen = 0;
 
@@ -3203,7 +3203,7 @@ main(
     struct bkr94acs *a;
     struct bracha87Retry cursor;
     struct bkr94acsAct out[BKR94ACS_RETRY_MAX_ACTS];
-    struct bkr94acsAct synthOut[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
+    struct bkr94acsAct synthOut[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
     unsigned int round, b, j, k, n;
     unsigned int exhaustedSeen = 0;
     unsigned int process0Retries = 0;
@@ -3285,7 +3285,7 @@ main(
       { unsigned int oi; for (oi = 0; oi < MAX_PROCESSES; ++oi) obsInit(&obs[oi]); }
       qReset();
 
-      actsCap = BKR94ACS_MAX_ACTS(n - 1, mp);
+      actsCap = BKR94ACS_MAX_ACTS(n - 1);
       out = (struct bkr94acsAct *)malloc(actsCap * sizeof (*out));
       if (!out) { freeCluster(processes, n); goto e1_done; }
 
@@ -3332,7 +3332,7 @@ main(
                                           w.baValue, out);
           observeAndOutput(&obs[w.to], w.to, n, out, nact, vLen, 0, -1);
           drainTurns(processes[w.to], &obs[w.to], w.to, n, vLen, out, 0, -1);
-          nact = bkr94acsFanout(processes[w.to], out);
+          nact = bkr94acsFanout(processes[w.to], 1, out);
           observeAndOutput(&obs[w.to], w.to, n, out, nact, vLen, 0, -1);
         }
         for (p = 1; p < n; ++p) {
@@ -3341,7 +3341,7 @@ main(
                          0, -1);
           drainTurns(processes[p], &obs[p], (unsigned char)p, n, vLen, out,
                      0, -1);
-          nact = bkr94acsFanout(processes[p], out);
+          nact = bkr94acsFanout(processes[p], 1, out);
           observeAndOutput(&obs[p], (unsigned char)p, n, out, nact, vLen,
                          0, -1);
         }
@@ -3519,7 +3519,7 @@ main(
   /* ---------------------------------------------------------------- */
   {
     struct bracha87Retry cursors[4];
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, 2)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
     struct bkr94acsAct acastOut[1];
     struct wire w;
     unsigned int tolSweeps, fanActs;
@@ -3606,7 +3606,7 @@ main(
               }
               observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
             }
-          n = bkr94acsFanout(processes[p], out);
+          n = bkr94acsFanout(processes[p], 1, out);
           if (n) {
             if (quiesced[p]) {
               quiesced[p] = 0;
@@ -3744,7 +3744,7 @@ main(
               "F2: delayed process's BA decided 1");
         CHECK(bkr94acsFanoutDuty(processes[p]) == BKR94ACS_DUTY_MET,
               "F2: duty MET with nothing given up");
-        CHECK(bkr94acsFanout(processes[p], fout) == 0,
+        CHECK(bkr94acsFanout(processes[p], 1, fout) == 0,
               "F2: fanout at MET outputs nothing");
       }
       freeCluster(processes, 4);
@@ -3881,7 +3881,7 @@ main(
      * cascade; BA_DECIDED / COMPLETE / BA_EXHAUSTED emerge only from
      * bkr94acsTurn.  The fanout is not called either -- step 2 needs
      * n-t BAs decided 1, which no delivery can produce. */
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     struct bkr94acsAct acastOut[1];
     struct wire w;
     unsigned int n, p, b;
@@ -3958,7 +3958,7 @@ main(
      * patience verdict. */
     unsigned long sz;
     struct bkr94acs *a;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     unsigned int dummy = 0;
     unsigned int sentBefore;
     unsigned int sawNextRound = 0;
@@ -4010,7 +4010,7 @@ main(
      * turn is free -- it fires with patienceElapsed == 0. */
     unsigned long sz;
     struct bkr94acs *a;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     unsigned int dummy = 0;
     unsigned int n, k;
 
@@ -4049,7 +4049,7 @@ main(
      * either out of rounds or has no complete round left: HELD
      * everywhere, and a further turn outputs nothing. */
     unsigned int nAct = 4, t = 1, vLen = 1, mp = 10;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 10)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     unsigned int p, b;
 
     if (allocCluster(processes, nAct, t, vLen - 1, mp) == 0) {
@@ -4058,7 +4058,7 @@ main(
       for (i = 0; i < nAct; ++i)
         acasts[i * vLen] = (unsigned char)(0x60 + i);
 
-      runHonest(nAct, vLen, mp, acasts, 0 /*ordered*/, processes, obs);
+      runHonest(nAct, vLen, acasts, 0 /*ordered*/, processes, obs);
 
       for (p = 0; p < nAct; ++p) {
         CHECK(processes[p]->complete, "G4: the zero-patience drain converged");
@@ -4098,7 +4098,7 @@ main(
     struct bkr94acs *processes[MAX_PROCESSES];
     struct processObs obs[MAX_PROCESSES];
     struct bracha87Retry cursors[MAX_PROCESSES];
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, 4)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
     struct bkr94acsAct acastOut[1];
     unsigned char acasts[4];
     struct wire w;
@@ -4197,7 +4197,7 @@ main(
               }
               observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, drop, -1);
             }
-          n = bkr94acsFanout(processes[p], out);
+          n = bkr94acsFanout(processes[p], 1, out);
           if (n) {
             if (quiesced[p]) {
               quiesced[p] = 0;
@@ -4270,7 +4270,7 @@ main(
   {
     struct bracha87Retry cursors[4];
     struct sweepPolicy pol[4];
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 2)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     struct bkr94acsAct acastOut[1];
     struct iWitness wit;
     unsigned char side[4];
@@ -5037,7 +5037,7 @@ main(
   {
     struct bracha87Retry cursors[4];
     struct sweepPolicy pol[4];
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 2)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     struct bkr94acsAct acastOut[1];
     struct lWitness wit;
     unsigned char down[4];
@@ -5242,7 +5242,7 @@ main(
   {
     struct bracha87Retry cursors[4];
     struct sweepPolicy pol[4];
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 2)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     struct bkr94acsAct acastOut[1];
     unsigned char subset0[MAX_PROCESSES];
     unsigned char subsetP[MAX_PROCESSES];
@@ -5534,7 +5534,7 @@ main(
      * where the verdict is not forced. */
     unsigned long sz;
     struct bkr94acs *a;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3, 8)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     unsigned char decis[3][4];
     unsigned char enterd[3][4];
     unsigned char valcnt[3][4];

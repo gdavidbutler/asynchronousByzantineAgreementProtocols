@@ -1,7 +1,12 @@
 # Bridge from bkr94acs.dtc (paper vocabulary) to C symbols used in
-# bkr94acsAcastInput (Q(j)=1 dispatch site) and bkr94acsBaInput
+# bkr94acsAcastInput (Q(j)=1 dispatch site) and bkr94acsTurn
 # (BA_j outputs dispatch site).  The same dispatch is #include'd at both
 # sites; C-function-scoped labels keep them distinct.
+#
+# The BA-outputs site is the round TURN, not the arrival path:
+# bkr94acsBaInput only banks evidence and dispatches nothing.  An
+# earlier revision turned rounds inside that arrival path (see
+# bkr94acs.dtc, round-turn section).
 #
 # Event constants (BKR94ACS_ACS_EVENT_*) and enter constants
 # (BKR94ACS_ENTER_*) are file-local macros in bkr94acs.c; the bridge

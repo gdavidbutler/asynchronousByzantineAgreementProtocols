@@ -295,7 +295,17 @@ bkr94acsSz(
  ,unsigned int             /* maxPhases: per binary BA instance */
 );
 
-/* Initialize a BKR94 ACS instance. Caller has allocated bkr94acsSz bytes. */
+/*
+ * Initialize a BKR94 ACS instance. Caller has allocated bkr94acsSz bytes.
+ *
+ * The N binary BAs share the single (coin, coin closure) supplied here.
+ * Each is given the process index it decides on as its bracha87CoinFn
+ * instance argument, so the coin can name them apart -- without that a
+ * common coin would hand every BA in a phase the identical value.  The
+ * index is the BA's identity, not this process's, so it is the same
+ * name at every process, which is what a common coin must agree on.  A
+ * local coin ignores it and draws fresh entropy per call.
+ */
 void
 bkr94acsInit(
   struct bkr94acs *
@@ -328,13 +338,21 @@ bkr94acsInit(
  * Fanout (bkr94acsFanout, BKR94 Step 2 fired from the sweep):
  *   one BA_SEND per BA unentered at the call.  Bound: N = n + 1.
  *
- * BKR94ACS_MAX_ACTS is the umbrella: M + n + 5 (M = maxPhases *
- * BRACHA87_ROUNDS_PER_PHASE) covers every entry above with slack, so
- * one out[] sized by it serves a whole caller loop.
+ * BKR94ACS_MAX_ACTS is the umbrella -- the exact maximum over every
+ * entry above, so one out[] sized by it serves a whole caller loop.
+ * Fanout is the only entry that is not bounded by 3, which is why the
+ * umbrella scales with n at all; the max() floor matters only where
+ * n + 1 falls below 3, at the one- and two-process configurations t=0
+ * admits.
+ *
+ * Where that array lives is the caller's -- the library never
+ * allocates.  It is not the memory that matters here: struct bkr94acs
+ * is O(N^2 * maxRounds) Fig 1 instances, so at every configuration
+ * that can actually be allocated the act array is negligible beside
+ * the state it reports on.
  */
-#define BKR94ACS_MAX_ACTS(n, maxPhases) \
-  ((unsigned int)(maxPhases) * BRACHA87_ROUNDS_PER_PHASE \
-   + (unsigned int)(n) + 5)
+#define BKR94ACS_MAX_ACTS(n) \
+  ((unsigned int)(n) + 1 > 3u ? (unsigned int)(n) + 1 : 3u)
 
 /*
  * Maximum output actions from a single bkr94acsRetry call.
@@ -353,7 +371,7 @@ bkr94acsInit(
  *
  * These are Fig1 messages carrying A-Cast values.
  * Returns number of actions written to out[].
- * Caller provides out[] with room for BKR94ACS_MAX_ACTS(n, maxPhases) entries.
+ * Caller provides out[] with room for BKR94ACS_MAX_ACTS(n) entries.
  *
  * On BKR94ACS_ACT_ACAST_SEND:
  *   Caller broadcasts an A-Cast Fig1 message of .type
@@ -372,7 +390,7 @@ bkr94acsAcastInput(
  ,unsigned char            /* type: BRACHA87_INITIAL/ECHO/READY */
  ,unsigned char            /* from: sender of this message */
  ,const unsigned char *    /* value: vLen + 1 bytes */
- ,struct bkr94acsAct *     /* out: actions, room for BKR94ACS_MAX_ACTS(n, maxPhases) */
+ ,struct bkr94acsAct *     /* out: actions, room for BKR94ACS_MAX_ACTS(n) */
 );
 
 /*
@@ -380,7 +398,7 @@ bkr94acsAcastInput(
  *
  * These are Fig1 messages for the binary BA on process's inclusion.
  * Returns number of actions written to out[].
- * Caller provides out[] with room for BKR94ACS_MAX_ACTS(n, maxPhases) entries.
+ * Caller provides out[] with room for BKR94ACS_MAX_ACTS(n) entries.
  *
  * The BA for each process is a full Fig1+Fig3+Fig4 pipeline; this
  * entry BANKS evidence only -- the Fig1 input's echo/ready traffic
@@ -399,7 +417,7 @@ bkr94acsBaInput(
  ,unsigned char            /* type: BRACHA87_INITIAL/ECHO/READY */
  ,unsigned char            /* from: sender of this message */
  ,unsigned char            /* value: binary BA value */
- ,struct bkr94acsAct *     /* out: actions, room for BKR94ACS_MAX_ACTS(n, maxPhases) */
+ ,struct bkr94acsAct *     /* out: actions, room for BKR94ACS_MAX_ACTS(n) */
 );
 
 /*
@@ -493,13 +511,13 @@ bkr94acsBaResend(
 /*
  * Query: get the decided common subset.
  * Returns count of included processes.
- * Fills processes[] with the included process indices (caller provides n entries).
+ * Fills processes[] with the included process indices (caller provides n + 1 entries).
  * Only valid after a->complete is non-zero.
  */
 unsigned int
 bkr94acsSubset(
   const struct bkr94acs *
- ,unsigned char *          /* processes out, n entries */
+ ,unsigned char *          /* processes out, n + 1 entries */
 );
 
 /*
@@ -527,14 +545,22 @@ bkr94acsAcastValue(
  * action (BKR94ACS_ACT_ACAST_SEND with .process = self,
  * .type = BRACHA87_INITIAL) for the caller to broadcast
  * immediately.  Thereafter bkr94acsRetry keeps outputting the same
- * ACAST_SEND/INITIAL on every sweep for as long as the F1_INITIATOR
- * flag is set on the A-Cast Fig1 (Implementation Note 11);
- * once the local loopback or process echoes set F1_ECHOED,
- * ACAST_SEND/ECHO is output alongside it; once F1_RDSENT is set,
- * ACAST_SEND/READY joins too.  All three streams retry
- * independently while their flags hold -- BPR's purpose is to
- * help OTHER processes progress, so stopping any of the streams at
- * local saturation strands them.
+ * ACAST_SEND/INITIAL on every sweep until that INITIAL retires; once
+ * the local loopback or process echoes set F1_ECHOED, ACAST_SEND/ECHO
+ * is output alongside it, and once F1_RDSENT is set, ACAST_SEND/READY
+ * joins too.  The three streams retire INDEPENDENTLY, each at the
+ * point it is provably owed to no correct process (Implementation
+ * Note 11, and the retry banner in bracha87.h, which states the gates):
+ *   INITIAL  at ACCEPTED, or once every process has echoed
+ *   ECHO     at ACCEPTED
+ *   READY    never on local state -- only on the remote fact that
+ *            every process has accepted AND holds this instance's
+ *            accept
+ * The sent flags themselves are never cleared, so "the flag is set" is
+ * NOT the retry condition; the gates above are.  What the gates have in
+ * common is that each is strictly stronger than local saturation:
+ * BPR's purpose is to help OTHER processes progress, so stopping a
+ * stream because this process is done with it would strand them.
  *
  * Caller reads the value back via bkr94acsAcastValue(self).
  *
@@ -580,9 +606,33 @@ bkr94acsAcast(
  *
  * Replaces the application-layer retry bookkeeping entirely.  Per-instance
  * destination masks, per-process evidence tracking, and retry
- * scheduling over an external instance list are not needed; the
- * Fig1 sent-state flags plus the BA-decision gate (see
- * bkr94acs.dtc BPR section) are the entire retry state.
+ * scheduling over an external instance list are not needed; the retry
+ * state is entirely intrinsic -- Bracha's own per-instance state (the
+ * sent flags, and the announcement bitmaps behind the READY retire)
+ * plus this layer's per-process BA decision byte.
+ *
+ * THE VERDICT GATE, this layer's one addition to Bracha's retires.
+ * Before walking an A-Cast Fig1 the sweep consults bkr94acsBaDecision
+ * for that process:
+ *   undecided (0xFF) -> retry.  Other processes may still learn
+ *     Q(j) = 1, and their Fig1 needs these echoes and readys.
+ *   decided 1         -> retry.  Post-decide continuation: a process
+ *     that has not yet observed the accept still needs the traffic, or
+ *     its own BA can reach 0 through step 2 and SubSet agreement breaks.
+ *   exhausted (0xFE)  -> retry.  No decision was made; earlier-round
+ *     traffic may still help others.
+ *   decided 0         -> SKIP.  The process is excluded from SubSet and
+ *     step 2 has already conveyed this process's entry.
+ * The BA Fig1 walk is ungated; Bpr returns 0 on unsent instances.
+ *
+ * The decided-0 skip is itself a retire, and it OUTRANKS the annotation
+ * exchange: a gated instance stops being served whether or not its
+ * announcement evidence ever completed.  So its evidence can stay
+ * permanently short while its value is accepted everywhere.  That is
+ * intended.  It also bounds the quiescence claim below -- an instrument
+ * that reads the const accessors to CHECK that every sent instance
+ * retired READY on full coverage must exempt the gated ones, or it
+ * reports a defect against a correct machine.
  *
  * Out actions:
  *   BKR94ACS_ACT_ACAST_SEND for A-Cast Fig1 retries
@@ -636,9 +686,9 @@ bkr94acsRetry(
  * advances at a sweep boundary fires one boundary late even at zero.
  *
  * THE UNIT IS THE FULL SWEEP -- one complete pass of the Retry
- * cursor over every sent Fig 1 instance, bkr94acsSentFig1Count(a)
- * calls, the same unit an abandonment policy counts barren sweeps
- * in.  That is what makes patience worth anything: a pass re-sends
+ * cursor over every sent Fig 1 instance, read off the cursor's own
+ * wrap count (below), the same unit an abandonment policy counts
+ * barren sweeps in.  That is what makes patience worth anything: a pass re-sends
  * each sent instance exactly once, so a delayed A-Cast's INITIAL
  * goes back on the wire once per sweep.  While TOLERANCE holds, the
  * same sweeps are re-carrying that traffic, so the wait is spent on
@@ -646,6 +696,48 @@ bkr94acsRetry(
  * the CURSOR'S RATE, one instance per call: a budget denominated in
  * calls rather than passes re-sends only its own count out of
  * bkr94acsSentFig1Count and can buy nothing at all.
+ *
+ * CLOSING A SWEEP: read the cursor's `sweeps` counter, which the
+ * library advances on every wrap and is the pass boundary EXACTLY.
+ * Save it, and close a pass whenever it differs from the saved value:
+ *
+ *   if (retry.sweeps != lastSweeps) { lastSweeps = retry.sweeps;
+ *                                     sweepDone = 1; }
+ *
+ * COMPARE, never assume +1 -- one call can complete two passes (one
+ * to finish a partial pass that had actions, one more to establish
+ * the next is empty and return 0).
+ *
+ * Do NOT count calls against bkr94acsSentFig1Count.  That count is an
+ * UPPER bound on the calls a pass costs, never the count itself: the
+ * cursor walks past an instance whose retries have all retired without
+ * spending a call on it, while the count still includes it (sent flags
+ * are never cleared).  Since a live pass always has some instance with
+ * output, the 0 return does not fire, and a call-counting caller
+ * closes late by the retired count -- which GROWS as a run matures,
+ * because INITIAL and ECHO retire at ACCEPTED.  The patience unit
+ * would silently stretch over the run.  The counter has none of that,
+ * and costs no walk.
+ *
+ * The one term that remains the caller's: a process parked on an
+ * earlier 0 return makes no call at all, so no library counter can
+ * advance for it.  Such a caller counts one idle pass per tick, since
+ * the pass it would have made owes nothing.
+ *
+ * PARKING IS AN OPTIMIZATION, NOT A REQUIREMENT, and skipping it is
+ * what removes that term: a caller that keeps calling every tick
+ * closes its passes on the counter alone, the whole rule in one
+ * comparison.  What it pays is a full walk of the Fig 1 instance space
+ * per tick, since a quiescent process finds nothing and returns 0 only
+ * at the end of the pass -- bounded by that space, and far below a
+ * tick at any size this state can be allocated at, because a tick is a
+ * wire rate limit and the walk is a few nanoseconds per position.
+ * Park to save that, or to report quiescence as the bundled example
+ * does; do not park believing the boundary requires it.
+ *
+ * Count the closings, not the calls.  Both the duty patience above
+ * and an abandonment policy's barren counter advance on this
+ * boundary, which is the premise the fanout's ordering rests on.
  *
  * Two sizings follow, neither independent of the patience:
  *   the cursor length -- bkr94acsSentFig1Count grows as the BAs
@@ -688,12 +780,19 @@ bkr94acsRetry(
  *              enters 1 by Step 1 and leaves the unentered set.
  *   MET        nothing unentered: moot.
  *
- * bkr94acsFanout enters 0 into every BA still unentered at the
- * call, outputting one BKR94ACS_ACT_BA_SEND per entry.  Returns 0
- * -- and changes nothing -- unless duty is TOLERANCE, so an
- * unconditional call per sweep is safe and is the simplest
- * zero-patience caller.  Firing empties the unentered set, so
- * once-per-instance is structural.
+ * bkr94acsFanout(a, patienceElapsed, out) enters 0 into every BA
+ * still unentered at the call, outputting one BKR94ACS_ACT_BA_SEND
+ * per entry.  It fires iff duty is TOLERANCE and patienceElapsed is
+ * nonzero, and returns 0 having changed nothing otherwise -- so an
+ * unconditional call per sweep is safe, and passing a literal 1 is
+ * the simplest zero-patience caller.  Firing empties the unentered
+ * set, so once-per-instance is structural.
+ *
+ * Same shape as bkr94acsTurn, deliberately: both seams take the
+ * caller's verdict and gate on it internally.  They differ only in
+ * what MET means -- Turn's MET is a full sample and fires free, this
+ * one's is an empty unentered set and is moot, so MET here needs no
+ * elapsed signal because there is nothing left to enter.
  */
 unsigned char
 bkr94acsFanoutDuty(
@@ -703,6 +802,7 @@ bkr94acsFanoutDuty(
 unsigned int
 bkr94acsFanout(
   struct bkr94acs *
+ ,unsigned char            /* patienceElapsed: caller's patience verdict */
  ,struct bkr94acsAct *     /* out: room for n + 1 entries (BKR94ACS_MAX_ACTS covers it) */
 );
 
@@ -839,7 +939,7 @@ bkr94acsBaEntered(
  * answers the size of that set, this answers the set.
  *
  * Returns the count and fills senders[] and values[] (caller provides
- * n entries each), forwarding bracha87Fig3GetValid for the BA's Fig 3
+ * n + 1 entries each), forwarding bracha87Fig3GetValid for the BA's Fig 3
  * at its next round.  A VALID set's elements are the paper's
  * (q, k, v), so senders and values are answered together; k is fixed
  * by the round.  values are the BA's binary values, carrying
@@ -869,8 +969,8 @@ unsigned int
 bkr94acsBaGetValid(
   const struct bkr94acs *
  ,unsigned char            /* process: which process's BA */
- ,unsigned char *          /* senders out, n entries */
- ,unsigned char *          /* values out, n entries */
+ ,unsigned char *          /* senders out, n + 1 entries */
+ ,unsigned char *          /* values out, n + 1 entries */
 );
 
 /*
@@ -934,7 +1034,7 @@ bkr94acsAcastSkip(
  * evidence -- a sent Fig1 retires its READY only when its
  * accepted-process bitmap (bracha87Fig1Received) covers all n -- while
  * the retry's 0 return is the weaker derived fact: a machine that
- * retired READY on the forbidden LOCAL accept (pitfalls 10/16) also
+ * retired READY on the forbidden LOCAL accept (Notes 10/16) also
  * returns 0, sooner.  A caller or instrument that CHECKS the
  * claim rather than infers it reads the instance: bracha87Fig1Value
  * non-null is the sent test (both ready paths require ECHOED, so
@@ -943,6 +1043,13 @@ bkr94acsAcastSkip(
  * remote all-accepted gate -- the distinction the 0 return cannot
  * show.  Every other bracha87Fig1 reader (Skip, AllEchoed) composes
  * the same way.
+ *
+ * SCOPE THE CHECK TO THE INSTANCES THE RETRY STILL SERVES.  An A-Cast
+ * whose BA decided 0 is skipped by the verdict gate (see
+ * bkr94acsRetry), and the gate outranks the annotation exchange, so its
+ * evidence may never complete.  A checker that asserts full coverage
+ * over every sent instance reds against the correct machine; filter on
+ * bkr94acsBaDecision != 0 first.
  */
 const struct bracha87Fig1 *
 bkr94acsAcastFig1(
@@ -967,8 +1074,27 @@ bkr94acsBaFig1(
  * that ahead-round Fig1 ECHOED (and retry-retried) while the local
  * baNextRound lags.
  *
- * Useful for sizing tick cadence: at one Fig1 advance per Retry
- * call, the per-Fig1 retry rate is roughly tick / (count + 1).
+ * DIAGNOSTIC, and an UPPER BOUND -- never the length of a sweep.  The
+ * sent flags are never cleared, so this keeps counting an instance
+ * whose retries have all retired, while bkr94acsRetry walks past that
+ * instance inside a call without spending one on it.  The gap is the
+ * retired count and it GROWS as a run matures.  Do not close a pass by
+ * counting calls against this: read the cursor's `sweeps` wrap count,
+ * which is the boundary exactly (see the sweep-side banner above).
+ *
+ * What it is still good for, both resting on the bound rather than on
+ * an equality:
+ *   - Disambiguating a 0 return.  Retry returns 0 both before anything
+ *     has been sent and once every sent instance has retired; a
+ *     nonzero count here separates quiescence from the pre-broadcast
+ *     idle.
+ *   - A worst-case time bound.  A pass costs AT MOST this many calls,
+ *     so an abandonment gate of S sweeps fires within
+ *     S * count * tick.  The over-estimate is what makes it sound for
+ *     a worst case, and useless for a schedule.
+ *   - Cadence sizing, read the same way: a sent instance is revisited
+ *     at most every count calls, so tick * count bounds its retry
+ *     interval from above.
  *
  * Returns 0 on null state.
  */

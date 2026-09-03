@@ -42,7 +42,7 @@
 #     case (iii) otherwise: value_p := coin_i
 #     advance to phase i+1, step 1
 #
-# Bracha pitfall 1 (post-decide continuation): a process that has
+# Bracha Note 1 (post-decide continuation): a process that has
 # decided MUST continue broadcasting, with value_p := decision, until
 # the surrounding application releases it.  The "have decided"
 # guard in each step's update rule preserves the decision value

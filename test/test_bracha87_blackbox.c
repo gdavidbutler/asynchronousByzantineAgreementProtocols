@@ -163,9 +163,10 @@ broadcastFig1(unsigned char from, unsigned int nAct,
 /* ------------------------------------------------------------------ */
 
 static unsigned char
-testCoinAlt(void *closure, unsigned char phase)
+testCoinAlt(void *closure, unsigned char instance, unsigned char phase)
 {
   (void) closure;
+  (void) instance;
   return (unsigned char) (phase & 1);
 }
 
@@ -578,7 +579,7 @@ main(int argc, char **argv)
     /* Post-ACCEPT contract: INITIAL and ECHO retire (bootstrap-only;
      * accept witnesses t+1 correct readys, so amplification completes
      * the protocol without them), READY continues (it is what the
-     * amplification tail consumes -- pitfall 10). */
+     * amplification tail consumes -- Note 10). */
     act_count = bracha87Fig1Bpr(b, actions);
     {
       int saw_init = 0, saw_echo = 0, saw_ready = 0;
@@ -905,8 +906,7 @@ main(int argc, char **argv)
       int saw_init = 0, saw_echo = 0;
       for (r = 0; r < 16; ++r) {
         got = bracha87Fig1RetryStep((struct bracha87Fig1 *const *) arr, 8,
-                                   &retry, outActs,
-                                   BRACHA87_FIG1_RETRY_MAX_ACTS);
+                                   &retry, outActs);
         if (got == 0) continue;
         for (i = 0; i < got; ++i) {
           if (outActs[i].act == BRACHA87_INITIAL_ALL) saw_init = 1;
@@ -931,8 +931,7 @@ main(int argc, char **argv)
       bracha87RetryInit(&retry);
       for (r = 0; r < 32; ++r) {
         got = bracha87Fig1RetryStep((struct bracha87Fig1 *const *) idleArr, 8,
-                                   &retry, outActs,
-                                   BRACHA87_FIG1_RETRY_MAX_ACTS);
+                                   &retry, outActs);
         if (got == 0) { sawZero = 1; break; }
       }
       CHECK(sawZero, "RetryStep returns 0 on idle full sweep");
@@ -940,6 +939,66 @@ main(int argc, char **argv)
                                        8) == 0,
             "SentCount = 0 when idle");
     }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("Fig1 Retry cursor: the `sweeps` wrap count");
+  /* ---------------------------------------------------------------- */
+  /* Header (struct bracha87Retry): `sweeps` counts completed passes,   */
+  /* is zeroed by RetryInit, and must be COMPARED -- one call can       */
+  /* complete two passes, so a caller assuming +1 misses a boundary.    */
+  /* That last claim is why the contract is worded as it is, so it      */
+  /* gets a witness rather than a restatement.                          */
+  {
+    static unsigned char spool[2][512];
+    struct bracha87Fig1 *sarr[2];
+    struct bracha87Retry sretry;
+    struct bracha87Fig1Act sacts[BRACHA87_FIG1_RETRY_MAX_ACTS];
+    static const unsigned char sv[1] = { 0x5A };
+    unsigned int before;
+    unsigned int got2;
+
+    bracha87RetryInit(&sretry);
+    CHECK(sretry.sweeps == 0, "RetryInit zeroes sweeps");
+
+    for (i = 0; i < 2; ++i) {
+      sarr[i] = (struct bracha87Fig1 *) spool[i];
+      bracha87Fig1Init(sarr[i], N_ENC, T_VAL, VLEN_BIN);
+    }
+    sarr[1] = 0;                      /* one live slot, one NULL */
+    bracha87Fig1Initiator(sarr[0], sv);
+
+    /* A pass over a 2-slot array with one act-producing instance:      */
+    /* each call visits it, so each call completes exactly one pass.    */
+    before = sretry.sweeps;
+    (void) bracha87Fig1RetryStep((struct bracha87Fig1 *const *) sarr, 2,
+                                 &sretry, sacts);
+    CHECK(sretry.sweeps == before,
+          "sweeps does not advance before the cursor wraps");
+    (void) bracha87Fig1RetryStep((struct bracha87Fig1 *const *) sarr, 2,
+                                 &sretry, sacts);
+    CHECK(sretry.sweeps == before + 1, "sweeps advances once per pass");
+
+    /*
+     * THE DOUBLE ADVANCE.  Retire the instance's only retry between
+     * calls: drive it to ACCEPTED so INITIAL and ECHO retire, and
+     * record every process's accept so READY retires on the remote
+     * all-accepted gate.  The next call then wraps once carrying the
+     * previous pass's actions, finds the whole array empty, and wraps
+     * again to return 0 -- two completed passes in one call.
+     */
+    for (i = 0; i < N_ACT; ++i)
+      (void) bracha87Fig1Input(sarr[0], BRACHA87_READY,
+                               (unsigned char) i, sv, buf);
+    for (i = 0; i < N_ACT; ++i)
+      bracha87Fig1ProcessAccepted(sarr[0], (unsigned char) i);
+    before = sretry.sweeps;
+    got2 = bracha87Fig1RetryStep((struct bracha87Fig1 *const *) sarr, 2,
+                                 &sretry, sacts);
+    CHECK(got2 == 0, "retired instance yields a 0 return");
+    CHECK(sretry.sweeps >= before + 1, "sweeps advanced across the 0 return");
+    CHECK(sretry.sweeps == before + 2,
+          "one call completed TWO passes -- compare, never assume +1");
   }
 
   /* ---------------------------------------------------------------- */
@@ -1027,7 +1086,7 @@ main(int argc, char **argv)
     int sawExhausted = 0;
     sz = bracha87Fig4Sz(N_ENC, 1);
     CHECK(sz <= sizeof (fig4Buf), "fig4Buf size for EXHAUSTED test");
-    bracha87Fig4Init(fig4, N_ENC, T_VAL, 1, 0, testCoinAlt, 0);
+    bracha87Fig4Init(fig4, N_ENC, T_VAL, 1, 0, 0, testCoinAlt, 0);
     /* Round 0: 3 messages (n-t=3), no D_FLAG legal here.             */
     senders[0] = 0; values[0] = 0;
     senders[1] = 1; values[1] = 1;

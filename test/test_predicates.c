@@ -257,7 +257,7 @@ testFig4NfnCorrespondence(void) {
 
   sz = bracha87Fig4Sz(NN - 1, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
-  bracha87Fig4Init(b, NN - 1, TT, 10, 0, /*coin*/0, 0);
+  bracha87Fig4Init(b, NN - 1, TT, 10, 0, 0, /*coin*/0, 0);
   for (i = 0; i < NN; ++i) senders[i] = (unsigned char)i;
 
   total = agreed = 0;

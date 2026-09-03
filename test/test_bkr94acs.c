@@ -39,9 +39,11 @@ check(
 static unsigned char
 testCoin(
   void *closure
+ ,unsigned char instance
  ,unsigned char phase
 ){
   (void)closure;
+  (void)instance;
   return (phase % 2);
 }
 
@@ -140,7 +142,7 @@ qFanout(
   unsigned int k;
   unsigned int p;
 
-  nacts = bkr94acsFanout(st, acts);
+  nacts = bkr94acsFanout(st, 1, acts);
   for (k = 0; k < nacts; ++k)
     for (p = 0; p < n; ++p)
       qPush(BKR94ACS_CLS_BA, acts[k].process, acts[k].round,
@@ -282,7 +284,7 @@ runAcs(
   while (Qhead < Qtail) {
     struct msg *m;
     struct bkr94acs *st;
-    struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
+    struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
     unsigned int nacts;
     unsigned int nfan;
     unsigned int k;
@@ -638,7 +640,7 @@ testValues(
   while (Qhead < Qtail) {
     struct msg *m;
     struct bkr94acs *st;
-    struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
+    struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
     unsigned int nacts;
     unsigned int k;
 
@@ -865,7 +867,7 @@ testPostDecideContinuation(
 ){
   struct bkr94acs *a;
   unsigned long sz;
-  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
+  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
   unsigned int nacts;
   unsigned int N;
   unsigned int k;
@@ -998,7 +1000,7 @@ testStepTwoTrigger(
 ){
   struct bkr94acs *a;
   unsigned long sz;
-  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES, MAX_PHASES)];
+  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
   unsigned int nacts;
   unsigned int k;
   unsigned int N;
@@ -1075,7 +1077,7 @@ testStepTwoTrigger(
     check("A-Cast accepts don't enable step 2",
           bkr94acsFanoutDuty(a) != BKR94ACS_DUTY_TOLERANCE);
     check("fanout call outside TOLERANCE outputs nothing",
-          bkr94acsFanout(a, acts) == 0);
+          bkr94acsFanout(a, 1, acts) == 0);
   }
 
   check("no enter-0 output from A-Cast path", enterZeroSeen == 0);
@@ -1173,9 +1175,9 @@ testBpr(
   /* Loopback our own INITIAL through AcastInput -> Rule 1 fires,
    * ECHOED is set on acastF1(0).  INITIAL retry does NOT stop here:
    * retiring at local ECHOED would strand a process that missed the
-   * bootstrap (pitfall 11). */
+   * bootstrap (Note 11). */
   {
-    struct bkr94acsAct iout[BKR94ACS_MAX_ACTS(4, 4)];
+    struct bkr94acsAct iout[BKR94ACS_MAX_ACTS(4)];
     bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, 0, val, iout);
   }
 
@@ -1268,7 +1270,7 @@ testBpr(
     /* Bootstrap: each process A-Casts its value (binary 0 or 1
      * for this test; acasts[] strings reduce to first byte). */
     for (p = 0; p < 4; ++p) {
-      struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4, MAX_PHASES)];
+      struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
       unsigned int nAct;
       unsigned char acastVal;
 
@@ -1298,7 +1300,7 @@ testBpr(
       /* Drain network */
       while (Qhead < Qtail) {
         struct msg *m;
-        struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4, MAX_PHASES)];
+        struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4)];
         unsigned int nacts;
         unsigned int k;
 
@@ -1452,7 +1454,7 @@ testBprCursorCoverage(
    * A-Cast Fig1s on subsequent calls. */
   val[0] = 1;
   for (p = 0; p < 4; ++p) {
-    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4, 4)];
+    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
     bkr94acsAcast(processes[p], val, iact);
   }
 
@@ -1460,7 +1462,7 @@ testBprCursorCoverage(
    * acastF1(j) for j=1..3 fires Rule 1 (ECHOED).  Process 0's
    * acastF1(0) is already INITIATOR (via A-Cast). */
   for (p = 1; p < 4; ++p) {
-    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4, 4)];
+    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
     bkr94acsAcastInput(processes[0], (unsigned char)p, BRACHA87_INITIAL,
                           (unsigned char)p, val, iact);
   }
@@ -1515,7 +1517,7 @@ testAcastAllEchoed(
   void
 ){
   struct bkr94acs *a;
-  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4, 4)];
+  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4)];
   unsigned char val[1];
   unsigned long sz;
   unsigned int from;
@@ -1573,7 +1575,7 @@ testAcastAllEchoedLate(
   void
 ){
   struct bkr94acs *a;
-  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4, 4)];
+  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4)];
   unsigned char val[1];
   unsigned long sz;
   unsigned int nact;
@@ -1683,7 +1685,7 @@ testBprProcessGate(
    * Process 1: feed INITIAL from process 1 (ECHOED via Rule 1). */
   val[0] = 1;
   {
-    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4, 4)];
+    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
     bkr94acsAcast(a, val, iact);
     bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, 0, val, iact);
     bkr94acsAcastInput(a, 1, BRACHA87_INITIAL, 1, val, iact);
@@ -1720,7 +1722,7 @@ testBprProcessGate(
          process0Seen, process1Seen, call + 1);
 
   /* Now flip process 1 to decided 1 (post-decide continuation).
-   * Retry should retry process 1 (Bracha pitfall #1). */
+   * Retry should retry process 1 (Bracha Note 1). */
   testWriteDecision(a, 1, 1);
 
   /* Reset cursor by calling Init?  No -- we want to test that the
@@ -1740,7 +1742,7 @@ testBprProcessGate(
   }
   check("BPR gate: process 1 (decided 1) IS retried (post-decide)",
         process1Seen >= 1);
-  printf("    decided 1 process retried (post-decide continuation, pitfall #1)\n");
+  printf("    decided 1 process retried (post-decide continuation, Note 1)\n");
 
   free(a);
 }
@@ -1769,7 +1771,7 @@ testBaEnteredGetValid(
   void
 ){
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, 4)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
   unsigned char senders[4];
   unsigned char values[4];
   unsigned char val[1];
@@ -1821,7 +1823,7 @@ testBaEnteredGetValid(
   testWriteDecision(a, 2, 1);
   check("BaEntered: fanout duty TOLERANCE with entries outstanding",
         bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_TOLERANCE);
-  nact = bkr94acsFanout(a, out);
+  nact = bkr94acsFanout(a, 1, out);
   check("BaEntered: fanout enters the three un-entered BAs", nact == 3);
   for (b = 0; b < 4; ++b)
     check("BaEntered: 1 for every BA once the fanout has fired",
@@ -2039,7 +2041,7 @@ testBprByzantineSilent(
    * and never sends anything. */
   val = 1;
   for (p = 0; p < 3; ++p) {
-    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4, MAX_PHASES)];
+    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
     bkr94acsAcast(processes[p], &val, iact);
     for (q = 0; q < 4; ++q) {
       dropSeed = dropSeed * 1103515245u + 12345u;
@@ -2068,7 +2070,7 @@ testBprByzantineSilent(
     /* Drain network */
     while (Qhead < Qtail) {
       struct msg *m;
-      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4, MAX_PHASES)];
+      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4)];
       unsigned int nacts;
       unsigned int k;
 
@@ -2229,7 +2231,7 @@ runRetryOnlyE2e(
 
   val = 1;
   for (p = 0; p < 4; ++p) {
-    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4, MAX_PHASES)];
+    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
     bkr94acsAcast(processes[p], &val, iact);
     for (q = 0; q < 4; ++q) {
       dropSeed = dropSeed * 1103515245u + 12345u;
@@ -2248,7 +2250,7 @@ runRetryOnlyE2e(
 
     while (Qhead < Qtail) {
       struct msg *m;
-      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4, MAX_PHASES)];
+      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4)];
       unsigned int nacts;
       unsigned int k;
 
@@ -2457,7 +2459,7 @@ testExhausted(
 ){
   unsigned long sz;
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
   unsigned int round;
   unsigned int b;
   unsigned int exhaustedSeen;
@@ -2558,7 +2560,7 @@ testExhaustedAmongDecided(
 ){
   unsigned long sz;
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
   struct bkr94acsAct tout[BKR94ACS_RETRY_MAX_ACTS];
   unsigned int process;
   unsigned int round;
@@ -2725,7 +2727,7 @@ feedFig1AcceptNoTurn(
 ){
   unsigned char sender;
 
-  /* from == initiator, the only INITIAL the ingress binds (pitfall 17). */
+  /* from == initiator, the only INITIAL the ingress binds (Note 17). */
   if (sendInitial)
     (void)bkr94acsBaInput(a, process, round, initiator,
                           BRACHA87_INITIAL, initiator, value, out);
@@ -2743,7 +2745,7 @@ testExhaustedAdoptBranch(
   static const unsigned char Round1[4] = { 0, 0, 0, 1 };
   unsigned long sz;
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
   struct bkr94acsAct tout[3];   /* bkr94acsTurn bound */
   unsigned char round2[4];
   unsigned char senders[4];
@@ -2870,7 +2872,7 @@ testQuiescenceAfterExhausted(
 ){
   struct bkr94acs *processes[4];
   struct bracha87Retry cursor[4];
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
   struct bkr94acsAct tout[3];   /* bkr94acsTurn bound */
   unsigned long sz;
   unsigned int exhausted[4];
@@ -3084,7 +3086,7 @@ testTurnDutyVacuityT0(
 ){
   unsigned long sz;
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES, 1)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
   unsigned char senders[4];
   unsigned char values[4];
   unsigned int tolerance;
@@ -3210,7 +3212,7 @@ testAcastValueGate(
 ){
   struct bkr94acs *a;
   unsigned long sz;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, MAX_PHASES)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
   unsigned char val;
   unsigned char sender;
 
@@ -3320,7 +3322,7 @@ testBprSkipAccept(
   void
 ){
   struct bkr94acs *a;
-  struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4, 4)];
+  struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
   struct bracha87Retry retry;
   unsigned char val[1];
   unsigned long sz;
@@ -3385,7 +3387,7 @@ testBprSkipAccept(
 
 
 /*
- * Implementation Pitfall 17 (Note 14): an INITIAL must come from the
+ * Implementation Note 17: an INITIAL must come from the
  * instance's designated initiator (process for acasts, initiator
  * for BA).  A non-initiator INITIAL is a forged broadcast and
  * must be dropped -- otherwise Rule 1 echoes it and the (n+t)/2+1 echo
@@ -3399,13 +3401,13 @@ testForgedInitial(
   void
 ){
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4, MAX_PHASES)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
   unsigned long sz;
   unsigned char v;
   unsigned int n;
   unsigned char from;
 
-  printf("\n  Forged INITIAL rejection (pitfall 17):\n");
+  printf("\n  Forged INITIAL rejection (Note 17):\n");
 
   sz = bkr94acsSz(3, 0, MAX_PHASES);
   a = (struct bkr94acs *)calloc(1, sz);

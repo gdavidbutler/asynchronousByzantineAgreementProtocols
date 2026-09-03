@@ -112,8 +112,11 @@ no,"BA_j outputs 1",
 #               SubSet empty.  Elapsed patience is irrelevant.
 #   TOLERANCE - count >= n-t and unentered BAs remain.  Enabled.
 #               The caller counts sweeps against its patience and
-#               calls bkr94acsFanout when it elapses; a
-#               zero patience is the eager schedule.  While TOLERANCE
+#               passes the verdict to bkr94acsFanout, which fires
+#               only on TOLERANCE with the verdict set -- the same
+#               shape bkr94acsTurn takes, so an unconditional call
+#               per sweep is safe; a zero patience (a literal 1) is
+#               the eager schedule.  While TOLERANCE
 #               holds, the same sweep keeps retrying the delayed
 #               processes' A-Casts (BPR gate below: undecided ->
 #               retry), so patience is spent on exactly the
@@ -231,5 +234,5 @@ no,"Q(j) = 1",
 # to optimize; captured in C as a switch over the BA decision
 # byte rather than a sub-table (same call as the Fig1 initiator
 # INITIAL retry gate -- see bracha87Fig1.dtc BPR section).
-# The pitfall #1 (post-decide continuation) reasoning lives in
+# The Note 1 (post-decide continuation) reasoning lives in
 # the comment at the bkr94acsRetry cursor site.

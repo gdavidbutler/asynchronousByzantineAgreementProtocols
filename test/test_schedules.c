@@ -12,8 +12,8 @@
  * finds stranding (no schedule reaches quiescence), agreement
  * violation, act-contract violation, and ending-claim violation under
  * honest adversarial scheduling.  It does NOT touch the
- * Byzantine-safety arguments for the READY retire gates (repo
- * CLAUDE.md pitfall 16) -- those are other instruments' work.
+ * Byzantine-safety arguments for the READY retire gates (README
+ * Implementation Note 16) -- those are other instruments' work.
  * Deliberate non-goals: message loss, Byzantine behavior, patience
  * above zero, and coin branching.  The coin here is the
  * examples' deterministic phase%2, so every process gets the same
@@ -312,7 +312,7 @@
  *     initiator's value -- AND the ending claim itself, that every
  *     process's READY suppress mask covers all n.  Lemma 4 alone does
  *     not separate a machine that retired READY on the forbidden LOCAL
- *     accept (pitfall 10 / 16) from one that closed the remote
+ *     accept (Notes 10/16) from one that closed the remote
  *     all-accepted gate: both quiesce and both accept the one value,
  *     because there is only one value under honest-no-loss.  The mask
  *     is what says whose evidence closed it.  Lemma 4 is sound AT A
@@ -662,9 +662,11 @@ static int WitStuck;
 static unsigned char
 demoCoin(
   void *closure
+ ,unsigned char instance
  ,unsigned char phase
 ){
   (void)closure;
+  (void)instance;
   return ((unsigned char)(phase % 2));
 }
 
@@ -783,6 +785,17 @@ explore(
       h ^= Pending[p];          h *= FNV_PRIME;
       h ^= Cursor[p].pos;       h *= FNV_PRIME;
       h ^= Cursor[p].sweepActs; h *= FNV_PRIME;
+      /*
+       * Cursor[p].sweeps is DELIBERATELY out of the key, and out of
+       * the push/restore below with it.  It is monotone and unbounded
+       * -- it counts completed passes and never resets -- so keying on
+       * it would make every state unique, explode the space, and empty
+       * the frozen counts of meaning.  It is caller-facing bookkeeping
+       * (the pass boundary a patience clock reads), not protocol
+       * state: no library decision reads it, so two states equal in
+       * every other field are the same state.  Nothing in this file
+       * reads it either.
+       */
       if (Cfg->keyAllow) {
         h ^= Allow[p];
         h *= FNV_PRIME;
@@ -970,7 +983,7 @@ explore(
          * mask reaches all n, READY retires with it, and a full
          * bracha87Fig1RetryStep pass owes nothing".  The 0 return
          * alone is the weaker fact -- a machine that retired READY at
-         * LOCAL accept (pitfall 10 / 16, the forbidden gate) would
+         * LOCAL accept (Notes 10/16, the forbidden gate) would
          * also return 0, quiesce sooner, and still satisfy Lemma 4,
          * because every honest process here accepts the one value
          * either way.  What separates the two is WHOSE evidence closed
@@ -1019,7 +1032,7 @@ explore(
           }
         /* THE ENDING CLAIM, per owned Fig 1 instance -- checked, not
          * inferred from the Retry 0 return, the same distinction the
-         * surface-1 arm turns on (pitfalls 10/16): at quiescence a
+         * surface-1 arm turns on (Notes 10/16): at quiescence a
          * SENT instance is ECHOED (a never-echoed initiator can
          * retire INITIAL neither way -- ACCEPTED needs readySent
          * needs echoed, and all-echoed counts the initiator's own
@@ -1316,8 +1329,8 @@ explore(
     if (Cfg->surface == 1) {
       F1p = (struct bracha87Fig1 *)Img[Self];
 
-      /* The caller-side forged-INITIAL filter (repo CLAUDE.md pitfall
-       * 17): the bare Fig 1 entry is not told its designated
+      /* The caller-side forged-INITIAL filter (README Implementation
+       * Note 17): the bare Fig 1 entry is not told its designated
        * initiator, so a bare-layer caller must drop a non-initiator
        * INITIAL before it reaches the echo cascade. */
       if (KEY_FLD(key, KEY_TYPE_SH, 2) == BRACHA87_INITIAL
@@ -1450,8 +1463,7 @@ explore(
        * one-element array, so this call IS a full pass. */
       F1arr[0] = (struct bracha87Fig1 *)Img[Self];
       bracha87RetryInit(&F1cursor);
-      NActs = bracha87Fig1RetryStep(F1arr, 1, &F1cursor, Pacts,
-                                    BRACHA87_FIG1_RETRY_MAX_ACTS);
+      NActs = bracha87Fig1RetryStep(F1arr, 1, &F1cursor, Pacts);
       if (NActs > BRACHA87_FIG1_RETRY_MAX_ACTS) {
         FailMsg = "bracha87Fig1RetryStep exceeded its act bound";
         goto fail;
@@ -1531,7 +1543,7 @@ explore(
      * what the eliminated fanoutTicks reduced to and is doubly
      * redundant with bkr94acsFanout's own guard. */
     if (bkr94acsFanoutDuty(Acsp) == BKR94ACS_DUTY_TOLERANCE) {
-      NActs = bkr94acsFanout(Acsp, Acts);
+      NActs = bkr94acsFanout(Acsp, 1, Acts);
       if (NActs > N) {
         FailMsg = "bkr94acsFanout output more than N acts";
         goto fail;

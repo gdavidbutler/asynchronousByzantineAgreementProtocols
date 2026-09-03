@@ -218,7 +218,10 @@ fig1RdCnt(
  * ready each fire at most once per process), so the bitmap -- not the
  * per-value tally -- is the authoritative "has this process moved past
  * the point where it consumes the retry" record the BPR retire gates
- * need.  O(N/8); only the once-per-tick Bpr slow path calls it.
+ * need.  O(N), a bit at a time.  Called from the once-per-tick Bpr
+ * slow path (twice: the INITIAL all-echoed retire and the READY
+ * suppress-coverage retire) and from bracha87Fig1AllEchoed, which is
+ * public and carries no rate limit of its own.
  */
 static unsigned int
 fig1FromCnt(
@@ -425,20 +428,22 @@ bracha87Fig1Bpr(
    * ACCEPTED is the locally-observable proof that this point has
    * passed: accept requires 2t+1 distinct readys, of which at most
    * t are byzantine, so >= t+1 came from correct processes.  Those
-   * correct processes have RDSENT and retry (ready, v) forever
-   * (READY never retires), so under fair loss every correct process
+   * correct processes have RDSENT and retry (ready, v) for as long as
+   * anyone can still consume it -- READY has no LOCAL retire, and its
+   * remote one needs every process accepted and holding this accept,
+   * which none of them do yet here -- so under fair loss every correct process
    * eventually collects t+1 of them, amplifies, sends ready, and --
    * once n-t >= 2t+1 correct readys circulate -- accepts.  No
    * INITIAL or ECHO is consumed anywhere in that tail.  So once THIS
    * instance has ACCEPTED, its INITIAL and ECHO retries are provably
    * dead weight: retire them.
    *
-   * This is NOT the forbidden local-saturation gate.  Pitfall 11
+   * This is NOT the forbidden local-saturation gate.  Note 11
    * forbids retiring INITIAL at merely ECHOED -- correct, because at
    * local-echo time no readys may exist yet, so the rescue set is
    * not established and the bootstrap is still load-bearing.
    * ACCEPTED is strictly stronger: it is the witness that the t+1
-   * correct readys now exist.  (Pitfall 10's ban on retiring READY
+   * correct readys now exist.  (Note 10's ban on retiring READY
    * at accept is untouched -- READY is exactly what the amplification
    * tail consumes; see the READY output below.)  Input keeps recording
    * per-sender echoes and readys past accept, so the all-echoed retire
@@ -505,14 +510,15 @@ bracha87Fig1Bpr(
      * ECHO retires at ACCEPTED for the same reason as INITIAL: once
      * t+1 correct readys exist (witnessed by this instance's accept),
      * every correct process reaches accept on readys alone, via
-     * amplification, with no echo consumed.  READY does NOT retire
-     * (pitfall 10) -- it is precisely what that amplification tail
-     * consumes, so it retries forever until application abandonment.
+     * amplification, with no echo consumed.  READY does NOT retire HERE
+     * (Note 10) -- it is precisely what that amplification tail
+     * consumes, so ACCEPTED must not touch it.  Its own retire is the
+     * remote one immediately below.
      */
     if (retryEcho && !(b->flags & BRACHA87_F1_ACCEPTED))
       out[nout++] = BRACHA87_ECHO_ALL;
     /*
-     * READY never retires on LOCAL state (pitfall 10): an accepted process
+     * READY never retires on LOCAL state (Note 10): an accepted process
      * still owes (ready, v) to processes below 2t+1.  But it DOES retire on
      * the REMOTE fact that every process has accepted AND holds this
      * instance's own accept -- then no process consumes a ready anywhere
@@ -1158,10 +1164,11 @@ bracha87Fig3RoundComplete(
 
 /*
  * Figure 4 embeds a Figure 3 instance.
- * The N function implements the three round-specific functions:
- *   Round 3i   (sub 0): majority
- *   Round 3i+1 (sub 1): decision check
- *   Round 3i+2 (sub 2): (handled directly in fig4, N not needed)
+ * The N function implements all three round-specific functions; the
+ * accurate per-round list is on fig4Nfn just below.  The two roles are
+ * distinct and both are needed at every sub: N decides what VALID^k
+ * ADMITS, and fig4Round decides what this process DOES with the
+ * admitted set.
  */
 
 /*
@@ -1350,6 +1357,7 @@ bracha87Fig4Init(
  ,unsigned char t
  ,unsigned char maxPhases
  ,unsigned char initialValue
+ ,unsigned char instance
  ,bracha87CoinFn coin
  ,void *coinClosure
 ){
@@ -1361,6 +1369,7 @@ bracha87Fig4Init(
   b->n = n;
   b->t = t;
   b->maxPhases = maxPhases;
+  b->instance = instance;
   b->phase = 0;
   b->subRound = 0;
   b->value = initialValue;
@@ -1459,7 +1468,7 @@ bracha87Fig4Round(
   if (adoptV)
     b->value = dmax;
   if (setCoin)
-    b->value = b->coin(b->coinClosure, ph);
+    b->value = b->coin(b->coinClosure, b->instance, ph);
 
   /* Procedural advance + return code.  Phase advance happens only at
    * end-of-phase (sub=2); the decide/exhausted/maxPhases return
@@ -1516,6 +1525,7 @@ bracha87RetryInit(
   if (p) {
     p->pos = 0;
     p->sweepActs = 0;
+    p->sweeps = 0;
   }
 }
 
@@ -1543,12 +1553,22 @@ bracha87RetryInit(
  * (all retries retired).  Neither is a per-tick termination signal
  * by itself.
  *
- * Termination is the application's responsibility: count RetryStep
- * calls across ticks; one sweep = (bracha87Fig1SentCount
- * return value) RetryStep calls; S consecutive barren sweeps = exit.
- * See README.md "Abandonment."  Bounded: at most one wrap
- * per call (one to drain a partial sweep with actions, one to
- * detect truly-idle).
+ * Termination is the application's responsibility: count completed
+ * sweeps across ticks; S consecutive barren ones = exit.  See
+ * README.md "Abandonment."
+ *
+ * A sweep ends when the cursor's `sweeps` wrap count changes, which is
+ * the pass boundary exactly.  COMPARE it against a saved value: a call
+ * performs at most two wraps -- one to finish a partial sweep that had
+ * actions, and one more to establish that the next pass is empty,
+ * which returns 0 -- so a caller assuming +1 misses a boundary.
+ *
+ * Do not count calls against bracha87Fig1SentCount instead.  That is an
+ * UPPER bound on the calls a sweep costs, never the count itself: an
+ * instance whose retries have all retired is walked past inside a call
+ * without spending one, while the count still includes it (the sent
+ * flags are never cleared), so the error is the retired count and it
+ * grows as a run matures.
  */
 unsigned int
 bracha87Fig1RetryStep(
@@ -1556,7 +1576,6 @@ bracha87Fig1RetryStep(
  ,unsigned int count
  ,struct bracha87Retry *p
  ,struct bracha87Fig1Act *out
- ,unsigned int outCap
 ){
   unsigned int idx;
   unsigned char acts[3];
@@ -1564,13 +1583,13 @@ bracha87Fig1RetryStep(
   unsigned int i;
   const unsigned char *v;
 
-  if (!instances || !p || !out || !count
-   || outCap < BRACHA87_FIG1_RETRY_MAX_ACTS)
+  if (!instances || !p || !out || !count)
     return (0);
 
   for (;;) {
     if (p->pos >= count) {
       p->pos = 0;
+      ++p->sweeps;
       if (p->sweepActs == 0)
         return (0);
       p->sweepActs = 0;
