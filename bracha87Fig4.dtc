@@ -10,8 +10,9 @@
 # event, Figure 4 updates the local value, may decide, and
 # broadcasts for the next step.
 #
-# "Wait until validate n-t k-messages" is enabling evidence in the
-# paper's asynchronous model (unbounded finite delay, no clocks),
+# Each step's "Wait until validate n - t (3i+1)-messages" -- and its
+# 3i+2 and 3i+3 counterparts -- is enabling evidence in the paper's
+# asynchronous model (unbounded finite delay, no clocks),
 # not a moment: the proofs hold for ANY >= n-t validated sample,
 # and the validated set keeps growing past n-t.  This layer
 # therefore exposes the round turn as a caller-shaped seam --

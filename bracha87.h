@@ -33,11 +33,13 @@
  * Fig 3 refines Fig 2: replaces receive with validate (VALID sets).
  *
  * Each module boundary matches the paper exactly.
- * Proofs apply per-module: Lemmas 1-4 and Theorems 1 and 4-5 to Fig1
+ * Proofs apply per-module: Lemmas 1-4 and Theorems 1 and 5 to Fig1
  * (Theorem 5 names Fig1 the weak-termination Byzantine Generals
  * protocol: a faulty initiator's broadcast may never accept, and no
  * correct process can tell), Lemmas 5-7 to Fig2/3, Lemmas 8-10 and
- * Theorems 2-3 to Fig4.
+ * Theorems 2-3 to Fig4.  Theorem 4 is the general Byzantine Generals
+ * impossibility -- it constrains what this library can promise, but
+ * its proof names no figure.
  *
  * Operational limits:
  *   n:         unsigned char, encodes process count 1..256 (n + 1)
@@ -94,9 +96,10 @@
 /*  BRACHA87_F1_ACCEPTED already set -- a READY output is never proof    */
 /*  that the instance has not yet accepted.                              */
 /*                                                                       */
-/*  Paper typo: Fig. 1 says "(n+t)/2 (echo,v) messages" but the          */
-/*  Lemma 1 proof says "more than (n+t)/2." The proof requires           */
-/*  strict > for the pigeonhole argument. Code follows the proof.        */
+/*  Fig. 1 states the threshold as a bare "(n+t)/2 (echo,v)              */
+/*  messages" -- no relation symbol -- and the Lemma 1 proof             */
+/*  supplies it: "more than (n + t)/2", strict, as the pigeonhole        */
+/*  argument needs. Code follows the proof.                              */
 /*                                                                       */
 /*  Variable convention in the rule table above:                         */
 /*    n   = actual process count (the struct field decoded; actual =     */
@@ -213,9 +216,10 @@ bracha87Fig1Init(
  * break it.  The two retirements above are the sound stops:
  * echoSenders == n means there is no un-echoed process left to
  * induce; ACCEPTED means t+1 correct readys now circulate, so
- * ready-amplification carries every correct process to accept with
- * no INITIAL consumed.  Both are strictly stronger than the
- * forbidden ECHOED gate.
+ * ready-amplification eventually carries every correct process to
+ * accept with no INITIAL consumed (Lemma 3's "eventually" is load-
+ * bearing here: under loss it is BPR that gets them there).  Both
+ * are strictly stronger than the forbidden ECHOED gate.
  *
  * Caller outputs BRACHA87_INITIAL_ALL once at initiator time and
  * relies on BPR thereafter.
@@ -291,8 +295,9 @@ bracha87Fig1Value(
  * retransmission is placed here.
  *
  * Retry the broadcast actions this instance is still owed under
- * fair-loss -- offered to recover eventual delivery without an
- * application-layer retry bookkeeping.  Returns the number of actions (0..3) to broadcast.
+ * fair-loss -- offered to recover eventual delivery without any
+ * application-layer retry bookkeeping.  Returns the number of
+ * actions (0..3) to broadcast.
  *
  * Reactive: rules fire only when called.  No wall-clock predicate
  * appears anywhere; the application's retry tick IS the event, so
@@ -854,22 +859,22 @@ bracha87Fig3RoundComplete(
  * Coin function: return 0 or 1 for the coin named by (instance, phase).
  *
  * The coin is an ORACLE, not a protocol.  Randomization is how Bracha
- * meets FLP: deterministic asynchronous consensus is impossible, and
- * the paper does not evade that -- it changes the termination
- * requirement, buying probabilistic termination with a source of
- * randomness taken as given.  That source must come from OUTSIDE the
- * asynchronous system.  So this call returns a value, always and
- * immediately: it cannot fail, cannot decline, and must not block or
- * perform I/O.  So a construction that must exchange messages before it
- * can answer does not belong BEHIND this callback -- not because the
- * exchange is unsound, but because there is no point in the round for
- * it to happen.  Bracha's own Section 7 does exactly such an exchange:
- * with a dealer having pre-distributed the sequence, the processes
- * "access the global coin toss by exchanging portions of it" and reach
- * an expected two phases.  Note where the randomness comes from there:
- * the dealer, before the run.  A construction that instead GENERATES
- * fresh randomness by agreement inside the run gives up what the local
- * coin keeps: BKR94 records that its secret-sharing route carries "an
+ * meets FLP (FLP82.txt): deterministic asynchronous consensus is
+ * impossible, and the paper does not evade that -- it changes the
+ * termination requirement, buying probabilistic termination with a
+ * source of randomness taken as given.  This call returns a value,
+ * always and immediately: it cannot fail, cannot decline, and must
+ * not block or perform I/O.  So a construction that must exchange
+ * messages before it can answer does not belong BEHIND this callback
+ * -- not because the exchange is unsound, but because there is no
+ * point in the round for it to happen.  Bracha's own Section 7 does
+ * exactly such an exchange: with a dealer having pre-distributed the
+ * sequence, the processes "access the global coin toss by exchanging
+ * portions of it" and reach an expected two phases.  Note where the
+ * randomness comes from there: the dealer, before the run.  A
+ * construction that instead GENERATES fresh randomness by agreement
+ * inside the run gives up what the local coin keeps: BKR94 records
+ * that its secret-sharing route carries "an
  * exponentially small but non zero probability of not terminating",
  * against "the asynchronous Byzantine Agreement problem where the
  * randomized protocol terminates with probability 1".  It would be
@@ -978,7 +983,7 @@ bracha87Fig4Sz(
  * the round path does not branch on a null coin.
  *
  * initialValue is 0 or 1, and anything else is refused.  That is Fig
- * 4's whole domain -- VALID^1 admits only v in {0, 1} -- so a value
+ * 4's whole domain -- VALID^0 admits only v in {0, 1} -- so a value
  * carrying BRACHA87_D_FLAG or any other high bit would ride the
  * round-0 broadcast that nothing could validate, and this process
  * would count as a silent round-0 sender, spending tolerance the run
@@ -1143,8 +1148,9 @@ bracha87Fig4Init(
  * the worked example.
  *
  * WHEN TO CALL IT is the caller's, and n-t is a floor, not a moment.
- * Fig 3's "wait till n-t k-messages validated" names the evidence that
- * ENABLES the round; the asynchronous model has no moments to fire at.
+ * Fig 3's "Wait till a set S of n - t k-messages have been validated"
+ * names the evidence that ENABLES the round; the asynchronous model has
+ * no moments to fire at.
  * The validated set keeps growing past n-t -- to n, via cascades and
  * late arrivals -- and the proofs hold for ANY sample of at least n-t,
  * so the sample this call consumes is purely a function of when the

@@ -914,6 +914,30 @@ test/test_schedules.c).
 #WITH
     bkr94acsDecision(a)[process] = f4->decision;
 #END
+
+#MUTANT M35
+#FAMILY duty classification -- the fanout floor lowered to the paper's 2t+1
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs
+#LABEL fanout floor: three decided-1 at n=5 t=1 (the paper's 2t+1) reads HELD
+#EXPECT KILLED
+#WHY
+BKR94 Figure 3 step 2 fires at 2t+1 decided-1 outcomes; this library
+fires at n-t (Implementation Note 18).  The two are one integer at
+n = 3t+1, which is where every black-box arm runs, and in a lossless
+all-honest schedule every BA is entered by step 1 before any decides,
+so the duty answers MET and never reaches the comparison: the rest of
+the battery is green under this defect.  The oracle is the one arm
+that reaches the comparison off the edge -- n=5, t=1 (n-t = 4,
+2t+1 = 3), every entry outstanding, three decided-1 outcomes written
+-- and requires the classification to read HELD.  Under the mutation
+three meets 2t+1, the classification reads TOLERANCE, and the check
+goes red.
+#ANCHOR
+  if (one >= N - a->t)
+#WITH
+  if (one >= 2u * a->t + 1)
+#END
 CATALOGUE_END
 
 # ---------------------------------------------------------------------

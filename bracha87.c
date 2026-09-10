@@ -1395,7 +1395,7 @@ bracha87Fig4Init(
    * case (iii) invokes it and the round path does not branch on null.
    * maxPhases is refused at both ends for the reasons bracha87Fig4Sz
    * states, identically to Sz.  initialValue is refused outside
-   * {0, 1}: that is Fig 4's whole domain (VALID^1
+   * {0, 1}: that is Fig 4's whole domain (VALID^0
    * admits only v in {0, 1}), and a value carrying BRACHA87_D_FLAG or
    * any other high bit would ride the round-0 broadcast that no
    * receiver -- including this one -- could validate, so this process

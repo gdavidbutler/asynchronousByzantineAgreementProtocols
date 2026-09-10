@@ -53,15 +53,15 @@
  * THE TWO SURFACES ARE ASYMMETRIC, deliberately, because the loops
  * are:
  *
- *   - example/bracha87Fig1.c:625 skips a quiescent process ENTIRELY
+ *   - example/bracha87Fig1.c skips a quiescent process ENTIRELY
  *     ("if (!fig1[i] || quiescent[i]) continue"), so surface 1 gates
  *     the WHOLE tick on rotation membership.  example/bkr94acs.c
- *     wraps only the retry block in "if (!quiescent[i])" (:769-779)
- *     and runs the turns (:798-816) and the fanout (:825-843) for
- *     every process every sweep, which is exactly why it needs the
- *     re-entry-on-turn-acts logic at :808-814 and :835-838.  So
- *     surface 2 gates only the retry sub-step.
- *   - example/bracha87Fig1.c:629 re-initializes the cursor inside the
+ *     wraps only the retry block in "if (!quiescent[i])" and runs the
+ *     turns and the fanout for every process every sweep, which is
+ *     exactly why it needs to re-enter a quiesced process whenever a
+ *     turn or a fanout produces acts.  So surface 2 gates only the
+ *     retry sub-step.
+ *   - example/bracha87Fig1.c re-initializes the cursor inside the
  *     tick over a ONE-element array, so one bracha87Fig1RetryStep
  *     call IS a full pass.  Surface 2's cursor is persistent per
  *     process (retry[i]) and one bkr94acsRetryStep call advances ONE
@@ -87,7 +87,7 @@
  *               deployment can interleave a delivery inside it.
  *   acast(p)    surface 2 only, and only where a config defers it:
  *               process p's A-Cast SUBMISSION as a schedulable event.
- *               BKR94ACS.txt:112-113 -- "Each player enters his inputs
+ *               BKR94ACS.txt -- "Each player enters his inputs
  *               asynchronously as evidence accumulates" -- and the
  *               example's -d flag is exactly a deferred submission.
  *
@@ -95,7 +95,7 @@
  * class, process, round, initiator, type, the ACCEPTED bit, the
  * RECEIVED bit, from, to, and the BA binary value with its D_FLAG.
  * The RECEIVED bit is computed PER RECIPIENT at expansion
- * (bracha87.h:1000-1006), not per act, and is part of the key.  The
+ * (struct bracha87Fig1Act.received), not per act, and is part of the key.  The
  * A-Cast value bytes are a function of the A-Cast's process here --
  * honest processes, one value each, no equivocation -- so `process`
  * carries them, and the framing region asserts that identity rather
@@ -104,7 +104,7 @@
  * The pool holds COPIES of act values (here, the one-byte values
  * indexed by process).  struct bkr94acsAct.value is a borrowed
  * pointer that the next mutating library call invalidates
- * (bkr94acs.h:210-215); do not "optimize" the copy away.
+ * (struct bkr94acsAct.value); do not "optimize" the copy away.
  *
  *
  * STATE, SNAPSHOT, AND THE VISITED SET
@@ -118,7 +118,7 @@
  * whole run and snapshot/restore is byte-copy IN PLACE ONLY.  This is
  * what makes byte comparison sound: bracha87Fig4Init passes the
  * enclosing Fig 4 as the embedded Fig 3's N-closure
- * (bracha87.c:1368-1370, dereferenced as a Fig 4 at bracha87.c:1193),
+ * (bracha87Fig4Init, dereferenced as a Fig 4 in fig4Nfn),
  * and every BA's Fig 4 is carved out of the ACS state's own data[]
  * tail, so a bkr94acs image holds pointers into itself.  With the
  * allocation fixed those words are per-process constants for the run,
@@ -138,8 +138,8 @@
  * UNDER-MERGE, since equal bytes at a fixed address is equal state.
  * Over-splitting costs states and never correctness, so it is the
  * safe direction; do not "improve" this into a semantic fingerprint.
- * Every Init memsets its whole Sz extent (bracha87.c:130, :734, :860,
- * :1357; bkr94acs.c:297), so padding is deterministic.
+ * Every Init memsets its whole Sz extent (every bracha87Fig*Init, and
+ * bkr94acsInit), so padding is deterministic.
  *
  * The visited set is MEMBERSHIP-ONLY.  Nothing iterates it and no
  * printed count depends on bucket order -- the rule covers the hash
@@ -159,7 +159,7 @@
  * through it.  Turn firing then depends on duty alone -- MET fires
  * free, TOLERANCE fires on the constant-true signal -- and the
  * fanout's own >= 0 gate likewise always passes into
- * bkr94acsFanout's internal duty guard (bkr94acs.h:686-690).  At
+ * bkr94acsFanout's internal duty guard.  At
  * n = 4 the two counters would be n*n + n = 20 harness bits, a factor
  * of 2^20 on the state space of the config whose tractability is in
  * question.  THE ELIMINATION IS ZERO-PATIENCE-ONLY: patience above zero
@@ -193,7 +193,7 @@
  * a 1.5 GB visited table fills.  The blow-up is the pool: each
  * tick pushes fresh copies of contents whose count had dropped, and a
  * duplicate unmarked READY re-arms its sender after an egress consumed
- * the previous arm (bracha87.c:624-625), so copies are semantically
+ * the previous arm (bracha87Fig1ProcessResend), so copies are semantically
  * live and cannot be coalesced.  What that costs is the ONE property
  * a completed search would have had: the counts below are a
  * deterministic PREFIX under the branch order, so they are regression
@@ -208,7 +208,7 @@
  *
  * The pool grows or aborts; it never truncates.  A silent drop would
  * fake the very silence quiescence is read from -- the hazard
- * example/bracha87Fig1.c:612-616 and example/bkr94acs.c:708-712 work
+ * example/bracha87Fig1.c and example/bkr94acs.c work
  * around with their queue-index reset.
  *
  * THE TICK ALLOWANCE AND THE VISITED SET.  At the tiny configs the
@@ -260,13 +260,13 @@
  *
  *   - act-count bounds: A-Cast input <= 3, BA input <= 2, turn <= 3,
  *     retry <= BKR94ACS_RETRY_MAX_ACTS, fanout <= N, where N is the
- *     ACTUAL process count.  bkr94acs.h:326-328 writes the fanout
+ *     ACTUAL process count.  BKR94ACS_MAX_ACTS writes the fanout
  *     bound as "N = n + 1" because n is the ENCODED byte; asserting
  *     against the encoded n would be one too few and would fire on a
  *     full fanout.
  *   - the terminal acts emerge ONLY from a turn: BA_DECIDED,
  *     BA_EXHAUSTED and COMPLETE from bkr94acsBaInput would be a
- *     contract violation (bkr94acs.h:381-390).
+ *     contract violation (bkr94acsBaInput's contract).
  *   - duty monotonicity for bkr94acsFanoutDuty ONLY (MET absorbing,
  *     TOLERANCE never back to HELD).  A dedicated opening-carries-
  *     an-act clause (FanoutDuty HELD -> TOLERANCE implies a
@@ -281,7 +281,7 @@
  *     it through the fell-back clause, a witnessed fact.  bkr94acsTurnDuty is NOT
  *     monotone by design -- it classifies the BA's NEXT round, and a
  *     turn advances the round so the count legitimately restarts
- *     (bkr94acs.h:847-851) -- so the sound schedule-independent form
+ *     (bkr94acsTurn's contract) -- so the sound schedule-independent form
  *     is the WITHIN-ROUND one, asserted only across transitions in
  *     which that BA turned no round.  Both duties are functions of
  *     the image, so the pre/post pair across one transition is the
@@ -289,16 +289,16 @@
  *   - acFrom \ {self} subset of rdFrom after every ingress.  The
  *     naive subset is FALSE: the self-accept is recorded at ACCEPT
  *     with the local index and no rdFrom guard
- *     (bracha87.h:388-392, bracha87.c:585-600), while the process's
+ *     (bracha87Fig1ProcessAccepted), while the process's
  *     own (ready, v) can still be pending in the pool.
  *   - the RECEIVED mask is present only on a READY act
- *     (bracha87.h:1000-1006, bkr94acs.h:229-238).
+ *     (struct bracha87Fig1Act.received, struct bkr94acsAct.received).
  *   - HARNESS SELF-CHECKS, labeled as such because they prove framer
  *     discipline and not library behavior: a marked READY is never
  *     routed to *Resend, and the wire RECEIVED bit is set for
  *     recipient p only where the RECEIVED mask says so.  The second
  *     would be an identity at the library layer anyway --
- *     bracha87Fig1Received RETURNS acFrom (bracha87.c:679-685).
+ *     bracha87Fig1Received RETURNS acFrom.
  *   - single input per BA: bkr94acsBaEntered latched once entered.
  *   - Bracha Lemma 1 (surface 1), in its observable form: every
  *     instance whose echoed value exists carries the initiator's
@@ -319,19 +319,20 @@
  *     QUIESCENCE LEAF and only there:
  *     quiescence is the 0 return of a full pass, and an
  *     ECHOED-but-not-ACCEPTED instance always outputs ECHO_ALL
- *     (bracha87.c:511-512 gates ECHO retirement on ACCEPTED alone)
+ *     (bracha87Fig1Bpr gates ECHO retirement on ACCEPTED alone)
  *     while RDSENT implies ECHOED, so quiescence structurally implies
  *     ACCEPTED.  Pool empty.
  *   - surface 2: every process complete; |SubSet| >= n-t and never
  *     required to be n, since honest exclusion is legal
- *     (BKR94ACS.txt:201-206); SubSet byte-identical across processes;
+ *     (BKR94ACS.txt, Remarks for implementers); SubSet byte-identical
+ *     across processes;
  *     every SubSet member's A-Cast value present and byte-equal
  *     everywhere; no 0xFE anywhere -- sound ONLY under the class
  *     precedence above.  Pool empty.  AND the ending claim per owned
  *     Fig 1 instance, read through bkr94acsAcastFig1 / bkr94acsBaFig1:
  *     every SENT instance THE RETRY STILL SERVES has a RECEIVED mask
  *     covering all n.  The scope matters: the decided-0 retry gate
- *     (bkr94acs.c:744-777) skips an excluded process's A-Cast walk,
+ *     (bkr94acsRetryProcessGate) skips an excluded process's A-Cast walk,
  *     so there the gate itself is the retire, and a late-submitted
  *     excluded A-Cast legitimately quiesces accepted-everywhere with
  *     a short mask and outstanding arms nothing will consume.  The
@@ -380,11 +381,13 @@
  *
  * USAGE
  *
- *   test_schedules [-m] [-c states] [-D depth] [-b hashbits]
- *                  [-w witness] config
+ *   test_schedules [-m] [-k ticks] [-c states] [-D depth]
+ *                  [-b hashbits] [-w witness] config
  *
  *   config      1 | 2 | 3a | 3b | 4 | smoke | all
  *   -m          report the frozen counts, do not assert them
+ *   -k ticks    tick allowance per process override -- K above, so a
+ *               run under it is exhaustive over a SMALLER schedule set
  *   -c states   state ceiling override
  *   -D depth    depth ceiling override
  *   -b hashbits visited-table size, 1 << hashbits entries
@@ -504,7 +507,7 @@ static struct config Configs[] = {
    * and not a guess: a process must tick once to announce its accept
    * (the ACCEPTED annotation rides only on retry READYs -- an
    * Input-produced READY passes a literal 0,
-   * example/bracha87Fig1.c:599-603), once for the marked re-send the
+   * example/bracha87Fig1.c), once for the marked re-send the
    * announcement's unmarked arrival arms, and once more to read the
    * retired 0 return that IS quiescence.  It is the anchor because it
    * is the smallest shape that reaches quiescence at all, not because
@@ -1059,7 +1062,7 @@ explore(
           for (b = 0; b < N; ++b) {
             /* The decided-0 retry gate OUTRANKS the annotation
              * exchange for an excluded process's A-Cast
-             * (bkr94acs.c:744-777: BA decided 0 -> the retry skips
+             * (bkr94acsRetryProcessGate: BA decided 0 -> the retry skips
              * the A-Cast walk; the gate itself is the retire).  A
              * late-submitted excluded A-Cast can therefore quiesce
              * accepted-everywhere with a permanently short RECEIVED
@@ -1485,7 +1488,7 @@ explore(
     }
 
     /* Surface 2: the retry sub-step is rotation-gated, the turns and
-     * the fanout are not -- example/bkr94acs.c:769-843. */
+     * the fanout are not -- example/bkr94acs.c. */
     Acsp = (struct bkr94acs *)Img[Self];
 
     if (!Quiescent[Self]) {
@@ -1562,7 +1565,7 @@ explore(
       goto fail;
     }
     /* The bootstrap broadcast honors no suppress mask and marks
-     * nobody, exactly as example/bkr94acs.c:556-560 pushes it. */
+     * nobody, exactly as example/bkr94acs.c pushes it. */
     for (i = 0; i < NActs; ++i)
       for (j = 0; j < N; ++j)
         poolPush(((unsigned long)BRACHA87_INITIAL << KEY_TYPE_SH)
@@ -1978,7 +1981,7 @@ main(
 
         if (Cfg->defer == i) {
           /* A deferred submission is an EVENT, not a root fact --
-           * BKR94ACS.txt:112-113, and the example's -d is exactly this. */
+           * BKR94ACS.txt, and the example's -d is exactly this. */
           Pending[i] = 1;
           continue;
         }
@@ -2171,8 +2174,8 @@ main(
 
  usage:
   fprintf(stderr,
-    "usage: test_schedules [-m] [-c states] [-D depth] [-b hashbits]"
-    " [-w witness] config\n"
+    "usage: test_schedules [-m] [-k ticks] [-c states] [-D depth]"
+    " [-b hashbits] [-w witness] config\n"
     "  config      1 | 2 | 3a | 3b | 4 | smoke | all\n"
     "  -m          report the frozen counts, do not assert them\n"
     "  -k ticks    tick allowance per process override\n"

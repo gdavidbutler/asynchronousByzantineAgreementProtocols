@@ -71,8 +71,12 @@
 # Rule 1.  When Q(j) = 1 becomes known to me, if I have not
 # entered a value to BA_j, input 1 to BA_j.  Bracha's Lemma 3
 # (via the underlying reliable broadcast) guarantees that every
-# honest process eventually learns Q(j) = 1 if any does, so
-# every honest process eventually executes Rule 1 for j.
+# honest process eventually LEARNS Q(j) = 1 if any does.  Whether
+# it then inputs 1 is a separate question: BA semantics admit one
+# input per process, so the rows below leave BA_j alone once a
+# value has been entered -- and Step 2 enters 0 into exactly those
+# BAs "for which you haven't entered a value yet" (the paper's
+# step 2, quoted in full below), which can reach j first.
 @"input 1 to BA_j","kind of ACS event","input to BA_j"
 yes,"Q(j) = 1",none
 no,"Q(j) = 1",0
@@ -87,8 +91,9 @@ no,"BA_j outputs 1",
 # Rule 2 -- recorded here, fired from the BPR sweep.
 #
 # The paper's rule: "Upon completing 2t+1 BA protocols with output
-# 1, enter input 0 to every BA protocol for which you have not yet
-# entered a value."
+# 1, enter input 0 to all BA protocols for which you haven't entered
+# a value yet" (normalized against the scan as BKR94ACS.txt's
+# rendering note records).
 #
 # Enabling evidence, not a moment (header note above).  Fired at
 # the instant the count crosses, the fastest n-t processes close
@@ -101,9 +106,10 @@ no,"BA_j outputs 1",
 # bkr94acsFanoutDuty classifies the decision, derived by scanning
 # baDecision[] and entered[] (never stored):
 #
-#   HELD      - BA-output-1 count < n-t.  The paper's floor: enter
-#               0 below it and a mass of 0-inputs could force
-#               SubSet empty.  Elapsed patience is irrelevant.
+#   HELD      - BA-output-1 count < n-t.  The floor (the paper's is
+#               2t+1 -- Implementation Note 18): enter 0 below it
+#               and a mass of 0-inputs could force SubSet empty.
+#               Elapsed patience is irrelevant.
 #   TOLERANCE - count >= n-t and unentered BAs remain.  Enabled.
 #               The caller counts sweeps against its patience and
 #               passes the verdict to bkr94acsFanout, which fires
@@ -138,21 +144,23 @@ no,"BA_j outputs 1",
 # ================================================================
 
 # The composition's other sweep-side decision.  Bracha's Fig4 steps
-# read "Wait until validate n-t k-messages" and then compute over
-# the validated set (the majority at 3i+1, the decide/adopt
-# thresholds at 3i+3).  The set keeps growing past n-t and Bracha's
-# proofs hold for ANY >= n-t sample -- so the sample a turn
-# consumes is purely a function of WHEN the turn fires.  Turning a
-# round inside the arrival path, on the delivery that completes it,
-# consumes the first n-t -- the same eager-schedule reading Step 2
-# carries, with a different cost: not exclusion (a late round-k
-# message still validates and still serves round-k+1 validation)
-# but coin luck.  At 3i+3 the decide/adopt counts are
-# monotone thresholds (per-sender dedup: counts only grow), so a
-# fuller sample can only convert coin phases into deterministic
-# decides; at 3i+1 the majority is a comparison a fuller sample can
-# flip -- both outcomes proof-covered, the flip trading between
-# sound broadcasts, never against safety.
+# each wait on n-t validations of their own round ("Wait until
+# validate n - t (3i+1)-messages", and its 3i+2 and 3i+3
+# counterparts) and then compute over that set (the majority at
+# 3i+1, the decide/adopt thresholds at 3i+3).  The set keeps
+# growing past n-t and Bracha's proofs hold for ANY >= n-t sample
+# -- so the sample a turn consumes is purely a function of WHEN the
+# turn fires.  Turning a round inside the arrival path, on the
+# delivery that completes it, consumes the first n-t -- the same
+# eager-schedule reading Step 2 carries, with a different cost: not
+# exclusion (a late round-k message still validates and still
+# serves round-k+1 validation) but coin luck.  At 3i+3 the
+# decide/adopt counts are monotone thresholds (per-sender dedup:
+# counts only grow), so a fuller sample can only convert coin
+# phases into deterministic decides; at 3i+1 the majority is a
+# comparison a fuller sample can flip -- both outcomes
+# proof-covered, the flip trading between sound broadcasts, never
+# against safety.
 #
 # The arrival path now only BANKS evidence (Fig1 input, Fig3
 # store/validate/cascade -- Fig3 itself was always deferral-shaped:
@@ -176,8 +184,9 @@ no,"BA_j outputs 1",
 
 # Rule 3.  Upon any BA_j outputting, if all n BAs have now
 # output a value, output SubSet := { j : BA_j had output 1 }.
-# BKR94 Lemma 2 Part A guarantees |SubSet| >= 2t+1 = n-t; Part C
-# guarantees cross-process agreement on SubSet; Part D
+# BKR94 Lemma 2 Part A guarantees |SubSet| >= 2t+1, and n-t here
+# (the two coincide only at n = 3t+1; see Implementation Note 18);
+# Part C guarantees cross-process agreement on SubSet; Part D
 # guarantees Q(j) = 1 for every j in SubSet.  The "all n BAs"
 # threshold can only be reached once per ACS instance (each BA
 # outputs at most once), so this rule is naturally idempotent.

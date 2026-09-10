@@ -38,9 +38,10 @@
  * The BA round turn lives on the same sweep: bkr94acsBaInput only
  *   BANKS evidence (Fig1 traffic, Fig3 store/validate/cascade);
  *   bkr94acsTurnDuty classifies each BA's next round and
- *   bkr94acsTurn computes it -- Bracha Fig4's "wait until validate
- *   n-t k-messages" is the same enabling-evidence reading, and the
- *   sample a turn consumes is still growing when it first suffices.
+ *   bkr94acsTurn computes it -- each Fig4 step's wait on n-t
+ *   validations of its own round is the same enabling-evidence
+ *   reading, and the sample a turn consumes is still growing when
+ *   it first suffices.
  * Step 3 lives in bkr94acsTurn (BKR94ACS_ACT_COMPLETE when the
  *   turn decides the last undecided BA) and bkr94acsSubset
  *   (SubSet = { j : BA_j = 1 }).
@@ -341,10 +342,11 @@ bkr94acsInit(
  * Called from both BKR94 Step 1 (enter=1 on Fig1 ACCEPT) and BKR94
  * Step 2 (enter=0 when the caller fires bkr94acsFanout from the
  * BPR sweep).  The
- * entered[] guard enforces the paper's single-input-per-BA rule:
- * "Once a BA has received an input from Pi (1 from step 1 or 0
- * from step 2), step 1 and step 2 stop touching it -- BA semantics
- * demand a single input per player."  First caller wins.
+ * entered[] guard is the single-input-per-BA rule BA semantics
+ * demand: step 1 fires only where no value is entered, and step 2
+ * enters only into the BAs "for which you haven't entered a value
+ * yet" (the paper's step 2), so neither step can touch a BA twice.
+ * First caller wins.
  *
  * Returns number of BKR94ACS_ACT_BA_SEND actions added (0 if
  * already entered, 1 otherwise).
@@ -622,8 +624,8 @@ bkr94acsBaInput(
        * The arrival path ends here: the accept is BANKED -- stored,
        * validated, cascaded (bracha87Fig3Accept holds every message
        * and re-derives validity as prior rounds grow) -- but no
-       * round is turned.  Fig4's "wait until validate n-t
-       * k-messages" is enabling evidence over a still-growing
+       * round is turned.  Each Fig4 step's wait on n-t validations
+       * of its own round is enabling evidence over a still-growing
        * sample, so the turn fires from the BPR sweep
        * (bkr94acsTurn), caller-paced; BA_DECIDED / COMPLETE /
        * BA_EXHAUSTED emerge there, never from this entry.
@@ -693,7 +695,8 @@ bkr94acsSubset(
 
   /*
    * BKR94 Step 3 read: SubSet_i = { j : BA_j had output 1 }.
-   * Lemma 2 Part A gives |SubSet| >= 2t+1 = n-t; Part C gives
+   * Lemma 2 Part A gives |SubSet| >= 2t+1, and >= n-t here (they
+   * coincide only at n = 3t+1; Implementation Note 18); Part C gives
    * cross-process agreement on SubSet; Part D gives Q(j)=1 for every
    * j in SubSet.  Caller must gate this on a->complete to
    * observe the final subset; a mid-run read reports the partial
@@ -1036,11 +1039,12 @@ bkr94acsFanout(
   if (!a || !out)
     return (0);
   /*
-   * The TOLERANCE guard is the paper's floor: below the n-t
-   * BA-output-1 count, entering 0 is unsound (a mass of 0-inputs
-   * could force SubSet empty).  At MET nothing is unentered and
-   * the loop below would output nothing; returning early keeps the
-   * call cheap for a caller that fires unconditionally each sweep.
+   * The TOLERANCE guard is the floor: below the n-t BA-output-1
+   * count (the paper's is 2t+1, Implementation Note 18), entering 0
+   * is unsound (a mass of 0-inputs could force SubSet empty).  At
+   * MET nothing is unentered and the loop below would output
+   * nothing; returning early keeps the call cheap for a caller that
+   * fires unconditionally each sweep.
    *
    * patienceElapsed carries the caller's verdict, the same shape
    * bkr94acsTurn takes.  The two seams differ only in what MET means:

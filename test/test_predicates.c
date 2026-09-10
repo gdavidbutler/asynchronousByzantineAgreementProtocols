@@ -147,8 +147,6 @@ fig4NRef(
   unsigned int idx[NN];
   unsigned char sv[NN];
   unsigned int i;
-  unsigned char firstR;
-  int firstRc;
   int seenDeterministic;
   int seenNonDeterministic;
   int allSameDet;
@@ -166,9 +164,6 @@ fig4NRef(
   seenNonDeterministic = 0;
   allSameDet = 1;
   detR = 0;
-  firstR = 0;
-  firstRc = -2;
-  (void)firstR; (void)firstRc;
 
   do {
     int rc;
@@ -627,7 +622,6 @@ testCascadeCorrespondence(void) {
     unsigned char actualBmp[5] = {0};
     unsigned char refBmp[5] = {0};
     unsigned char accR[8], accS[8], accV[8];
-    unsigned int s;
 
     switch (perm) {
     case 0: for (i = 0; i < nMsg; ++i) order[i] = i; break;
@@ -648,12 +642,6 @@ testCascadeCorrespondence(void) {
     }
 
     /* Read actual final VALID bitmaps for rounds 0..1. */
-    for (s = 0; s < NN; ++s) {
-      unsigned char ss[NN], vv[NN];
-      unsigned int n0 = bracha87Fig3GetValid(b, 0, ss, vv);
-      unsigned int n1 = bracha87Fig3GetValid(b, 1, ss, vv);
-      (void)n0; (void)n1;
-    }
     {
       unsigned char ss[NN], vv[NN];
       unsigned int j, c;

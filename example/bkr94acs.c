@@ -23,9 +23,10 @@
  * Common Subset protocol (Ben-Or/Kelmer/Rabin 1994 Section 4
  * Figure 3, composing Bracha87 Figures 1 and 4).
  *
- * Each of N processes A-Casts a string value. The BKR94 ACS protocol
- * ensures all honest processes agree on the same common subset of
- * A-Casts (at least n-t). The subset is then sorted
+ * Each of N processes A-Casts a string value.  Agreement[Q] agrees on
+ * a subset of at least n-t PROCESS INDICES; carrying each process's
+ * value there on a Fig 1 A-Cast is this library's construction, so
+ * what the demo prints is that subset's values.  The subset is sorted
  * deterministically so every process outputs the same ordering -- the
  * deterministic ordering the caller chooses over SubSet.
  *
@@ -109,9 +110,11 @@
  *   ./example_bkr94acs -d 3 -g 1 4 1 joe sam sally tim
  *     the identical schedule under ONE sweep of patience includes it:
  *     SubSet = 4 of 4, step 2 never fires.  One sweep is what
- *     patience is worth by construction: a pass re-sends every sent
- *     instance once, so the released INITIAL reaches everyone
- *     within it.
+ *     patience is worth by construction: a full cursor pass spans
+ *     many ticks and the queue is drained every tick, so the
+ *     released INITIAL and its cascade accept everywhere inside the
+ *     pass and step 1 enters the laggard's BA before the fanout's
+ *     patience elapses.
  * What the pair deliberately shows the eager run giving up is the
  * whole demonstration; a run without -d never even enables step 2
  * (every A-Cast enters 1 before three BAs decide).

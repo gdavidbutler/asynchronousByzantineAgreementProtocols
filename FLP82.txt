@@ -1,0 +1,158 @@
+Fischer, Lynch, Paterson 1985 "Impossibility of Distributed Consensus
+with One Faulty Process"
+Journal of the ACM 32(2), April 1985, pages 374-382
+(Originally presented at the 2nd ACM Symposium on Principles of
+Database Systems, March 1983; the file is named for the technical
+report MIT/LCS/TR-282, which is how Ben-Or 1983 cites it)
+
+Scope of this extract: the model, the problem as the paper weakens it
+for the proof, the definitions the main theorem is stated over, the
+theorem, and the paper's own closing sentence on what remains
+possible.  The proof (Lemmas 1-3, bivalent configurations) is not
+summarized.  Section 4's initially-dead-processes protocol
+(Theorem 2) is noted only.
+
+The result, in the paper's own words (Section 1, p. 375):
+
+  In this paper, we show the surprising result that no completely
+  asynchronous consensus protocol can tolerate even a single
+  unannounced process death. We do not consider Byzantine failures,
+  and we assume that the message system is reliable -- it delivers
+  all messages correctly and exactly once. Nevertheless, even with
+  these assumptions, the stopping of a single process at an
+  inopportune time can cause any distributed commit protocol to fail
+  to reach agreement. Thus, this important problem has no robust
+  solution without further assumptions about the computing
+  environment or still greater restrictions on the kind of failures
+  to be tolerated!
+
+What "completely asynchronous" means (same page):
+
+  Crucial to our proof is that processing is completely asynchronous;
+  that is, we make no assumptions about the relative speeds of
+  processes or about the delay time in delivering a message. We also
+  assume that processes do not have access to synchronized clocks, so
+  algorithms based on time-outs, for example, cannot be used. (In
+  particular, the solutions in [6] are not applicable.) Finally, we do
+  not postulate the ability to detect the death of a process, so it
+  is impossible for one process to tell whether another has died
+  (stopped entirely) or is just running very slowly.
+
+The model is made deliberately strong so the impossibility reaches as
+far as possible (pp. 375-376): processes are deterministic automata
+("p acts deterministically according to a transition function");
+in one atomic step a process can attempt to receive a message,
+compute, and send a finite set of messages; an "atomic broadcast"
+capability is assumed ("if any nonfaulty process receives the
+message, then all the nonfaulty processes will"); and "Every message
+is eventually delivered as long as the destination process makes
+infinitely many attempts to receive, but messages can be delayed,
+arbitrarily long, and delivered out of order."  The message system
+"is allowed to return [the null marker] a finite number of times in
+response to receive(p), even though a message (p, m) is present in
+the buffer" (p. 376; the scan renders the null marker as "0").
+
+The problem, weakened for the proof (Section 1, p. 375):
+
+  Our impossibility result applies to even a very weak form of the
+  consensus problem. Assume that every process starts with an initial
+  value in {0, 1}. A nonfaulty process decides on a value in {0, 1}
+  by entering an appropriate decision state. All nonfaulty processes
+  that make a decision are required to choose the same value. For the
+  purpose of the impossibility proof, we require only that some
+  process eventually make a decision. (Of course, any algorithm of
+  interest would require that all nonfaulty processes make a
+  decision.) The trivial solution in which, say, 0 is always chosen
+  is ruled out by stipulating that both 0 and 1 are possible decision
+  values, although perhaps for different initial configurations.
+
+(The scan renders the set braces as "(0, 11" and "(0, 1)"; the sets
+are {0, 1}.  It also reads "conligurations" for configurations.)
+
+The definitions the theorem is stated over (Section 2, p. 377):
+
+  A consensus protocol is partially correct if it satisfies two
+  conditions:
+  (1) No accessible configuration has more than one decision value.
+  (2) For each v in {0, 1}, some accessible configuration has
+      decision value v.
+  A process p is nonfaulty in a run provided that it takes infinitely
+  many steps, and it is faulty otherwise. A run is admissible provided
+  that at most one process is faulty and that all messages sent to
+  nonfaulty processes are eventually received. A run is a deciding
+  run provided that some process reaches a decision state in that
+  run. A consensus protocol P is totally correct in spite of one
+  fault if it is partially correct, and every admissible run is a
+  deciding run. Our main theorem shows that every partially correct
+  protocol for the consensus problem has some admissible run that is
+  not a deciding run.
+
+(The scan reads "v E (0, I)" and "onefault".)
+
+The theorem (Section 3, p. 377):
+
+  THEOREM 1. No consensus protocol is totally correct in spite of one
+  fault.
+
+"Deterministic" is in the model, not in the theorem's wording: "p acts
+deterministically according to a transition function" and "Since
+processes are deterministic, the step is completely determined by the
+pair e = (p, m)" (both p. 376).
+
+The shape of the proof, in the paper's own sentence (Section 3,
+p. 378), for orientation only:
+
+  The basic idea is to show circumstances under which the protocol
+  remains forever indecisive. This involves two steps. First, we
+  argue that there is some initial configuration in which the
+  decision is not already predetermined. Second, we construct an
+  admissible run that avoids ever taking a step that would commit the
+  system to a particular decision.
+
+The window (Section 1, p. 376):
+
+  The asynchronous commit protocols in current use all seem to have a
+  "window of vulnerability" -- an interval of time during the
+  execution of the algorithm in which the delay or inaccessibility of
+  a single process can cause the entire algorithm to wait
+  indefinitely. It follows from our impossibility result that every
+  commit protocol has such a "window," confirming a widely believed
+  tenet in the folklore.
+
+Initially dead processes (Section 4, pp. 380-381; the theorem is on
+p. 381), noted only:
+
+  THEOREM 2. There is a partially correct consensus protocol in which
+  all nonfaulty processes always reach a decision, provided no
+  processes die during its execution and a strict majority of the
+  processes are alive initially.
+
+What remains possible, the paper's own closing (Section 5, p. 381):
+
+  We have shown that a natural and important problem of
+  fault-tolerant cooperative computing cannot be solved in a totally
+  asynchronous model of computation. These results do not show that
+  such problems cannot be "solved" in practice; rather, they point up
+  the need for more refined models of distributed computing that
+  better reflect realistic assumptions about processor and
+  communication timings, and for less stringent requirements on the
+  solution to such problems. (For example, termination might be
+  required only with probability 1.) Subsequent to the original
+  announcement of these results [12], progress has been made along
+  both of these lines [1-4, 9, 10, 20, 25].
+
+(The scan renders the bracketed citations as "[ 121" and "[ 1-4, 9,
+10, 20, 251".)
+
+The references that sentence points at, as the paper lists them:
+[1] Attiya, Dolev, Gil 1984 "Asynchronous Byzantine consensus";
+[2] Ben-Or 1983 "Another advantage of free choice: Completely
+asynchronous agreement protocols"; [3] Bracha 1984 "An asynchronous
+floor((n-1)/3)-resilient consensus protocol" (the floor brackets
+render as "L(n - 1)/3J"); [4] Bracha and Toueg 1983
+"Resilient consensus protocols"; [9] Dolev, Lynch, Pinter, Stark,
+Weihl 1983 "Reaching approximate agreement in the presence of
+faults"; [10] Dwork, Lynch, Stockmeyer 1984 "Consensus in the
+presence of partial synchrony"; [20] Rabin 1983 "Randomized
+Byzantine Generals"; [25] Toueg 1984 "Randomized Byzantine
+Agreements".

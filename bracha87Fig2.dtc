@@ -3,11 +3,14 @@
 #
 # Figure 2 - Abstract Protocol Round
 #
-# Figure 2 specifies the generic n-t threshold mechanism used by
-# round-based protocols built on top of the reliable broadcast
-# of Figure 1: on delivery of a round-tagged message, deduplicate
-# per (round, sender), record, and signal completion when n-t
-# distinct messages have been received for that round.
+# Figure 2 is the paper's general outline of ANY asynchronous
+# protocol round, written over Send and Receive: on delivery of a
+# round-tagged message, deduplicate per (round, sender), record,
+# and signal completion when n-t distinct messages have been
+# received for that round.  It is what Bracha abstracts OVER, and
+# it does not rest on Figure 1 -- Broadcast and Accept replace
+# Send and Receive at Figure 3, not here ("As a first step we use
+# Broadcast and Accept instead of Send and Receive", Section 3).
 #
 # In Bracha's paper, Figure 2 is the abstract protocol round
 # upon which Figure 3 specializes with the VALID^k correctness

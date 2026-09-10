@@ -529,7 +529,7 @@ assertLemma2(
 
   /* Part A: |SubSet| >= n - t for every process. */
   sz0 = bkr94acsSubset(processes[0], subset0);
-  CHECK(sz0 >= nAct - t, "Lemma 2 Part A: |SubSet| >= n-t");
+  CHECK(sz0 >= nAct - t, "Lemma 2 Part A: |SubSet| >= n-t (>= 2t+1)");
 
   /* Part C: every process's SubSet equals process 0's. */
   for (i = 1; i < nAct; ++i) {
@@ -2525,9 +2525,11 @@ main(
   {
     /*
      * From BKR94ACS.txt: "SubSet need not contain every honest
-     * player: an honest P_h whose Q-value propagates slowly ... may
-     * be excluded.  Honest exclusion is a feature of the async
-     * model, not a bug."
+     * player: an honest P_h whose "Q(h)=1" evidence reaches fewer
+     * than n-t honest players before step 2 fires for them may be
+     * excluded."  Honest exclusion is a feature of the asynchronous
+     * model rather than a defect -- Section 2's own words are that
+     * "the missing inputs are not necessarily of the faulty players".
      *
      * This banner does NOT try to engineer exclusion (which depends
      * on adversarial scheduling that the simple wire-queue

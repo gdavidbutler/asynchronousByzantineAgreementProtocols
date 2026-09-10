@@ -66,7 +66,8 @@ FLP-safe claim in the paper is the central result -- the
 probability-1 decision (Theorem 2; the coin at Fig 4 step 3 case
 (iii) is what buys it).  Much happens before and after that result,
 and none of it carries the same cover: before it, a broadcast may
-never accept (Theorems 4 and 5, Section 8 below); after it, halting
+never accept (Theorem 5's weak termination, Section 8 below --
+Theorem 4 is why nothing stronger is attainable); after it, halting
 is one unproved clause (quoted at the end of this file).
 
 The methodology, which the paper calls its main contribution
@@ -104,23 +105,37 @@ processes alone) over whatever the scheduler delivers, "for some v."
 No step waits on a named process, reads absence as information, or
 coordinates its firing with another process's step.
 
-Figure 1 -- The broadcast primitive. Pure mechanics.
+What "reliable broadcast protocol" MEANS here (Section 2, p. 133) --
+the two properties Theorem 1 establishes for Fig 1:
+
+  1. if p is correct, then all correct processes agree on the value of
+  its message;
+  2. if p is faulty then, either all correct processes agree on the
+  same value or none of them accepts any value from p.
+
+Figure 1 -- The broadcast primitive. Pure mechanics.  The ">" on the
+echo rows is the proofs' relation, not the figure's (NOTE below).
 
   in                        condition                                     out
   ---------------------------------------------------------------------------------
   in(initial, v) from p     !echoed                                       out(echo, v) to all
-  in(echo, v) from j        !echoed && echo_count[v] >= (n+t)/2          out(echo, v) to all
+  in(echo, v) from j        !echoed && echo_count[v] >  (n+t)/2          out(echo, v) to all
   in(ready, v) from j       !echoed && ready_count[v] >= t+1             out(echo, v) to all
-  in(echo, v) from j        echoed && !readySent && echo_count[v] >= (n+t)/2  out(ready, v) to all
+  in(echo, v) from j        echoed && !readySent && echo_count[v] >  (n+t)/2  out(ready, v) to all
   in(ready, v) from j       echoed && !readySent && ready_count[v] >= t+1     out(ready, v) to all
   in(ready, v) from j       readySent && ready_count[v] >= 2t+1          out(accept, v)
 
 Three paths into echo (step 1), two paths into ready (step 2), one path
 to accept (step 3). No VALID -- that is a separate abstraction.
 
-NOTE: The paper's figure says ">= (n+t)/2" but the Lemma 1 proof
-requires strict "> (n+t)/2" for the pigeonhole argument to work.
-The code follows the proof: threshold = (n+t)/2 + 1 in integer arithmetic.
+NOTE: The figure states the echo threshold as a bare quantity --
+"(n+t)/2 (echo,v) messages", carrying no relation symbol at all (the
+scan of the figure is heavily garbled: "(n +r)i2 (echo ,Y )", so the
+rendering here is reconstructed; that it carries no relation symbol
+is legible). The proofs supply the relation, and it is strict: Lemma
+1's uses "more than (n + t)/2", and the pigeonhole argument needs it
+strict. The code follows the proofs: threshold = (n+t)/2 + 1 in
+integer arithmetic.
 
 Figure 2 -- Not a protocol. The abstract form of ANY asynchronous
 protocol round:
@@ -152,7 +167,9 @@ process. This is a separate module from Figure 1 -- it wraps Accept with
 a recursive conformance check.
 
 Figure 4 -- The consensus protocol. A specific instantiation of Figure 3's
-pattern. Three rounds per phase, with specific N functions:
+pattern. Three rounds per phase, with specific N functions.  The scan
+writes the round tags bare ("3i+1-messages"); the parentheses below
+are this transcription's, for legibility:
 
   Phase(i) by process p:
 
@@ -228,6 +245,16 @@ Key properties from the paper:
 
   Termination: probability of not terminating is
   lim_{r->inf} (1 - p)^r = 0, where p > 2^{-(n-1)}.
+
+Why the paper sets Rabin's model aside (Section 1, p. 132):
+
+  In Toueg (1984) this protocol is extended to tolerate up to t < n/3
+  faulty processes. However, the model of Rabin (1983) is stronger
+  than our model. It assumes an initial stage in which a sequence of
+  coin tosses is reliably distributed to all the processes. But
+  distributed on-line generation of such a sequence of coin tosses is
+  very costly, and therefore we cannot compare this protocol to
+  protocols that run on our model.
 
 Rabin's model and the global coin (Section 7, p. 141):
 

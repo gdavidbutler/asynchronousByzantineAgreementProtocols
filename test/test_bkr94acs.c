@@ -521,7 +521,8 @@ testShuffled(
    * first, causing enter splits in some BA instances. The deterministic
    * alternating coin can resolve these splits against inclusion,
    * making the subset smaller than n-t. With a random coin, BA
-   * terminates w.h.p. and BKR94 Lemma 2 gives |SubSet| >= 2t+1 = n-t.
+   * terminates w.h.p. and BKR94 Lemma 2 gives |SubSet| >= 2t+1, and
+   * >= n-t here (equal only at n = 3t+1).
    *
    * Here we verify the hard guarantees: totality and agreement.
    */
@@ -2024,6 +2025,42 @@ testBaEnteredGetValid(
 /*  Verifies BPR retry + post-Step-2-fanout under t-Byzantine.              */
 /*--------------------------------------------------------------------------*/
 
+/*--------------------------------------------------------------------------*/
+/*  Step 2's floor is n-t decided-1 outcomes, where BKR94 Figure 3 writes   */
+/*  2t+1 (Implementation Note 18).  At n = 3t+1 the two are one integer,    */
+/*  and in a lossless all-honest run every BA is entered by step 1 before   */
+/*  any decides, so bkr94acsFanoutDuty answers MET without reaching the     */
+/*  comparison.  This arm sits at n=5, t=1 (n-t = 4, 2t+1 = 3) with every   */
+/*  entry outstanding and reads the duty at three and at four decided-1.    */
+/*--------------------------------------------------------------------------*/
+static void
+testFanoutFloorAboveEdge(
+  void
+){
+  struct bkr94acs *a;
+  unsigned long sz;
+
+  printf("\n  fanout floor above n = 3t+1:\n");
+
+  sz = bkr94acsSz(4, 0, 4);
+  a = calloc(1, sz);
+  if (!a) {
+    check("testFanoutFloorAboveEdge alloc", 0);
+    return;
+  }
+  bkr94acsInit(a, 4, 1, 0, 4, 0, testCoin, 0);
+
+  testWriteDecision(a, 0, 1);
+  testWriteDecision(a, 1, 1);
+  testWriteDecision(a, 2, 1);
+  check("fanout floor: three decided-1 at n=5 t=1 (the paper's 2t+1) reads HELD",
+        bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_HELD);
+  testWriteDecision(a, 3, 1);
+  check("fanout floor: four decided-1 at n=5 t=1 (n-t) reads TOLERANCE",
+        bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_TOLERANCE);
+  free(a);
+}
+
 static void
 testBprByzantineSilent(
   void
@@ -3517,6 +3554,7 @@ main(
   testAcastAllEchoedLate();
   testBprProcessGate();
   testBaEnteredGetValid();
+  testFanoutFloorAboveEdge();
   testBprSkipAccept();
   testBprByzantineSilent();
   testBprHighDrop();

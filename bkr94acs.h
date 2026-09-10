@@ -34,8 +34,9 @@
  *
  * BKR94 parameterizes the protocol by a predicate Q(j).  Under the
  * two paper assumptions -- (1) Q eventually equals 1 for every honest
- * process, (2) every honest process eventually learns Q(j) for every j
- * -- Protocol Agreement[Q] produces a common subset of size >= n-t of
+ * process, (2) when Q(j) is assigned, every honest process eventually
+ * learns that value (the paper says nothing about a j never assigned
+ * one) -- Protocol Agreement[Q] produces a common subset of size >= n-t of
  * processes for whom Q(j) = 1.
  *
  *   This deployment: Q(j) = "Fig1 reliable broadcast for process j
@@ -53,8 +54,11 @@
  *           every BA where you have not yet entered a value.
  *   Step 3. Once all N BAs terminate, SubSet = { j : BA_j = 1 }.
  *
- * The "2t+1" in Step 2 is n-t in the paper's regime (n = 3t+1) and
- * is the implementation threshold for all supported (n, t).
+ * The "2t+1" in Step 2 equals n-t only at n = 3t+1, the lower edge
+ * of the paper's t < n/3 regime; above it the two part company and
+ * n-t is the larger.  n-t is the implementation threshold for all
+ * supported (n, t) -- a paper-vs-code divergence recorded as
+ * Implementation Note 18 in README.md.
  *
  * Step 2's "upon" is enabling evidence in the paper's asynchronous
  * model (unbounded finite delay, no clocks), not a moment: the
@@ -64,8 +68,8 @@
  * -- closes SubSet against every honest process whose A-Cast is
  * still in flight.
  *
- * The same reading governs the BA round turn.  Bracha's Fig4 "wait
- * until validate n-t k-messages" is enabling evidence too, and the
+ * The same reading governs the BA round turn.  Each Fig4 step's wait
+ * on n-t validations of its own round is enabling evidence too, and the
  * turn computes the round -- majority, the decide thresholds --
  * over a validated sample that is still growing (n-t up to n).  So
  * the arrival path only BANKS evidence (bkr94acsBaInput stores,
@@ -128,7 +132,8 @@
 /*                       on egress, the annot argument of                 */
 /*                       bkr94acs*Input on ingress).                      */
 /*                       Unlike D_FLAG it is class-independent -- valid   */
-/*                       on an ACAST or BA READY (every Fig1 accepts).    */
+/*                       on an ACAST or BA READY (every Fig1 has an       */
+/*                       accept).                                         */
 /*    RECEIVED bit  5    (BKR94ACS_RECEIVED = 0x20): on a READY message,  */
 /*                       the sender has already recorded THIS RECIPIENT'S */
 /*                       accept -- "your accept was received here."       */
@@ -752,15 +757,17 @@ bkr94acsRetryStep(
  * BKR94 Step 2 -- the enter-0 fanout.
  *
  * The paper's rule: "Upon completing 2t+1 BA protocols with output
- * 1, enter input 0 to every BA protocol for which you have not yet
- * entered a value."  Fired at the instant the local count crosses,
- * the fastest n-t processes close SubSet against every honest
- * process whose A-Cast is still in flight.
+ * 1, enter input 0 to all BA protocols for which you haven't entered
+ * a value yet" (normalized against the scan as BKR94ACS.txt's
+ * rendering note records).  Fired at the instant the local count
+ * crosses, the fastest n-t processes close SubSet against every
+ * honest process whose A-Cast is still in flight.
  *
  * bkr94acsFanoutDuty (derived by scanning baDecision[] and the
  * entered set; nothing stored):
  *   HELD       BA-output-1 count < n-t: entering 0 is unsound
- *              (Lemma 2 Part A).
+ *              below the floor (Lemma 2 Part A's floor is 2t+1,
+ *              this library's n-t -- Implementation Note 18).
  *   TOLERANCE  count holds and unentered BAs remain: each delayed
  *              A-Cast that completes inside the patience window
  *              enters 1 by Step 1 and leaves the unentered set.
@@ -795,8 +802,9 @@ bkr94acsFanout(
 /*
  * The BA round turn -- Bracha Fig4, one round of one process's BA.
  *
- * Bracha's Fig4 steps read "Wait until validate n-t k-messages"
- * and then compute over the validated set -- the majority at
+ * Bracha's Fig4 steps each wait on n-t validations of their own round
+ * ("Wait until validate n - t (3i+1)-messages", and its 3i+2 and 3i+3
+ * counterparts) and then compute over that set -- the majority at
  * (3i+1), the decide/adopt thresholds at (3i+3).  The set keeps
  * growing past n-t (cascades, late arrivals) and the proofs hold
  * for ANY >= n-t sample -- so the sample a turn consumes is purely
@@ -883,19 +891,22 @@ bkr94acsBaDecision(
 
 /*
  * Returns 1 iff this process has entered a value into the BA for
- * 'process' -- 1 from BKR94 step 1 ("For each Pj for whom you (Pi)
- * know Q(j) = 1, participate in BA_j with input 1") or 0 from step
+ * 'process' -- 1 from BKR94 step 1 ("For each Pj for whom you know
+ * that Q(j) = 1, participate in BA_j with input 1") or 0 from step
  * 2's fanout -- else 0, and 0 on null state or out-of-range process.
  *
- * The complement is step 2's own set: "enter input 0 to every BA
- * protocol for which you have not yet entered a value."
+ * The complement is step 2's own set -- the BAs "for which you
+ * haven't entered a value yet" (the paper's step 2).
  * bkr94acsFanoutDuty reads it (MET is nothing unentered) and
  * bkr94acsFanout empties it, one BKR94ACS_ACT_BA_SEND per entry.
  *
- * Latched, per the paper's single-input rule: "Once a BA has received
- * an input from Pi (1 from step 1 or 0 from step 2), step 1 and step
- * 2 stop touching it -- BA semantics demand a single input per
- * player."  Set once, never cleared; no BA is entered twice.
+ * Latched, because BA semantics admit one input per player: once step
+ * 1 has entered 1 or step 2 has entered 0, neither step touches that
+ * BA again -- step 1 fires only where no value is entered, and step 2
+ * enters only into the BAs the paper's own clause above names.  Set
+ * once, never cleared; no BA is entered twice.  (BKR94ACS.txt draws
+ * the consequence out under Remarks for implementers; the rule itself
+ * is the two steps' guards.)
  *
  * BA_self is included: step 1 makes no exception for j == self, so
  * this process enters BA_self on the same evidence (Q(self) = 1) as

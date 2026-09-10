@@ -31,25 +31,30 @@ between honest players.
 Termination caveat, and where it does NOT attach: the paper notes its
 MPC (and the Canetti-Rabin 1993 AVSS it builds on) carries an
 exponentially small but non-zero probability of not terminating, and
-states that this is unavoidable for AVSS -- "if n < 4t then any
-t-resilient asynchronous verifiable secret sharing protocol A must
-have some probability qA > 0 of not terminating" -- with "a sketch of
-the proof" in its Section 6. That caveat attaches to the
-secret-sharing side, not to ACS. The paper draws the contrast itself
--- this "should be contrasted with the asynchronous Byzantine
-Agreement problem where the randomized protocol terminates with
-probability 1."
+states that this is unavoidable for AVSS. The paper gives the bound
+two ways. Section 1: "if n < 4t then any t-resilient asynchronous
+verifiable secret sharing protocol A must have some probability qA > 0
+of not terminating", and "A sketch of the proof appears in Section 6."
+Section 6 opens "In this section we prove that if n ~ 4i" -- the
+scan's tilde and "4i" -- and its sketch runs at "n = 4, t= 1", which
+is n = 4t, so the strict form would exclude the paper's own worked
+example. Read the Section 6 relation as n <= 4t, the bound the proof
+instantiates. That caveat attaches to the secret-sharing side, not to
+ACS. The paper draws the contrast itself -- this "should be contrasted
+with the asynchronous Byzantine Agreement problem where the randomized
+protocol terminates with probability 1."
 
 ACS takes one subprotocol as input:
 
-  BA -- binary asynchronous Byzantine Agreement.  Protocol Agreement[Q]
-    (Figure 3) is three steps and every one of them is a BA operation;
-    the Lemma 2 proof consumes BA's correctness, termination and
-    agreement properties and nothing else.  ACS is generic in it -- any binary BA
-    with those properties works, and the construction is not part of
-    the ACS interface.  The paper lists BA among its tools as "Fast
-    Asynchronous Byzantine Agreement (BA) was devised by [CR93]", which
-    is the instantiation BKR94's own MPC uses.
+  BA -- binary asynchronous Byzantine Agreement.  Protocol
+    Agreement[Q] (Figure 3) is three steps and every one of them is
+    a BA operation; the Lemma 2 proof consumes BA's correctness,
+    termination and agreement properties and nothing else.  ACS is
+    generic in it -- any binary BA with those properties works, and
+    the construction is not part of the ACS interface.  The paper
+    lists BA among its tools as "Fast Asynchronous Byzantine
+    Agreement (BA) was devised by [CR93]", which is the
+    instantiation BKR94's own MPC uses.
 
   A-Cast is NOT a subprotocol of Agreement[Q].  The paper lists it
     among the Section 2 tools -- "A simulation of an asynchronous
@@ -71,8 +76,11 @@ player Pj's value Q(j) is finally assigned, every honest player
 eventually learns it. The protocol assumes two facts about Q:
 
   1. Every honest player eventually has Q = 1.
-  2. Every honest player eventually learns the value of Q(j) for
-     every j (whatever that value is).
+  2. When Q(j) IS assigned, every honest player eventually learns
+     the value.  The paper states it conditionally -- "When a player
+     Pj is assigned his value, denoted as Q(j), it is guaranteed that
+     all the players will (eventually) learn to know this value" --
+     so it says nothing about a j whose value is never assigned.
 
 Goal: the honest players agree on a subset of size at least n - t of
 players for whom Q = 1.
@@ -81,8 +89,8 @@ The predicate Q is application-supplied. In BKR94's own MPC
 construction, Q is "player P_j has properly shared his input" -- Q(j)
 becomes 1 for honest P_j after P_j's USS-Share completes, and honest
 players learn this by observing the shared state. ACS is generic in Q;
-any monotone "eventually-1-for-honest, eventually-known-to-all"
-predicate works.
+any monotone predicate that is eventually 1 for every honest player,
+and whose assigned values eventually reach every honest player, works.
 
 
 Protocol Agreement[Q]  (Figure 3)
@@ -92,19 +100,32 @@ Code for player Pi. N BAs are run concurrently, one per player index
 (BA_1 ... BA_n). Each player enters his inputs asynchronously as
 evidence accumulates.
 
-  1. For each Pj for whom you (Pi) know Q(j) = 1, participate in
+  1. For each Pj for whom you know that Q(j) = 1, participate in
      BA_j with input 1.
 
   2. Upon completing 2t+1 BA protocols with output 1, enter input 0
-     to every BA protocol for which you have not yet entered a value.
+     to all BA protocols for which you haven't entered a value yet.
 
-  3. Upon completing all n BA protocols, let SubSet_i be the set of
-     indices j for which BA_j had output 1. Output SubSet_i.
+  3. Upon completing all n BA protocols, let your SubSet_i be the
+     set of all indices j for which BA_j had output 1. Output
+     SubSet_i.
 
-The "2t+1" threshold in step 2 is n - t in the paper's regime
-(n = 3t+1). The paper cites [BOEY91] for a technique that runs the N
-BAs with an O(log n) factor saving over naive independent execution;
-it does not change the protocol's external behavior.
+NOTE: the three steps above keep the paper's own wording, but the scan
+of Figure 3 is garbled and they are normalized against it: it reads
+"Q(J = 1" for Q(j) = 1, "participate in W" for BA_j, "2t+ 1" for 2t+1,
+"input O" for input 0, "SubSe~" for SubSet, and flattens the
+subscripts ("BAj", "SubSeti").  So quote them freely as the paper's
+words; only those renderings are this file's.
+
+The "2t+1" threshold in step 2 equals n - t only at n = 3t+1. The
+paper's regime is t < n/3, and its Section 4 opener writes the
+relation as an inequality -- a subset "of size at least n - t >=
+2t + 1" (the scan's relation glyph is a tilde) -- so above
+n = 3t+1 the two part company and 2t+1 is the looser of the pair.
+
+The paper cites [BOEY91] for a technique that runs the N BAs with an
+O(log n) factor saving over naive independent execution; it does not
+change the protocol's external behavior.
 
 
 Lemma 2 (paper's statement, paraphrased)
@@ -138,8 +159,9 @@ and the two assumptions about Q.  Nothing else.
     player Ph (assumption Q(h)=1 eventually), every honest player's
     input to BA_h is 1 (step 1). By the correctness property of the BA
     protocol, the output of each such BA_h is 1.
-    There are at least n - t = 2t+1 honest players, so at least 2t+1
-    BAs output 1.
+    There are at least n - t honest players, so at least n - t BAs
+    output 1 -- the paper writes the count as 2t+1, which n - t meets
+    at n = 3t+1 and exceeds above it.
 
 [Part B] All n BA instances terminate.
 
@@ -169,16 +191,17 @@ Remarks for implementers
 - The protocol is expressed in terms of what a single honest player
   does as events happen. Nothing is scheduled; all actions are
   triggered by completions (learning Q(j)=1, however the caller
-  carries that; BA terminations). The three steps describe "input to BA_j when you
-  learn Q(j)=1", "input 0 to still-open BAs after 2t+1 1-outputs",
-  and "read outputs once all n BAs finish."
+  carries that; BA terminations). The three steps describe "input to
+  BA_j when you learn Q(j)=1", "input 0 to still-open BAs after 2t+1
+  1-outputs", and "read outputs once all n BAs finish."
 
 - Step 1 and step 2 can fire concurrently for different j values.
   Once a BA has received an input from Pi (1 from step 1 or 0 from
   step 2), step 1 and step 2 stop touching it -- BA semantics demand
   a single input per player.
 
-- The 2t+1 threshold in step 2 is the n-t honest-majority bound. It
+- The 2t+1 threshold in step 2 is the paper's way of writing the
+  honest count, which is n-t (the two coincide at n = 3t+1). It
   cannot be lowered: without it a mass of 0-inputs could force BA_j
   to output 0 for all j (SubSet empty). It cannot be raised to
   require unanimity either: n-t is the maximum guarantee honest

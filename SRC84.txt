@@ -6,11 +6,14 @@ Computing Systems, Paris, April 1981, pages 509-512)
 Scope of this extract: the full paper is short (~10 pages) and
 load-bearing as a single principle. This summary distills the
 principle, the central case study (careful file transfer), the
-performance carve-out, and the auxiliary examples that map directly
-to BPR's design (duplicate suppression, delivery guarantees,
-identifying the ends). The historical-context and unrelated-domain
-examples (RISC, Lampson's open OS, magnetic-tape backup) are noted
-in passing only.
+performance carve-out, and three of the auxiliary examples
+(duplicate suppression, delivery guarantees, identifying the ends).
+The historical-context and unrelated-domain examples (RISC,
+Lampson's open OS, magnetic-tape backup) are noted in passing only.
+Page numbers below follow the authors' reprint (pages 1-10), not
+the ACM pagination.  The T1-T5, E1-E2 and P1-P3 labels below are
+THIS FILE'S structuring, not the paper's numbering -- the repo cites
+them, so they are kept stable.
 
 
 The principle (paper p. 2)
@@ -52,8 +55,8 @@ B over a network. Threats:
   T4 Network drops, corrupts, loses, or duplicates packets.
   T5 Either host crashes mid-transaction.
 
-Suppose the network provides "guaranteed reliable data
-transmission" via per-packet checksums, sequence numbers, and
+Suppose the network provides "a guarantee of reliable data
+transmission" via packet checksums, sequence number checking, and
 internal retry. This eliminates T4 only. T1, T2, T3, T5 still
 require an end-to-end check by the file transfer application
 (read F back from B's disk, recompute checksum, compare against
@@ -89,15 +92,19 @@ Key qualifiers:
      don't need it; (b) low layer has less information than the
      application and may do the job less efficiently.
 
-P3(b) is the operative half for BPR: Bracha's flags are precisely
-the application information a generic link layer would lack.
+On the performance-enhancement retry itself the paper is neutral
+about placement: "The end-to-end argument does not tell us where to
+put the early checks, since either layer can do this
+performance-enhancement job."  Either placement has a cost it names
+-- in the application, every application re-implements it; in the
+network, an application that does not want it pays for it anyway.
 
 
 Other examples of the end-to-end argument
 -----------------------------------------
 
 Delivery acknowledgements (p. 5):
-  An IMP-level "Request For Next Message" tells the sender the
+  The ARPANET's "Request For Next Message" tells the sender the
   network delivered the bits but says nothing about whether the
   target application acted on the message. The acknowledgement
   the sender actually wants is end-to-end: "I did it" / "I
@@ -117,7 +124,10 @@ Duplicate message suppression (p. 6):
   suppressed there. Only the application can detect its own
   duplicates. If the application must dedup anyway, that
   mechanism also catches network-introduced duplicates, so the
-  network function is redundant.
+  network function is redundant.  And the paper extends the same
+  argument from duplicated to missing messages: "The same basic
+  reasoning applies to completely omitted messages as well as to
+  duplicated ones."
 
 FIFO message delivery (p. 6):
   A virtual circuit guarantees FIFO within itself but not across
@@ -138,8 +148,8 @@ Transaction management -- SWALLOW (p. 7):
   conventional layered system.
 
 
-Identifying the ends (paper pp. 6-7)
-------------------------------------
+Identifying the ends (paper p. 7)
+---------------------------------
 
 The argument depends on identifying WHICH endpoint is "the
 application." Two voice examples illustrate:

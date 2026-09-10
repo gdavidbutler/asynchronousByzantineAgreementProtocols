@@ -706,9 +706,10 @@ main(
     }
   }
 
-  /* Lemma 4: if initiator is correct, all correct processes accept (and the
-   * value they accept is honestVal -- a stronger property than Lemma 4
-   * alone, which the demo verifies for completeness). */
+  /* Lemma 4: "if a correct process p broadcasts v then all correct
+   * processes accept v" -- the VALUE is part of the lemma, so checking
+   * the accepted bytes against honestVal is checking Lemma 4 itself and
+   * not some stronger property. */
   lemma4ok = 1;
   if (!byzSplit) {
     for (i = 0; i < n; ++i)
@@ -744,7 +745,7 @@ main(
          (acceptCount > 1) ? (lemma2ok ? "ok" : "FAIL")
                            : "n/a (fewer than 2 accepts)");
   if (!byzSplit)
-    printf("Lemma 4 (correct initiator -> all accept): %s\n",
+    printf("Lemma 4 (correct initiator -> all accept v): %s\n",
            lemma4ok ? "ok" : "FAIL");
   printf("Ending: %u of %u processes QUIESCENT in %u sweeps%s\n",
          quiesced, inRotation, sweepCount,
