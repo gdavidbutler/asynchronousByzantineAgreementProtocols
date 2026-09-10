@@ -1438,6 +1438,131 @@ iTick(
 }
 
 /* ------------------------------------------------------------------ */
+/*  Section O plumbing -- the held-instance schedule.                 */
+/*                                                                    */
+/*  The other drivers cut the network by SIDE, which is a partition:  */
+/*  a process is on the wire or it is not.  Section O needs a finer   */
+/*  cut -- one A-Cast instance withheld from one receiver while every */
+/*  other instance flows to it -- because that is what separates the  */
+/*  two ways a BA can be entered.  Step 1 enters BA_j with 1 on       */
+/*  accepting j's A-Cast; the step-2 fanout enters an un-entered BA   */
+/*  with 0.  Withholding only instance j from process p is the way to */
+/*  make p reach BA_j by the second route while the rest of the       */
+/*  cluster reaches it by the first, so the BA's decision and p's own */
+/*  input to it come apart.  Holding the BA class as well delays p's  */
+/*  view of the decision past its own fanout, which is what puts the  */
+/*  enter-0 BEFORE the decision rather than after it.                 */
+/*                                                                    */
+/*  Masks are bit-per-instance; a 0xFF receiver means every receiver. */
+/*  Both are cleared on the way out of every arm.                     */
+/* ------------------------------------------------------------------ */
+
+static unsigned int OAcastHold = 0;
+static unsigned char OAcastTo = 0xFF;
+static unsigned int OBaHold = 0;
+static unsigned char OBaTo = 0xFF;
+
+static void
+oTick(
+  struct bkr94acs **processes
+ ,struct processObs *obs
+ ,struct bracha87Retry *cursors
+ ,struct sweepPolicy *pol
+ ,unsigned int nAct
+){
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(6)];  /* encoded n; 7 processes */
+  struct wire w;
+  unsigned int p, b, n;
+
+  while (qSize() > 0) {
+    qPopHead(&w);
+    if (w.cls == BKR94ACS_CLS_ACAST) {
+      if ((OAcastHold & (1u << w.process))
+       && (OAcastTo == 0xFF || w.to == OAcastTo))
+        continue;
+      n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                             wireAnnot(&w), w.from, w.value, out);
+    } else {
+      if ((OBaHold & (1u << w.process))
+       && (OBaTo == 0xFF || w.to == OBaTo))
+        continue;
+      n = bkr94acsBaInput(processes[w.to], w.process, w.round, w.initiator,
+                          w.type, wireAnnot(&w), w.from, w.baValue, out);
+    }
+    if (n)
+      ++pol[w.to].progress;
+    observeAndOutput(&obs[w.to], w.to, nAct, out, n, 1, 0, -1);
+  }
+
+  for (p = 0; p < nAct; ++p) {
+    n = bkr94acsRetryStep(processes[p], &cursors[p], out);
+    observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
+    spTick(&pol[p], cursors[p].sweeps, 0);
+    for (b = 0; b < nAct; ++b)
+      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0)
+        observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
+    n = bkr94acsFanout(processes[p], 1, out);
+    observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
+  }
+}
+
+/* Run one held-instance schedule to process 0's completion (or the tick
+ * cap).  Returns the tick it stopped on; releases both holds on exit. */
+static unsigned int
+oDrive(
+  struct bkr94acs **processes
+ ,struct processObs *obs
+ ,unsigned char *acasts
+ ,unsigned int nAct
+ ,unsigned int acastHold
+ ,unsigned char acastTo
+ ,unsigned int baHold
+ ,unsigned char baTo
+ ,unsigned int releaseBaAt
+ ,unsigned int cap
+){
+  struct bracha87Retry cursors[MAX_PROCESSES];
+  struct sweepPolicy pol[MAX_PROCESSES];
+  struct bkr94acsAct acastOut[1];
+  unsigned int p, tick, n;
+
+  for (p = 0; p < MAX_PROCESSES; ++p)
+    obsInit(&obs[p]);
+  for (p = 0; p < nAct; ++p) {
+    bracha87RetryInit(&cursors[p]);
+    memset(&pol[p], 0, sizeof (pol[p]));
+  }
+  qReset();
+  OAcastHold = acastHold;
+  OAcastTo = acastTo;
+  OBaHold = baHold;
+  OBaTo = baTo;
+  for (p = 0; p < nAct; ++p) {
+    acasts[p] = (unsigned char)(0x70 + p);
+    n = bkr94acsAcast(processes[p], &acasts[p], acastOut);
+    observeAndOutput(&obs[p], (unsigned char)p, nAct, acastOut, n, 1, 0, -1);
+  }
+  for (tick = 0; tick < cap; ++tick) {
+    unsigned int done;
+
+    if (tick == releaseBaAt)
+      OBaHold = 0;
+    oTick(processes, obs, cursors, pol, nAct);
+    /* bkr94acs.h: a SubSet read before complete reports the partial
+     * decided-1 set, so every arm here compares CLOSED SubSets. */
+    done = 0;
+    for (p = 0; p < nAct; ++p)
+      if (processes[p]->complete)
+        ++done;
+    if (done == nAct)
+      break;
+  }
+  OAcastHold = 0;
+  OBaHold = 0;
+  return (tick);
+}
+
+/* ------------------------------------------------------------------ */
 /*  Section K plumbing -- the Byzantine trickler.                     */
 /*                                                                    */
 /*  The trickler runs no state machine, so it is not a struct         */
@@ -2051,6 +2176,10 @@ main(
     struct bkr94acs *a;
     unsigned char dv[1];
     struct bkr94acsAct dout[3];  /* A-Cast wants 1, Turn wants 3 */
+    struct bkr94acsAct fout[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct rout[BKR94ACS_RETRY_MAX_ACTS];
+    struct bracha87Retry cur;
+    unsigned char procs[4];
 
     dv[0] = 0;
 
@@ -2079,6 +2208,18 @@ main(
           "TurnDuty(process 255): HELD");
     CHECK(bkr94acsTurn(a, 4, 1, dout) == 0, "Turn(process == n): 0");
     CHECK(bkr94acsTurn(a, 255, 1, dout) == 0, "Turn(process 255): 0");
+
+    CHECK(bkr94acsSubset(0, procs) == 0, "Subset(NULL): 0");
+    CHECK(bkr94acsAcastValue(0, 0) == 0, "AcastValue(NULL): null");
+    CHECK(bkr94acsAcastValue(a, 4) == 0 && bkr94acsAcastValue(a, 255) == 0,
+          "AcastValue(process out of range): null");
+    CHECK(bkr94acsRetryStep(0, &cur, rout) == 0, "RetryStep(NULL a): 0");
+    CHECK(bkr94acsFanoutDuty(0) == BKR94ACS_DUTY_HELD, "FanoutDuty(NULL): HELD");
+    CHECK(bkr94acsFanout(0, 1, fout) == 0, "Fanout(NULL a): 0");
+    CHECK(bkr94acsFanout(a, 1, 0) == 0, "Fanout(NULL out): 0");
+    CHECK(bkr94acsBaFig1(a, 4, 0, 0) == 0 && bkr94acsBaFig1(a, 0, 255, 0) == 0
+       && bkr94acsBaFig1(a, 0, 0, 4) == 0,
+          "BaFig1(process, round or initiator out of range): null");
 
     free(a);
   }
@@ -5700,6 +5841,156 @@ main(
           "N2: the matched fingerprint is not a single-class state");
   }
   n2_done: ;
+
+  /* ---------------------------------------------------------------- */
+  /*  Section O -- a BA's decision versus this process's input to it   */
+  /* ---------------------------------------------------------------- */
+  /*  Lemma 2 Part C says every correct process closes the SAME        */
+  /*  SubSet.  It says nothing about the relationship between that     */
+  /*  SubSet and what any one process put INTO the BAs, and the two    */
+  /*  do come apart: a process reaches BA_j either by accepting j's    */
+  /*  A-Cast (step 1, input 1) or by the step-2 fanout (input 0), and  */
+  /*  the BA's decision is the cluster's, not its own.  Section B      */
+  /*  agrees the SubSets under schedules where the two coincide; the   */
+  /*  arms below hold one A-Cast instance away from process 0 so they  */
+  /*  do not, and require the agreement to survive it.                 */
+  /* ---------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------- */
+  BANNER("O1: a BA decides 1 for an A-Cast this process never accepted");
+  /* ---------------------------------------------------------------- */
+  {
+    unsigned char subset0[MAX_PROCESSES];
+    unsigned char subsetP[MAX_PROCESSES];
+    struct bracha87Retry oCur[MAX_PROCESSES];
+    struct sweepPolicy oPol[MAX_PROCESSES];
+    unsigned int tick, p, sz0, szP, found;
+
+    if (allocCluster(processes, 4, 1, 0, 8) == 0) {
+      tick = oDrive(processes, obs, acasts, 4,
+                    1u << 3 /*hold A-Cast 3*/, 0 /*from process 0*/,
+                    0, 0xFF, 0, 500);
+      CHECK(tick < 500, "O1: the cluster completes without A-Cast 3 at process 0");
+      CHECK(bkr94acsAcastValue(processes[0], 3) == 0,
+            "O1: process 0 still holds no value for A-Cast 3");
+      CHECK(bkr94acsBaDecision(processes[0], 3) == 1,
+            "O1: BA_3 decided 1 all the same");
+      sz0 = bkr94acsSubset(processes[0], subset0);
+      found = 0;
+      for (p = 0; p < sz0; ++p)
+        if (subset0[p] == 3)
+          found = 1;
+      CHECK(found, "O1: SubSet includes a process whose value we lack");
+      for (p = 1; p < 4; ++p) {
+        szP = bkr94acsSubset(processes[p], subsetP);
+        CHECK(szP == sz0, "O1: SubSet sizes agree across processes");
+        if (szP == sz0)
+          CHECK(memcmp(subset0, subsetP, sz0) == 0,
+                "O1: SubSet contents agree across processes");
+      }
+
+      /* The value is owed, not lost: releasing the instance delivers it
+       * without disturbing the closed SubSet. */
+      OAcastHold = 0;
+      for (p = 0; p < 4; ++p) {
+        bracha87RetryInit(&oCur[p]);
+        memset(&oPol[p], 0, sizeof (oPol[p]));
+      }
+      for (tick = 0; tick < 200; ++tick) {
+        oTick(processes, obs, oCur, oPol, 4);
+        if (bkr94acsAcastValue(processes[0], 3))
+          break;
+      }
+      CHECK(bkr94acsAcastValue(processes[0], 3) != 0,
+            "O1: the withheld value arrives after the close");
+      CHECK(bkr94acsSubset(processes[0], subsetP) == sz0
+            && memcmp(subset0, subsetP, sz0) == 0,
+            "O1: the late value does not move the SubSet");
+      freeCluster(processes, 4);
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("O2: two fanout enter-0 exclusions at n=7 t=2");
+  /* ---------------------------------------------------------------- */
+  /* At n = 4, t = 1 the fanout can exclude at most one BA, so the     */
+  /* enter-0 it fires is always the last BA to decide.  t = 2 admits   */
+  /* two, which is the only way a fanout-entered BA decides while      */
+  /* another is still outstanding.                                     */
+  {
+    unsigned char subset0[MAX_PROCESSES];
+    unsigned char subsetP[MAX_PROCESSES];
+    unsigned int tick, p, sz0, szP, zeros;
+
+    if (allocCluster(processes, 7, 2, 0, 8) == 0) {
+      tick = oDrive(processes, obs, acasts, 7,
+                    (1u << 5) | (1u << 6), 0xFF /*from everyone*/,
+                    0, 0xFF, 0, 2000);
+      CHECK(tick < 2000, "O2: the cluster completes with two A-Casts held");
+      zeros = 0;
+      for (p = 0; p < 7; ++p)
+        if (bkr94acsBaDecision(processes[0], (unsigned char)p) == 0)
+          ++zeros;
+      CHECK(zeros == 2, "O2: exactly two BAs decided 0");
+      sz0 = bkr94acsSubset(processes[0], subset0);
+      CHECK(sz0 == 5, "O2: |SubSet| == n-t");
+      for (p = 1; p < 7; ++p) {
+        szP = bkr94acsSubset(processes[p], subsetP);
+        CHECK(szP == sz0, "O2: SubSet sizes agree across processes");
+        if (szP == sz0)
+          CHECK(memcmp(subset0, subsetP, sz0) == 0,
+                "O2: SubSet contents agree across processes");
+      }
+      freeCluster(processes, 7);
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("O3: a BA this process entered with 0 decides 1");
+  /* ---------------------------------------------------------------- */
+  /* Holding the BA class too keeps process 0's view of BA_5 and BA_6  */
+  /* behind its own fanout, so it enters both with 0 and only then     */
+  /* learns the cluster decided 1 -- its input and the decision        */
+  /* disagree, and the SubSet must still agree with everyone else's.   */
+  {
+    unsigned char subset0[MAX_PROCESSES];
+    unsigned char subsetP[MAX_PROCESSES];
+    unsigned int tick, p, sz0, szP, ones, zeros;
+
+    if (allocCluster(processes, 7, 2, 0, 8) == 0) {
+      tick = oDrive(processes, obs, acasts, 7,
+                    (1u << 5) | (1u << 6), 0 /*A-Casts held from process 0*/,
+                    (1u << 5) | (1u << 6), 0 /*and their BAs too*/,
+                    8 /*released at tick 8*/, 2000);
+      CHECK(tick < 2000, "O3: the cluster completes");
+      /* The whole point of the hold is that process 0's own input to
+       * these two BAs is the fanout's 0, not step 1's 1 -- without
+       * that, every check below passes on a schedule with no hold at
+       * all.  obs records the value carried by each self-INITIAL. */
+      zeros = 0;
+      ones = 0;
+      for (p = 5; p < 7; ++p) {
+        CHECK(obs[0].selfInputAny[p],
+              "O3: process 0 did enter the held BA");
+        if (obs[0].selfInputValue[p] == 0)
+          ++zeros;
+        if (bkr94acsBaDecision(processes[0], (unsigned char)p) == 1)
+          ++ones;
+      }
+      CHECK(zeros == 2, "O3: process 0's own input to both held BAs was 0");
+      CHECK(ones == 2, "O3: both held BAs decided 1 against that 0 input");
+      sz0 = bkr94acsSubset(processes[0], subset0);
+      CHECK(sz0 == 7, "O3: |SubSet| == n -- nothing was excluded");
+      for (p = 1; p < 7; ++p) {
+        szP = bkr94acsSubset(processes[p], subsetP);
+        CHECK(szP == sz0, "O3: SubSet sizes agree across processes");
+        if (szP == sz0)
+          CHECK(memcmp(subset0, subsetP, sz0) == 0,
+                "O3: SubSet contents agree across processes");
+      }
+      freeCluster(processes, 7);
+    }
+  }
 
   /* ---------------------------------------------------------------- */
   /*  Summary                                                         */

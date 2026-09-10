@@ -488,7 +488,7 @@ bkr94acsAcastInput(
        */
       bracha87Fig1ProcessAccepted(f1, a->self);
       /*
-       * BKR94 Step 1: "For each Pj for whom you (Pi) know Q(j) = 1,
+       * BKR94 Step 1: "For each Pj for whom you know that Q(j) = 1,
        * participate in BA_j with input 1."  Q(j) = 1 is carried by
        * Fig1 ACCEPT for process j (Bracha87 Lemma 3 gives BKR94's Q
        * assumption (2) for free).  Step 2 is not dispatched from any

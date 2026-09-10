@@ -88,13 +88,28 @@
 /*                                 && ecCnt[v]>(n+t)/2        ready all  */
 /*  in(ready,   v) from j   echoed && !rdSent                            */
 /*                                 && rdCnt[v]>=t+1           ready all  */
-/*  in(ready,   v) from j            rdCnt[v]>=2t+1          accept     */
+/*  in(ready,   v) from j   rdSent && rdCnt[v]>=2t+1          accept     */
 /*                                                                       */
-/*  Rule 6 reads no sent state: 2t+1 readys accept whether or not this   */
-/*  process has sent its own.  One (ready, v) therefore fires Rules 5    */
-/*  and 6 together, and Input returns ready THEN accept with             */
-/*  BRACHA87_F1_ACCEPTED already set -- a READY output is never proof    */
-/*  that the instance has not yet accepted.                              */
+/*  The figure is a sequence of steps, so the rules CHAIN: "echoed"      */
+/*  and "rdSent" in the conditions above are read after the earlier      */
+/*  rules have run on THIS message, not as the instance found it.        */
+/*  One message can therefore fire several rules, and Input returns      */
+/*  their actions in echo, ready, accept order:                          */
+/*    - an (echo, v) crossing (n+t)/2 at a process that has not echoed   */
+/*      returns echo AND ready; a process is in that state only if the   */
+/*      initial had not arrived when the count crossed, since Rule 1     */
+/*      echoes on arrival;                                               */
+/*    - a (ready, v) crossing t+1 at such a process returns the same;    */
+/*    - a (ready, v) crossing 2t+1 returns accept, and returns ready     */
+/*      with it at a process that had not sent ready -- which is why     */
+/*      a READY output is never proof that the instance has not yet      */
+/*      accepted: BRACHA87_F1_ACCEPTED is already set when Input         */
+/*      returns.  For t >= 1 the t+1 crossing strictly precedes the      */
+/*      2t+1 crossing, so the ordinary case is accept alone;             */
+/*    - at t = 0 the t+1 and 2t+1 thresholds are one integer and a       */
+/*      single (ready, v) can return all three.                          */
+/*  The rdSent conjunct on accept never withholds one: 2t+1 readys       */
+/*  implies t+1, so the ready rule above fires on the same message.      */
 /*                                                                       */
 /*  Fig. 1 states the threshold as a bare "(n+t)/2 (echo,v)              */
 /*  messages" -- no relation symbol -- and the Lemma 1 proof             */

@@ -169,6 +169,47 @@ testCoinAlt(void *closure, unsigned char instance, unsigned char phase)
   return (unsigned char) (phase & 1);
 }
 
+/* An N that answers "permissive, and 0|D_FLAG is the one legitimate
+ * d-flagged value": every n-t subset could yield 0 or 0|D_FLAG.  It
+ * drives the permissive branch of the VALID check and of the cascade. */
+static int
+testNPermissive0D(
+  void *closure
+ ,unsigned char k
+ ,unsigned int n_msgs
+ ,const unsigned char *senders
+ ,const unsigned char *values
+ ,unsigned char *result
+){
+  (void) closure;
+  (void) k;
+  (void) n_msgs;
+  (void) senders;
+  (void) values;
+  *result = 0 | BRACHA87_D_FLAG;
+  return (1);
+}
+
+/* An N that answers "permissive, and no d-flagged value is legitimate":
+ * a d-flag arriving under it must be rejected on the cascade path too. */
+static int
+testNPermissiveNoD(
+  void *closure
+ ,unsigned char k
+ ,unsigned int n_msgs
+ ,const unsigned char *senders
+ ,const unsigned char *values
+ ,unsigned char *result
+){
+  (void) closure;
+  (void) k;
+  (void) n_msgs;
+  (void) senders;
+  (void) values;
+  *result = 0;
+  return (1);
+}
+
 /* An N the Fig3Init contract arm can hand in; never invoked there. */
 static int
 testN(
@@ -1390,6 +1431,333 @@ main(int argc, char **argv)
     CHECK(nact == 0, "round 2 refused once the machine is at round 3");
     nact = bracha87Fig4Round(fig4, 3, 3, values);
     CHECK(nact != 0, "round 3 taken across the phase boundary");
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("Fig1 t=0: a READY that overtakes the INITIAL crosses both ready thresholds at once");
+  /* ---------------------------------------------------------------- */
+  /* At t = 0 the thresholds t+1 and 2t+1 are the same integer, so the */
+  /* first READY at a process that has neither echoed nor sent ready   */
+  /* fires the echo, ready and accept rules in one step.  This is the  */
+  /* one dispatch leaf reachable only at t = 0.                        */
+  {
+    struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
+    static const unsigned char v[1] = { 1 };
+    int sawEcho = 0, sawReady = 0, sawAccept = 0;
+
+    CHECK(bracha87Fig1Init(b, N_ENC, 0, VLEN_BIN) == 1, "Fig1Init at t = 0");
+    act_count = bracha87Fig1Input(b, BRACHA87_READY, 1, v, actions);
+    for (j = 0; j < act_count; ++j) {
+      if (actions[j] == BRACHA87_ECHO_ALL) sawEcho = 1;
+      if (actions[j] == BRACHA87_READY_ALL) sawReady = 1;
+      if (actions[j] == BRACHA87_ACCEPT) sawAccept = 1;
+    }
+    CHECK(act_count == 3, "t=0 overtaking READY: three actions in one step");
+    CHECK(sawEcho && sawReady && sawAccept,
+          "t=0 overtaking READY: ECHO_ALL, READY_ALL and ACCEPT together");
+    CHECK((b->flags & (BRACHA87_F1_ECHOED | BRACHA87_F1_RDSENT
+                       | BRACHA87_F1_ACCEPTED))
+          == (BRACHA87_F1_ECHOED | BRACHA87_F1_RDSENT | BRACHA87_F1_ACCEPTED),
+          "t=0 overtaking READY: ECHOED, RDSENT and ACCEPTED all set");
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("Fig1: an echo crossing the threshold at an un-echoed process echoes and readys at once");
+  /* ---------------------------------------------------------------- */
+  /* Rule 2 sends (echo, v) on the crossing, and the ready rules read  */
+  /* that echo rather than the flag the message arrived on, so Rule 4  */
+  /* fires on the same message.  A process is in that state only if    */
+  /* the INITIAL had not arrived when the count crossed, since Rule 1  */
+  /* echoes on arrival.                                                */
+  {
+    struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
+    static const unsigned char v[1] = { 1 };
+    int sawEcho = 0, sawReady = 0;
+
+    CHECK(bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN) == 1,
+          "Fig1Init for the un-echoed crossing");
+    CHECK(bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, actions) == 0,
+          "un-echoed crossing: the first echo is below the threshold");
+    CHECK(bracha87Fig1Input(b, BRACHA87_ECHO, 1, v, actions) == 0,
+          "un-echoed crossing: the second echo is below the threshold");
+    act_count = bracha87Fig1Input(b, BRACHA87_ECHO, 2, v, actions);
+    for (j = 0; j < act_count; ++j) {
+      if (actions[j] == BRACHA87_ECHO_ALL) sawEcho = 1;
+      if (actions[j] == BRACHA87_READY_ALL) sawReady = 1;
+    }
+    CHECK(act_count == 2, "un-echoed crossing: two actions in one step");
+    CHECK(sawEcho && sawReady,
+          "un-echoed crossing: ECHO_ALL and READY_ALL together");
+    CHECK((b->flags & (BRACHA87_F1_ECHOED | BRACHA87_F1_RDSENT))
+          == (BRACHA87_F1_ECHOED | BRACHA87_F1_RDSENT),
+          "un-echoed crossing: ECHOED and RDSENT both set");
+    CHECK(bracha87Fig1Input(b, BRACHA87_ECHO, 3, v, actions) == 0,
+          "un-echoed crossing: a later echo adds nothing");
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("Fig3: the permissive VALID check rejects a base above 1 and a d-flag on the wrong base");
+  /* ---------------------------------------------------------------- */
+  /* With an N that answers "permissive, 0|D_FLAG legitimate", a       */
+  /* round-1 message validates only as 0, 1 or 0|D_FLAG: a base of 2   */
+  /* is rejected and so is 1|D_FLAG.  Round 0 is filled to n-t first   */
+  /* so round 1 is evaluated at all.  Then the same messages arrive    */
+  /* BEFORE round 0 is full, so the cascade re-derives them and must   */
+  /* reach the same verdicts.                                          */
+  {
+    unsigned char *b3;
+    unsigned int vc;
+    unsigned char s[N_ACT], vv[N_ACT];
+
+    if ((b3 = malloc(bracha87Fig3Sz(N_ENC, 4))) != 0) {
+      struct bracha87Fig3 *f3 = (struct bracha87Fig3 *) b3;
+
+      CHECK(bracha87Fig3Init(f3, N_ENC, T_VAL, 4, testNPermissive0D, 0) == 1,
+            "Fig3Init with the permissive N");
+      for (i = 0; i < 3; ++i)
+        (void) bracha87Fig3Accept(f3, 0, (unsigned char) i, 0, 0);
+      CHECK(bracha87Fig3RoundComplete(f3, 0) == 1, "round 0 complete at n-t");
+      CHECK(bracha87Fig3Accept(f3, 1, 0, 2, &vc) == 0,
+            "permissive: a base of 2 is rejected");
+      CHECK(bracha87Fig3Accept(f3, 1, 1, 1 | BRACHA87_D_FLAG, &vc) == 0,
+            "permissive: 1|D_FLAG against a 0|D_FLAG permission is rejected");
+      CHECK(bracha87Fig3Accept(f3, 1, 2, 0 | BRACHA87_D_FLAG, &vc)
+            == BRACHA87_VALIDATED,
+            "permissive: 0|D_FLAG is validated");
+      CHECK(vc == 1, "permissive: one validated round-1 message");
+      CHECK(bracha87Fig3Accept(f3, 1, 3, 0, &vc) == BRACHA87_VALIDATED
+            && vc == 2, "permissive: a plain 0 is validated");
+
+      CHECK(bracha87Fig3Init(f3, N_ENC, T_VAL, 4, testNPermissive0D, 0) == 1,
+            "Fig3Init again for the cascade order");
+      CHECK(bracha87Fig3Accept(f3, 1, 0, 2, &vc) == 0,
+            "cascade: a base of 2 is stored invalid");
+      CHECK(bracha87Fig3Accept(f3, 1, 1, 1 | BRACHA87_D_FLAG, &vc) == 0,
+            "cascade: 1|D_FLAG is stored invalid");
+      CHECK(bracha87Fig3Accept(f3, 1, 2, 0 | BRACHA87_D_FLAG, &vc) == 0,
+            "cascade: 0|D_FLAG is stored invalid before round 0 is full");
+      for (i = 0; i < 3; ++i)
+        (void) bracha87Fig3Accept(f3, 0, (unsigned char) i, 0, 0);
+      CHECK(bracha87Fig3GetValid(f3, 1, s, vv) == 1,
+            "cascade: exactly one round-1 message is re-derived valid");
+      CHECK(s[0] == 2 && vv[0] == (0 | BRACHA87_D_FLAG),
+            "cascade: the re-derived message is sender 2's 0|D_FLAG");
+
+      /* Same order under an N that permits no d-flag at all: the
+       * cascade must reject 0|D_FLAG and keep the plain 0. */
+      CHECK(bracha87Fig3Init(f3, N_ENC, T_VAL, 4, testNPermissiveNoD, 0) == 1,
+            "Fig3Init with the no-d-flag permissive N");
+      CHECK(bracha87Fig3Accept(f3, 1, 0, 0 | BRACHA87_D_FLAG, &vc) == 0,
+            "cascade, no d-flag permitted: 0|D_FLAG is stored invalid");
+      CHECK(bracha87Fig3Accept(f3, 1, 1, 0, &vc) == 0,
+            "cascade, no d-flag permitted: a plain 0 is stored invalid before round 0 is full");
+      for (i = 0; i < 3; ++i)
+        (void) bracha87Fig3Accept(f3, 0, (unsigned char) i, 0, 0);
+      CHECK(bracha87Fig3GetValid(f3, 1, s, vv) == 1 && s[0] == 1 && vv[0] == 0,
+            "cascade, no d-flag permitted: only the plain 0 is re-derived valid");
+      free(b3);
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("Fig4: a decided process keeps its decision under t < (d,v) <= 2t and ends its last phase without EXHAUSTED");
+  /* ---------------------------------------------------------------- */
+  /* Decide at phase 0 with > 2t (d,1), continue into phase 1, and at  */
+  /* its step 3 validate exactly 2t (d,1): more than t, not more than  */
+  /* 2t.  A decided process must neither adopt, nor toss, nor change   */
+  /* its value, and when that is its last phase the round returns 0    */
+  /* rather than EXHAUSTED -- it has decided.  Pass 0 leaves the       */
+  /* sample without a base-value majority, pass 1 keeps one.           */
+  {
+    static unsigned char fig4Buf[32 * 1024];
+    struct bracha87Fig4 *fig4 = (struct bracha87Fig4 *) fig4Buf;
+    unsigned char values[N_ACT];
+    unsigned int nact;
+    unsigned int pass;
+
+    for (pass = 0; pass < 2; ++pass) {
+      sz = bracha87Fig4Sz(N_ENC, 2);
+      CHECK(sz <= sizeof (fig4Buf), "fig4Buf size for the decided-process arm");
+      bracha87Fig4Init(fig4, N_ENC, T_VAL, 2, 1, 0, testCoinAlt, 0);
+      values[0] = 1;
+      values[1] = 1;
+      values[2] = 1;
+      nact = bracha87Fig4Round(fig4, 0, 3, values);
+      CHECK(nact == BRACHA87_BROADCAST, "decided arm: round 0 broadcasts");
+      nact = bracha87Fig4Round(fig4, 1, 3, values);
+      CHECK(nact == BRACHA87_BROADCAST, "decided arm: round 1 broadcasts");
+      values[0] = 1 | BRACHA87_D_FLAG;
+      values[1] = 1 | BRACHA87_D_FLAG;
+      values[2] = 1 | BRACHA87_D_FLAG;
+      nact = bracha87Fig4Round(fig4, 2, 3, values);
+      CHECK(nact == (BRACHA87_DECIDE | BRACHA87_BROADCAST),
+            "decided arm: > 2t (d,1) decides and continues");
+      CHECK((fig4->flags & BRACHA87_F4_DECIDED) && fig4->decision == 1,
+            "decided arm: the decision is 1");
+      values[0] = 1;
+      values[1] = 1;
+      values[2] = 1;
+      nact = bracha87Fig4Round(fig4, 3, 3, values);
+      CHECK(nact == BRACHA87_BROADCAST, "decided arm: post-decide round 3 broadcasts");
+      nact = bracha87Fig4Round(fig4, 4, 3, values);
+      CHECK(nact == BRACHA87_BROADCAST, "decided arm: post-decide round 4 broadcasts");
+      values[0] = 1 | BRACHA87_D_FLAG;
+      values[1] = 1 | BRACHA87_D_FLAG;
+      values[2] = pass ? 1 : 0;
+      nact = bracha87Fig4Round(fig4, 5, 3, values);
+      CHECK(nact == 0,
+            "decided arm: the last phase of a decided process returns 0, not EXHAUSTED");
+      CHECK((fig4->flags & BRACHA87_F4_EXHAUSTED) == 0,
+            "decided arm: no EXHAUSTED flag on a decided process");
+      /* dmax is 1 here, so an errant adopt would write the decision's
+       * own value and the sub-round-2 tail restores it regardless:
+       * this pins consistency, and the arm's discriminating check is
+       * the return code above. */
+      CHECK(fig4->value == 1 && fig4->decision == 1,
+            "decided arm: t < (d,v) <= 2t leaves the decision in place");
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("Fig4 n=6 t=1: > 2t (d,v) decides although the sample has no base-value majority");
+  /* ---------------------------------------------------------------- */
+  /* Below n = 4t+2 a sample with > 2t (d,v) always carries a strict  */
+  /* majority of v among its base values; at n = 6, t = 1 three (d,1)  */
+  /* and two 0 do not.  Step 3 decides on the (d,v) count alone.       */
+  {
+    static unsigned char fig4Buf6[64 * 1024];
+    struct bracha87Fig4 *fig4 = (struct bracha87Fig4 *) fig4Buf6;
+    unsigned char v6[6];
+    unsigned int nact;
+
+    sz = bracha87Fig4Sz(5, 1);
+    CHECK(sz <= sizeof (fig4Buf6), "fig4Buf6 size for the n=6 arm");
+    bracha87Fig4Init(fig4, 5, 1, 1, 0, 0, testCoinAlt, 0);
+    v6[0] = 0; v6[1] = 0; v6[2] = 1; v6[3] = 1; v6[4] = 0;
+    nact = bracha87Fig4Round(fig4, 0, 5, v6);
+    CHECK(nact == BRACHA87_BROADCAST, "n=6 arm: round 0 broadcasts");
+    nact = bracha87Fig4Round(fig4, 1, 5, v6);
+    CHECK(nact == BRACHA87_BROADCAST, "n=6 arm: round 1 broadcasts");
+    v6[0] = 1 | BRACHA87_D_FLAG;
+    v6[1] = 1 | BRACHA87_D_FLAG;
+    v6[2] = 1 | BRACHA87_D_FLAG;
+    v6[3] = 0;
+    v6[4] = 0;
+    nact = bracha87Fig4Round(fig4, 2, 5, v6);
+    CHECK(nact == BRACHA87_DECIDE,
+          "n=6 arm: three (d,1) among five decide at the last phase");
+    CHECK((fig4->flags & BRACHA87_F4_DECIDED) && fig4->decision == 1,
+          "n=6 arm: the decision is 1");
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("Fig4: a decided process holds its decision through samples with no >n/2 camp");
+  /* ---------------------------------------------------------------- */
+  /* Notes 1 and 9: a decided process keeps broadcasting and keeps its */
+  /* decision as the broadcast value, whatever later samples show.     */
+  /* Step 1 takes the sample's majority on no threshold at all, step 2 */
+  /* flags a >n/2 camp, step 3 takes the >2t or >t (d,v) count or      */
+  /* tosses; every one of them is suppressed once decided.  A sample   */
+  /* only WITNESSES that suppression when what the rule would have     */
+  /* written differs from the decision, so the sample below carries a  */
+  /* majority of 0 against a decision of 1 and no camp above n/2 -- at */
+  /* n = 4, t = 1 a 2-1 split of an n-t sample is no camp at all.  At  */
+  /* n = 4t+2 a decided process can also meet a >2t (d,v) count that   */
+  /* still carries no camp, which the second half of the arm drives.   */
+  {
+    static unsigned char fig4Buf[64 * 1024];
+    struct bracha87Fig4 *fig4 = (struct bracha87Fig4 *) fig4Buf;
+    unsigned char values[6];
+    unsigned int nact;
+    unsigned int r;
+
+    sz = bracha87Fig4Sz(N_ENC, 4);
+    CHECK(sz <= sizeof (fig4Buf), "fig4Buf size for the split-sample arm");
+    bracha87Fig4Init(fig4, N_ENC, T_VAL, 4, 0, 0, testCoinAlt, 0);
+    values[0] = values[1] = values[2] = 1;
+    (void) bracha87Fig4Round(fig4, 0, 3, values);
+    (void) bracha87Fig4Round(fig4, 1, 3, values);
+    values[0] = values[1] = values[2] = 1 | BRACHA87_D_FLAG;
+    nact = bracha87Fig4Round(fig4, 2, 3, values);
+    CHECK(nact == (BRACHA87_DECIDE | BRACHA87_BROADCAST)
+          && fig4->decision == 1,
+          "split-sample arm: decided 1 at the end of phase 0");
+
+    /* Phases 1 and 2, every sub-round on a 2-1 split carrying a
+     * majority of 0 against this decision of 1, and no d-flags at
+     * all.  Nothing here may move the decision or the value the
+     * process broadcasts, and every suppressed rule would write
+     * something else: step 1 the majority 0, step 2 0|D_FLAG, step 3
+     * the coin.  Both phases are played because the coin is the one
+     * that agrees half the time -- testCoinAlt answers the phase
+     * parity, so phase 1 would answer 1 and phase 2 0. */
+    values[0] = 0;
+    values[1] = 0;
+    values[2] = 1;
+    for (r = 3; r < 9; ++r) {
+      nact = bracha87Fig4Round(fig4, (unsigned char) r, 3, values);
+      CHECK(nact == BRACHA87_BROADCAST,
+            "split-sample arm: a decided process keeps broadcasting");
+      CHECK((fig4->flags & BRACHA87_F4_DECIDED)
+            && (fig4->flags & BRACHA87_F4_EXHAUSTED) == 0,
+            "split-sample arm: DECIDED holds and EXHAUSTED stays clear");
+      CHECK(fig4->decision == 1 && fig4->value == 1,
+            "split-sample arm: no camp cannot drift a decided value");
+    }
+
+    /* n = 6, t = 1 -- the n = 4t+2 boundary.  A decided process meets
+     * a sample of five carrying three (d,1) and two 0: more than 2t
+     * flagged, and still no camp above n/2. */
+    sz = bracha87Fig4Sz(5, 4);
+    CHECK(sz <= sizeof (fig4Buf), "fig4Buf size for the n=6 split arm");
+    bracha87Fig4Init(fig4, 5, 1, 4, 0, 0, testCoinAlt, 0);
+    values[0] = values[1] = values[2] = values[3] = values[4] = 1;
+    (void) bracha87Fig4Round(fig4, 0, 5, values);
+    (void) bracha87Fig4Round(fig4, 1, 5, values);
+    values[0] = values[1] = values[2] = 1 | BRACHA87_D_FLAG;
+    values[3] = values[4] = 0;
+    nact = bracha87Fig4Round(fig4, 2, 5, values);
+    CHECK(nact == (BRACHA87_DECIDE | BRACHA87_BROADCAST)
+          && fig4->decision == 1,
+          "n=6 split arm: decided 1 without a base-value majority");
+    values[0] = values[1] = values[2] = values[3] = values[4] = 1;
+    (void) bracha87Fig4Round(fig4, 3, 5, values);
+    (void) bracha87Fig4Round(fig4, 4, 5, values);
+    values[0] = values[1] = values[2] = 1 | BRACHA87_D_FLAG;
+    values[3] = values[4] = 0;
+    nact = bracha87Fig4Round(fig4, 5, 5, values);
+    CHECK(nact == BRACHA87_BROADCAST,
+          "n=6 split arm: a decided process broadcasts through a second >2t (d,v)");
+    CHECK(fig4->decision == 1 && fig4->value == 1
+          && (fig4->flags & BRACHA87_F4_EXHAUSTED) == 0,
+          "n=6 split arm: the second >2t (d,v) leaves the decision in place");
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("round-indexed getters refuse a null instance and a round past maxRounds");
+  /* ---------------------------------------------------------------- */
+  {
+    unsigned char *b2, *b3;
+    unsigned char s[N_ACT], vv[N_ACT];
+
+    if ((b2 = malloc(bracha87Fig2Sz(N_ENC, 4))) != 0) {
+      bracha87Fig2Init((struct bracha87Fig2 *) b2, N_ENC, T_VAL, 4);
+      CHECK(bracha87Fig2GetReceived((struct bracha87Fig2 *) b2, 4, s, vv) == 0,
+            "Fig2GetReceived refuses round == maxRounds");
+      free(b2);
+    }
+    if ((b3 = malloc(bracha87Fig3Sz(N_ENC, 4))) != 0) {
+      bracha87Fig3Init((struct bracha87Fig3 *) b3, N_ENC, T_VAL, 4, testN, 0);
+      CHECK(bracha87Fig3GetValid((struct bracha87Fig3 *) b3, 4, s, vv) == 0,
+            "Fig3GetValid refuses round == maxRounds");
+      CHECK(bracha87Fig3RoundComplete((struct bracha87Fig3 *) b3, 4) == 0,
+            "Fig3RoundComplete refuses round == maxRounds");
+      CHECK(bracha87Fig3GetValid(0, 0, s, vv) == 0,
+            "Fig3GetValid refuses a null instance");
+      CHECK(bracha87Fig3RoundComplete(0, 0) == 0,
+            "Fig3RoundComplete refuses a null instance");
+      free(b3);
+    }
   }
 
   /* ---------------------------------------------------------------- */

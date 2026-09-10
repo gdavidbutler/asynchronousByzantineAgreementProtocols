@@ -16,8 +16,10 @@
 # The decision tables below answer the three questions a process
 # faces upon receiving any message: should I send (echo, v),
 # send (ready, v), or accept(v)?  Each row is taken directly
-# from a rule of the paper.  A blank cell means the rule does
-# not depend on the value of that input.
+# from a rule of the paper.  A blank cell means the rule's
+# outcome does not turn on that input here -- either because the
+# rule genuinely ignores it, or because a chained input already
+# fixes its value (see the chaining note below).
 #
 # Names appearing in this file are written in the paper's
 # notation - embedded commas, parentheses, and inequality forms
@@ -39,11 +41,29 @@
 #   "send (ready, v)"            { yes, no }
 #   "accept(v)"                  { yes, no }
 #
-# When a single received message satisfies the preconditions of
-# more than one rule, all such rules fire on that message.  The
-# one place this requires an explicit row (rather than emerging
-# from independent evaluation of the three tables) is Rule 3
-# leading into Rule 5; that row is labeled below.
+# The figure is a sequence of STEPS, not a set of independent
+# rules: Bracha87.txt reads "Three paths into echo (step 1), two
+# paths into ready (step 2), one path to accept (step 3)."  A
+# step program waits on what it has received so far, so the
+# echoes that carry step 1 are still there when step 2 is
+# evaluated, and step 2's "I have echoed" is satisfied by the
+# echo step 1 just sent.  Evaluating the three tables against
+# the state the message ARRIVED with loses exactly that, and
+# loses it only where a step fires on the message that carries
+# its own precondition.
+#
+# So the tables are CHAINED: the ready tables take "send (echo,
+# v)" as an input and the accept table takes "send (ready, v)",
+# which is how a table reads the state its predecessor leaves.
+# That is what lets every rule below transcribe from the figure
+# literally, with none rewritten to carry a predecessor's
+# effect.  DTC resolves the chain when it compiles the dispatch,
+# the same mechanism the BPR rules below use to consume the
+# paper outputs.
+#
+# The dependencies are one-directional -- no echo rule reads a
+# ready output and no ready rule reads accept -- so the chain is
+# a DAG and DTC orders it.
 #
 # Cells covering states unreachable by the rules' invariants
 # (e.g. "have echoed = no" with "have sent ready = yes", which
@@ -80,39 +100,57 @@ no,"(initial, v)"
 
 # Rule 4.  Upon receiving more than (n+t)/2 (echo, v) messages,
 # if I have echoed but not sent ready, send (ready, v).
-@"send (ready, v)","kind of message","have echoed","have sent ready","echo-count(v) > (n+t)/2"
-yes,"(echo, v)",yes,no,yes
-no,"(echo, v)",yes,no,no
-no,"(echo, v)",yes,yes,
-no,"(echo, v)",no,no,
-no,"(echo, v)",no,yes,
+#
+# "I have echoed" is read AFTER the echo rules have run on this
+# same message, which is what "send (echo, v)" carries: on an
+# (echo, v) message the only echo rule that can fire is Rule 2,
+# and Rule 2 firing means "have echoed" was no and the echo
+# threshold was met, so both are don't-care once it has fired.
+@"send (ready, v)","kind of message","send (echo, v)","have echoed","have sent ready","echo-count(v) > (n+t)/2"
+yes,"(echo, v)",yes,,no,
+no,"(echo, v)",yes,,yes,
+yes,"(echo, v)",no,yes,no,yes
+no,"(echo, v)",no,yes,no,no
+no,"(echo, v)",no,yes,yes,
+no,"(echo, v)",no,no,,
 
 # Rule 5.  Upon receiving t+1 (ready, v) messages, if I have
 # echoed but not sent ready, send (ready, v).
-@"send (ready, v)","kind of message","have echoed","have sent ready","ready-count(v) >= t+1"
-yes,"(ready, v)",yes,no,yes
-no,"(ready, v)",yes,no,no
-no,"(ready, v)",yes,yes,
-
-# Rule 3 leading into Rule 5.  Upon receiving t+1 (ready, v)
-# messages while I have not echoed, Rule 3 fires (send (echo, v),
-# set "have echoed").  In the resulting state - "have echoed"
-# now yes, "have sent ready" still no, "ready-count(v) >= t+1"
-# still yes - Rule 5's preconditions hold, so Rule 5 also fires
-# on this same message.
-@"send (ready, v)","kind of message","have echoed","have sent ready","ready-count(v) >= t+1"
-yes,"(ready, v)",no,no,yes
-no,"(ready, v)",no,no,no
-no,"(ready, v)",no,yes,
+#
+# Same chaining as Rule 4, and it is what carries Rule 3 into
+# Rule 5: on a (ready, v) message that finds "have echoed" no
+# with t+1 readys, Rule 3 fires, and Rule 5 reads that echo
+# rather than the flag the message arrived on.
+@"send (ready, v)","kind of message","send (echo, v)","have echoed","have sent ready","ready-count(v) >= t+1"
+yes,"(ready, v)",yes,,no,
+no,"(ready, v)",yes,,yes,
+yes,"(ready, v)",no,yes,no,yes
+no,"(ready, v)",no,yes,no,no
+no,"(ready, v)",no,yes,yes,
+no,"(ready, v)",no,no,,
 
 # ===== accept(v) =====
 
-# Rule 6.  Upon receiving 2t+1 (ready, v) messages, accept(v).
-@"accept(v)","kind of message","ready-count(v) >= 2t+1"
-yes,"(ready, v)",yes
-no,"(ready, v)",no
-no,"(initial, v)",
-no,"(echo, v)",
+# Rule 6.  Upon receiving 2t+1 (ready, v) messages, if I have
+# sent ready, accept(v).
+#
+# Bracha87.txt renders the accept row with a "readySent"
+# conjunct -- the extract's own condition-column rendering of a
+# step program, in a figure whose scan it calls garbled, so the
+# column is the extract's shape rather than a certainty of the
+# paper's.  It is read after the ready rules have run on this
+# same message, which is what "send (ready, v)" carries.  2t+1 readys implies t+1, so a
+# process that had not sent ready fires Rule 5 here and accepts
+# on the same message -- the conjunct never withholds an accept,
+# and stating it keeps the row the figure's.
+@"accept(v)","kind of message","send (ready, v)","have sent ready","ready-count(v) >= 2t+1"
+yes,"(ready, v)",yes,,yes
+no,"(ready, v)",yes,,no
+yes,"(ready, v)",no,yes,yes
+no,"(ready, v)",no,yes,no
+no,"(ready, v)",no,no,
+no,"(initial, v)",,,
+no,"(echo, v)",,,
 
 # ===========================================================
 # Bracha Phase Retry (BPR)

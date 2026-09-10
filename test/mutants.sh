@@ -938,6 +938,260 @@ goes red.
 #WITH
   if (one >= 2u * a->t + 1)
 #END
+#MUTANT M36
+#FAMILY figure 1 rule chaining -- ready reads the echo flag as it arrived
+#FILE bracha87.c
+#ORACLE test_bracha87_blackbox
+#LABEL t=0 overtaking READY: ECHO_ALL, READY_ALL and ACCEPT together
+#EXPECT KILLED
+#WHY
+Rule 5 sends (ready, v) upon t+1 (ready, v) when the process has echoed
+and has not sent ready.  "Has echoed" is read AFTER the echo rules have
+run on this same message: the ready tables take "send (echo, v)" as an
+input, so a (ready, v) arriving at a process with the flag clear fires
+Rule 3, and Rule 5 reads that echo rather than the flag the message
+arrived on.  Gating the ready output on the flag AS IT STOOD WHEN THE
+MESSAGE ARRIVED breaks the chain at the C egress, downstream of where
+the dispatch could see it.  Reachability: at t = 0 the two ready
+thresholds t+1 and 2t+1 are the same integer, so a first ready at a
+process that has neither echoed nor sent ready is the chain's cleanest
+witness -- the oracle requires three actions out of that single call
+and names them, and under the mutation the ready is suppressed and two
+arrive.  The same mutation also reds the un-echoed echo-crossing arm,
+which is the other end of the same chain.
+#ANCHOR
+  if (sendReady) {
+#WITH
+  if (sendReady && haveEchoed) {
+#END
+
+#MUTANT M37
+#FAMILY figure 3 cascade -- the decision-flag permission dropped on the re-derivation path
+#FILE bracha87.c
+#ORACLE test_bracha87_blackbox
+#LABEL cascade, no d-flag permitted: only the plain 0 is re-derived valid
+#EXPECT KILLED
+#WHY
+VALID^k admits (q, k, v) only when v could have been produced by N over
+SOME n-t subset of VALID^(k-1).  A permissive N reports both that more
+than one value was reachable and which decision-flagged value, if any,
+was among them; a (d, v) the permission does not cover was not
+producible and must be refused.  M20 anchors that refusal in
+fig3IsValid -- the path taken when round k-1 is already complete at the
+moment the k-message arrives.  The cascade is a SECOND evaluation of
+the same predicate, run when later growth at k-1 completes the round
+after the k-message was stored invalid, and it carries its own copy of
+the check.  Dropping the permission there admits a d-flag under an N
+that permits none, on the arrival order an adversary controls.
+Reachability: the oracle delivers a round-1 0|D_FLAG and a plain 0
+before round 0 is complete under an N that permits no d-flag, then
+completes round 0 and requires exactly one message to be re-derived
+valid; under the mutation the d-flagged one is re-derived valid too and
+the count check goes red.
+#ANCHOR
+              if (!(cres & BRACHA87_D_FLAG))
+                valid = 0;
+              else if ((rvl[i] & 1) != (cres & 1))
+                valid = 0;
+#WITH
+              if ((rvl[i] & 1) != (cres & 1))
+                valid = 0;
+#END
+
+#MUTANT M38
+#FAMILY figure 4 -- a decided process reports exhaustion at its last phase
+#FILE bracha87.c
+#ORACLE test_bracha87_blackbox
+#LABEL decided arm: the last phase of a decided process returns 0, not EXHAUSTED
+#EXPECT KILLED
+#WHY
+EXHAUSTED means the round space is spent WITHOUT a decision -- the
+condition Note 12 hands to the BKR94 layer as a locally unrecoverable
+failure.  A process that decided at an earlier phase is in the opposite
+state: it has its decision and, per Note 1, keeps broadcasting it to
+the end of the round space.  Running out of phases after that is the
+end of this instance's participation, not a failure to agree, so the
+caller must not be told EXHAUSTED.  Testing maxPhases ahead of the
+decided state is the confusion, and it is invisible until a decided
+process actually reaches its last phase.  Reachability: the oracle
+decides at phase 0 of a two-phase instance and plays phase 1 to its
+end; the correct machine returns 0 with the EXHAUSTED flag clear, and
+under the mutation it returns BRACHA87_EXHAUSTED and sets the flag.
+#ANCHOR
+    if (haveDecided) {
+#WITH
+    if (haveDecided && ph + 1 < b->maxPhases) {
+#END
+
+#MUTANT M39
+#FAMILY figure 4 step 3 -- the decide gated on step 2's majority condition
+#FILE bracha87.c
+#ORACLE test_bracha87_blackbox
+#LABEL n=6 arm: three (d,1) among five decide at the last phase
+#EXPECT KILLED
+#WHY
+Step 3 case (i) decides when MORE THAN 2t validated (3i+3)-messages
+carry value (d, v) -- the count of decision-flagged messages alone.
+Requiring in addition that the sample carry a base-value camp of more
+than n/2 (step 2's own condition) is a plausible-looking strengthening,
+and it is invisible wherever n < 4t+2: there, more than 2t flagged
+messages already exceed n/2, so the added conjunct is free.  At n =
+4t+2 the two come apart.  Reachability: the oracle runs n = 6, t = 1,
+where the n-t = 5 sample carries three (d, 1) and two 0 -- more than
+2t = 2 flagged, but 3 is not more than n/2 = 3.  The correct machine
+decides; under the mutation no decide fires, the phase is the
+instance's last, so it reports EXHAUSTED and the oracle's DECIDE check
+goes red.
+#ANCHOR
+  gt2T        = dc[dmax] > 2u * b->t;
+#WITH
+  gt2T        = dc[dmax] > 2u * b->t && n2Half;
+#END
+
+#MUTANT M40
+#FAMILY figure 1 rule chaining -- accept reads the ready flag as it arrived
+#FILE bracha87.c
+#ORACLE test_bracha87_blackbox
+#LABEL t=0 overtaking READY: three actions in one step
+#EXPECT KILLED
+#WHY
+The figure's accept row carries "readySent" (Bracha87.txt), and the
+accept table takes "send (ready, v)" as an input so that the conjunct
+is read after the ready rules have run on this same message.  2t+1
+readys implies t+1, so a process that had not sent ready fires Rule 5
+here and accepts on the same message: the conjunct never withholds an
+accept, which is why stating it costs nothing and keeps the row the
+figure's.  Reading the flag AS IT STOOD WHEN THE MESSAGE ARRIVED is
+the defect, and it withholds exactly the accepts the chain exists to
+allow.  Reachability: for t >= 1 the t+1 crossing strictly precedes
+the 2t+1 crossing, so the flag is already set a message earlier and
+the mutation is invisible; at t = 0 the two thresholds are one integer
+and the accept rides the same message as the ready.  The oracle's
+first ready at a t = 0 process must produce three actions; under the
+mutation the accept is withheld and two arrive.  The explorer also
+goes red: both smoke configs run at n = 2, t = 0, which is exactly
+where this defect bites, so its frozen counts move.  That is
+SENSITIVITY to the behavioral change and not a second detection.
+#ANCHOR
+  if (acceptV) {
+#WITH
+  if (acceptV && haveSentReady) {
+#END
+
+#MUTANT M41
+#FAMILY figure 1 rule chaining -- the un-echoed echo crossing does not ready
+#FILE bracha87.c
+#ORACLE test_bracha87_blackbox
+#LABEL un-echoed crossing: ECHO_ALL and READY_ALL together
+#EXPECT KILLED
+#WHY
+Rule 2 sends (echo, v) when more than (n+t)/2 (echo, v) arrive at a
+process that has not echoed; Rule 4 sends (ready, v) on the same
+evidence once the process has echoed.  Chained, both fire on the
+crossing message.  Suppressing the ready whenever the echo fires on
+the same dispatch is the plausible reading of "if I have echoed" as a
+state the message must have found -- it restores the one-message delay
+the chain removes.  Reachability: a process is un-echoed at the
+crossing only if the INITIAL had not arrived by then, since Rule 1
+echoes on arrival; that is the ordinary
+condition under loss and under a silent initiator.  The oracle drives
+three echoes into a fresh n = 4, t = 1 instance with no INITIAL and
+requires two actions out of the third; under the mutation the ready is
+withheld and one arrives.
+#ANCHOR
+  if (sendReady) {
+    memcpy(F1_VALUE(b), value, F1_VLEN(b));
+#WITH
+  if (sendReady && !sendEcho) {
+    memcpy(F1_VALUE(b), value, F1_VLEN(b));
+#END
+
+#MUTANT M42
+#FAMILY figure 4 step 3 -- the coin fallback forgets the decided column
+#FILE bracha87.c
+#ORACLE -
+#EXPECT INVISIBLE
+#WHY
+Step 3 case (iii) tosses a coin when neither the >2t nor the >t (d, v)
+count is met.  A DECIDED process must not, and the dispatch zeroes
+every value-setting output for it -- the coin included.  Letting case
+(iii) fire on the decided path is the plausible slip, since it is the
+one value-setting row whose condition names no count at all.  This
+catalogue claims NO oracle reaches it, and the reason is worth having
+written down: case (iii) is a sub-round-2 rule, and Fig4Round's
+sub-round-2 tail restores b->value = b->decision unconditionally for a
+process that arrived decided.  Any value the dispatch writes during
+that same call is overwritten before the call returns, so a coin toss
+here cannot reach a caller.  Note 9's protection therefore has TWO
+independent mechanisms and only one of them is the dispatch; the
+counterpart defect at sub-round 0, where no such restore happens, IS
+visible and is M21 -- no entry mutates the sub-round-1 setDMajority or
+the decided adopt, so those two stay unwitnessed by the catalogue even
+though the split-sample arm would red on them.  What the mutation does change is the
+caller's coin sequence -- a spurious draw from the application's
+randomness -- which the library's own contract does not expose and no
+arm can observe.  Reaching it needs a decided process meeting case
+(iii): no >n/2 camp and no d-flags at all, which the split-sample arm
+now drives at both phase parities.  The run records whether the battery
+agrees that it stays green there.
+#ANCHOR
+  if (setCoin)
+#WITH
+  if (setCoin || (subRound == 2 && !gtT))
+#END
+
+#MUTANT M43
+#FAMILY subset membership -- gated on holding the A-Cast value
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs_blackbox
+#LABEL O1: SubSet includes a process whose value we lack
+#EXPECT KILLED
+#WHY
+SubSet_i is { j : BA_j had output 1 }, and BKR94 Lemma 2 Part C makes
+it identical at every correct process.  Nothing in it refers to whether
+THIS process has the A-Cast value for j yet.  Requiring the value looks
+like a safety improvement -- why name a process whose payload you
+cannot read? -- and it silently breaks Part C, because which values a
+process holds is a local, schedule-dependent fact while the SubSet is
+a global one.  The value is owed, not lost: Bracha's retry delivers it
+after the close.  Reachability: the oracle withholds one A-Cast
+instance from process 0 alone, so the rest of the cluster accepts it
+and BA_3 decides 1 while process 0 still has nothing for it; the
+correct machine names 3 in the SubSet anyway, and under the mutation
+process 0's SubSet is one short and disagrees with the other three.
+#ANCHOR
+    if (dec[i] == 1)
+#WITH
+    if (dec[i] == 1 && bkr94acsAcastValue(a, (unsigned char)i))
+#END
+
+#MUTANT M44
+#FAMILY BA decision -- recorded from our own input, not the BA's output
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs_blackbox
+#LABEL O3: |SubSet| == n -- nothing was excluded
+#EXPECT KILLED
+#WHY
+A BA's output is the cluster's, not this process's input to it.  The
+two coincide under every schedule where a process enters BA_j only by
+accepting j's A-Cast, which is why reading the decision off the entry
+would pass most of a battery: step 1 enters 1 exactly when it will
+accept, and BKR94's validity makes an all-1 BA decide 1.  They come
+apart at the step-2 fanout, which enters an un-entered BA with 0 while
+the rest of the cluster has already entered 1 -- the BA then decides 1
+against this process's 0.  Reachability: the oracle holds two A-Cast
+instances and their BAs away from process 0 long enough for its own
+fanout to enter both with 0, then releases them; both decide 1, so the
+correct machine closes a SubSet of all n, and under the mutation
+process 0 records its own zeros and closes a SubSet of n-2 that
+disagrees with every other process.
+#ANCHOR
+    bkr94acsDecision(a)[process] = f4->decision;
+#WITH
+    bkr94acsDecision(a)[process] =
+      (bkr94acsEnterd(a)[process] == BKR94ACS_ENTER_ONE) ? 1 : 0;
+#END
+
 CATALOGUE_END
 
 # ---------------------------------------------------------------------

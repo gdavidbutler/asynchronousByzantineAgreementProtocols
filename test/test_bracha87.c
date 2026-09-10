@@ -490,10 +490,14 @@ testFig1Rules(
   check("Rule 2: 2 echoes, no action", nout == 0);
   check("Rule 2: still not echoed", !(b->flags & BRACHA87_F1_ECHOED));
 
-  /* Third echo: count=3 >= 3, rule 2 fires */
+  /* Third echo: count=3 >= 3.  Rule 2 fires, and Rule 4 chains off it
+   * on the same message -- this process has not echoed, so the echo it
+   * sends here is what satisfies Rule 4's "have echoed". */
   nout = bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, out);
   printf("    Rule 2 (echo threshold)   : nout=%u out[0]=%u\n", nout, nout ? out[0] : 0);
-  check("Rule 2: 3 echoes -> ECHO_ALL", nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
+  check("Rule 2: 3 echoes -> ECHO_ALL then READY_ALL",
+        nout == 2 && out[0] == BRACHA87_ECHO_ALL
+                  && out[1] == BRACHA87_READY_ALL);
   check("Rule 2: echoed set", (b->flags & BRACHA87_F1_ECHOED));
   check("Rule 2: value correct",
         bracha87Fig1Value(b) && !memcmp(bracha87Fig1Value(b), val_A, VLEN));
