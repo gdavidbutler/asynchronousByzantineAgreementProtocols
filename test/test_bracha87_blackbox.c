@@ -34,7 +34,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
 
 #include "bracha87.h"
 
@@ -124,14 +123,14 @@ qPopRandom(struct wire *out) {
   unsigned int sz, pick, idx;
   sz = qSize();
   if (sz == 0)
-    return 0;
+    return (0);
   pick = rngNext() % sz;
   idx = (QHead + pick) % QCAP;
   *out = WireQ[idx];
   --QTail;
   if (idx != (QTail % QCAP))
     WireQ[idx] = WireQ[QTail % QCAP];
-  return 1;
+  return (1);
 }
 
 /* Broadcast a Fig1 action from process 'from' to all 'nAct' processes. */
@@ -168,6 +167,25 @@ testCoinAlt(void *closure, unsigned char instance, unsigned char phase)
   (void) closure;
   (void) instance;
   return (unsigned char) (phase & 1);
+}
+
+/* An N the Fig3Init contract arm can hand in; never invoked there. */
+static int
+testN(
+  void *closure
+ ,unsigned char k
+ ,unsigned int n_msgs
+ ,const unsigned char *senders
+ ,const unsigned char *values
+ ,unsigned char *result
+){
+  (void) closure;
+  (void) k;
+  (void) n_msgs;
+  (void) senders;
+  (void) values;
+  *result = 0;
+  return (0);
 }
 
 /* ================================================================== */
@@ -250,16 +268,126 @@ main(int argc, char **argv)
     CHECK(bracha87Fig4Sz(255, 1) != 0, "Fig4Sz takes n 255");
     CHECK(bracha87Fig4Sz(256, 1) == 0, "Fig4Sz refuses n 256");
 
-    /* maxPhases is CLAMPED, not refused -- the header says so, and the
-     * discriminating property is that the clamped call answers the
-     * SAME size as the ceiling rather than 0, so the allocation and
-     * bracha87Fig4Init's identical clamp agree on one machine. */
-    CHECK(bracha87Fig4Sz(N_ENC, BRACHA87_MAX_PHASES + 1)
-       == bracha87Fig4Sz(N_ENC, BRACHA87_MAX_PHASES),
-          "Fig4Sz clamps maxPhases past the ceiling, not refuses");
-    CHECK(bracha87Fig4Sz(N_ENC, 60000)
-       == bracha87Fig4Sz(N_ENC, BRACHA87_MAX_PHASES),
-          "Fig4Sz clamps a far-past maxPhases to the same size");
+    /* Both ends of maxPhases are refused, never substituted.  Header:
+     * "maxPhases is refused at BOTH ends, never substituted."  The
+     * pair below the ceiling is the boundary -- the last value Sz can
+     * carry, then the first it cannot -- and the far-past value shows
+     * the refusal is not a wrap that happens to land on 0. */
+    CHECK(bracha87Fig4Sz(N_ENC, BRACHA87_MAX_PHASES) != 0,
+          "Fig4Sz takes maxPhases at the ceiling");
+    CHECK(bracha87Fig4Sz(N_ENC, BRACHA87_MAX_PHASES + 1) == 0,
+          "Fig4Sz refuses maxPhases one past the ceiling");
+    CHECK(bracha87Fig4Sz(N_ENC, 60000) == 0,
+          "Fig4Sz refuses a far-past maxPhases");
+
+    /* At 0 a Fig 4 contradicts itself, its round path answering
+     * BROADCAST for rounds its Fig 3 can never validate. */
+    CHECK(bracha87Fig4Sz(N_ENC, 1) != 0, "Fig4Sz takes maxPhases 1");
+    CHECK(bracha87Fig4Sz(N_ENC, 0) == 0, "Fig4Sz refuses maxPhases 0");
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Header: "Returns 1 initialized, 0 REFUSED -- a null instance, or */
+  /* a configuration Bracha's model does not admit (n + 1 > 3t is     */
+  /* required).  A refusal writes NOTHING ... no library entry aborts */
+  /* a binding application over bad input."                           */
+  /*                                                                  */
+  /* The bound is N > 3t with N = n + 1, so N == 3t is the LAST       */
+  /* refused configuration and N == 3t+1 the first admitted one.      */
+  /* Each pair below is exactly that boundary (N=3,t=1 refused /      */
+  /* N=4,t=1 admitted): a pair further out, say N=4 with t=2, is      */
+  /* refused by both `<=` and `<` and so cannot see an off-by-one in  */
+  /* the guard.  An Init that ABORTED on these would take the process */
+  /* down here instead of reporting.                                  */
+  /* ---------------------------------------------------------------- */
+  {
+    struct bracha87Fig1 *b1 = (struct bracha87Fig1 *) fig1Storage[0];
+    unsigned char *b2, *b3, *b4;
+    unsigned int intact;
+
+    CHECK(bracha87Fig1Init(b1, N_ENC, T_VAL, VLEN_BIN) == 1,
+          "Fig1Init returns 1 on a config the model admits");
+    CHECK(bracha87Fig1Init(b1, 2, 1, VLEN_BIN) == 0,
+          "Fig1Init refuses N = 3 with t = 1 (N == 3t)");
+    CHECK(bracha87Fig1Init(0, N_ENC, T_VAL, VLEN_BIN) == 0,
+          "Fig1Init refuses a null instance");
+
+    if ((b2 = malloc(bracha87Fig2Sz(N_ENC, 4))) != 0) {
+      CHECK(bracha87Fig2Init((struct bracha87Fig2 *) b2, N_ENC, T_VAL, 4) == 1,
+            "Fig2Init returns 1 on a config the model admits");
+      CHECK(bracha87Fig2Init((struct bracha87Fig2 *) b2, 2, 1, 4) == 0,
+            "Fig2Init refuses N = 3 with t = 1 (N == 3t)");
+      free(b2);
+    }
+
+    if ((b3 = malloc(bracha87Fig3Sz(N_ENC, 4))) != 0) {
+      CHECK(bracha87Fig3Init((struct bracha87Fig3 *) b3,
+                             N_ENC, T_VAL, 4, testN, 0) == 1,
+            "Fig3Init returns 1 on a config the model admits");
+      CHECK(bracha87Fig3Init((struct bracha87Fig3 *) b3,
+                             2, 1, 4, testN, 0) == 0,
+            "Fig3Init refuses N = 3 with t = 1 (N == 3t)");
+      CHECK(bracha87Fig3Init((struct bracha87Fig3 *) b3,
+                             N_ENC, T_VAL, 4, 0, 0) == 0,
+            "Fig3Init refuses a null N");
+      free(b3);
+    }
+
+    if ((b4 = malloc(bracha87Fig4Sz(N_ENC, 2))) != 0) {
+      CHECK(bracha87Fig4Init((struct bracha87Fig4 *) b4,
+                             N_ENC, T_VAL, 2, 0, 0, testCoinAlt, 0) == 1,
+            "Fig4Init returns 1 on a config the model admits");
+      CHECK(bracha87Fig4Init((struct bracha87Fig4 *) b4,
+                             2, 1, 2, 0, 0, testCoinAlt, 0) == 0,
+            "Fig4Init refuses N = 3 with t = 1 (N == 3t)");
+      CHECK(bracha87Fig4Init((struct bracha87Fig4 *) b4,
+                             N_ENC, T_VAL, 2, 0, 0, 0, 0) == 0,
+            "Fig4Init refuses a null coin");
+      CHECK(bracha87Fig4Init((struct bracha87Fig4 *) b4,
+                             N_ENC, T_VAL, 0, 0, 0, testCoinAlt, 0) == 0,
+            "Fig4Init refuses maxPhases 0, as Sz does");
+      CHECK(bracha87Fig4Init((struct bracha87Fig4 *) b4, N_ENC, T_VAL,
+                             BRACHA87_MAX_PHASES + 1, 0, 0,
+                             testCoinAlt, 0) == 0,
+            "Fig4Init refuses maxPhases past the ceiling, as Sz does");
+      free(b4);
+    }
+
+    /* Header: "initialValue is 0 or 1, and anything else is refused."
+     * The boundary is 1 admitted / 2 refused.  The other value tried
+     * is BRACHA87_D_FLAG, whose base (& ~D_FLAG) is 0: a mask would
+     * have admitted it as 0 where a refusal declines it, so it is the
+     * value that tells the two apart.  A refused Init writes nothing,
+     * so the probe stays 0xAA. */
+    sz = bracha87Fig4Sz(N_ENC, 2);
+    if ((b4 = malloc(sz)) != 0) {
+      struct bracha87Fig4 *f4 = (struct bracha87Fig4 *) b4;
+
+      CHECK(bracha87Fig4Init(f4, N_ENC, T_VAL, 2, 1, 0, testCoinAlt, 0) == 1,
+            "Fig4Init takes initialValue 1");
+      CHECK(f4->value == 1, "Fig4Init keeps initialValue 1");
+      memset(b4, 0xAA, sz);
+      CHECK(bracha87Fig4Init(f4, N_ENC, T_VAL, 2, 2, 0, testCoinAlt, 0) == 0,
+            "Fig4Init refuses initialValue 2");
+      CHECK(bracha87Fig4Init(f4, N_ENC, T_VAL, 2, BRACHA87_D_FLAG, 0,
+                             testCoinAlt, 0) == 0,
+            "Fig4Init refuses BRACHA87_D_FLAG as an initialValue");
+      intact = 1;
+      for (j = 0; j < sz; ++j)
+        if (b4[j] != 0xAA)
+          intact = 0;
+      CHECK(intact, "a refused Fig4Init leaves the caller's memory alone");
+      free(b4);
+    }
+
+    /* A refusal writes nothing: the caller still holds its allocation. */
+    memset(fig1Storage[0], 0xAA, sizeof (fig1Storage[0]));
+    bracha87Fig1Init((struct bracha87Fig1 *) fig1Storage[0], 2, 1, VLEN_BIN);
+    intact = 1;
+    for (j = 0; j < sizeof (fig1Storage[0]); ++j)
+      if (fig1Storage[0][j] != 0xAA)
+        intact = 0;
+    CHECK(intact, "a refused Fig1Init leaves the caller's memory alone");
   }
 
   /* Init clears stored fields exposed by struct definition. */
@@ -1176,6 +1304,32 @@ main(int argc, char **argv)
   }
 
   /* ---------------------------------------------------------------- */
+  BANNER("Fig4Round refuses a null values with a nonzero n_msgs");
+  /* ---------------------------------------------------------------- */
+  /* Header: "Outside those four sit the null arguments -- a null     */
+  /* instance, or a null values with a nonzero n_msgs ... refused the */
+  /* way every other bad input is, 0 actions and no abort, rather     */
+  /* than dereferenced."  Without the guard the counting loop         */
+  /* dereferences it, so the arm's real assertion is that the process */
+  /* is still alive to report the 0.                                  */
+  /* ---------------------------------------------------------------- */
+  {
+    static unsigned char nvBuf[32 * 1024];
+    struct bracha87Fig4 *fig4 = (struct bracha87Fig4 *) nvBuf;
+
+    sz = bracha87Fig4Sz(N_ENC, 2);
+    CHECK(sz <= sizeof (nvBuf), "nvBuf size for the null-values arm");
+    CHECK(bracha87Fig4Init(fig4, N_ENC, T_VAL, 2, 0, 0, testCoinAlt, 0) == 1,
+          "null-values arm: Init");
+    CHECK(bracha87Fig4Round(fig4, 0, 3, 0) == 0,
+          "Fig4Round returns 0 on a null values");
+    CHECK(fig4->phase == 0 && fig4->subRound == 0,
+          "a refused Fig4Round advanced nothing");
+    CHECK(bracha87Fig4Round(fig4, 0, 0, 0) == 0,
+          "Fig4Round returns 0 on an empty set");
+  }
+
+  /* ---------------------------------------------------------------- */
   BANNER("Fig4Round refuses a round that is not the machine's next");
   /* ---------------------------------------------------------------- */
   /* Header: "k NAMES THE ROUND THIS CALL COMPUTES, and it must be    */
@@ -1243,5 +1397,5 @@ main(int argc, char **argv)
   /* ---------------------------------------------------------------- */
   fprintf(stdout, "test_bracha87_blackbox: %d checks, %d failures\n",
           Checks, Failures);
-  return Failures == 0 ? 0 : 1;
+  return (Failures == 0 ? 0 : 1);
 }

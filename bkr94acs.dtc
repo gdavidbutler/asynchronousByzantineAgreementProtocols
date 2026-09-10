@@ -32,24 +32,20 @@
 # events".  These coincide in benign runs but diverge under
 # asynchrony or Byzantine scheduling; only the BA-output-1
 # trigger satisfies Part A case (i) of the BKR94 Lemma 2 proof.
-# An optimization seen in derived presentations, which fires Step 2
-# on the count of Q(j) = 1 events, would be the wrong reading of
-# the paper.
 #
 # Step 2, like every rule in the paper, is stated in the
 # asynchronous model: unbounded (finite) message delay, no clocks
 # (BKR94ACS.txt, Model and tools).  Each rule's "upon" names the
 # evidence that enables an action; the model has no notion of the
 # moment the action is taken, and Lemma 2 Part B consumes only that
-# the 0-inputs are eventually entered once the n-t count holds.  An
-# earlier revision of this table encoded Step 2 on the arrival
-# path, firing at the instant the local count crossed n-t.  That
-# eager schedule was this capture's reading, not the paper's -- it
-# dropped the unbounded-latency notion the model rests on.  The
-# Step 2 section below records the rule; its firing is paced by the
-# caller from the BPR sweep tick, completing for this layer the BPR
-# integration bracha87.[hc] already has.  Zero patience
-# recovers the eager schedule.
+# the 0-inputs are eventually entered once the n-t count holds.
+# Encoding Step 2 on the arrival path, firing at the instant the
+# local count crosses n-t, reads a moment into a rule that names
+# only evidence, and drops the unbounded-latency notion the model
+# rests on.  The Step 2 section below records the rule; its firing
+# is paced by the caller from the BPR sweep tick, the same tick
+# bracha87.[hc] drives BPR from.  Zero patience recovers the eager
+# schedule.
 #
 # Inputs (the situation when an ACS-layer event is processed;
 # j is the process to which the event refers):
@@ -95,14 +91,12 @@ no,"BA_j outputs 1",
 # entered a value."
 #
 # Enabling evidence, not a moment (header note above).  Fired at
-# the instant the count crosses -- the earlier revision of this
-# table -- the fastest n-t processes close SubSet against every
-# honest process whose A-Cast is still in flight, and under a
-# persistent latency spread the same honest processes are excluded
-# every ACS instance.  Nothing in the model compels that
-# eagerness; the deployment's remedy for unbounded latency is the
-# BPR sweep, so the firing lives there, beside the retry/retire
-# decisions that already do.
+# the instant the count crosses, the fastest n-t processes close
+# SubSet against every honest process whose A-Cast is still in
+# flight.  Nothing in the model compels that eagerness; the
+# deployment's remedy for unbounded latency is the BPR sweep, so
+# the firing lives there, beside the retry/retire decisions that
+# already do.
 #
 # bkr94acsFanoutDuty classifies the decision, derived by scanning
 # baDecision[] and entered[] (never stored):
@@ -123,9 +117,8 @@ no,"BA_j outputs 1",
 #               recovery work that can make the firing unnecessary.
 #   MET       - no unentered BAs remain; nothing to give up on.
 #               Absorbing: the fanout empties the unentered set, so
-#               once-per-instance is structural and the old "fanout
-#               already triggered" latch (BKR94ACS_F_THRESHOLD) is
-#               gone.
+#               once-per-instance is structural, carried by the set
+#               itself rather than by a latch.
 #
 # The trichotomy names the one decision shape -- proceed without
 # the tail -- under the caller discipline both duty queries share
@@ -149,12 +142,12 @@ no,"BA_j outputs 1",
 # the validated set (the majority at 3i+1, the decide/adopt
 # thresholds at 3i+3).  The set keeps growing past n-t and Bracha's
 # proofs hold for ANY >= n-t sample -- so the sample a turn
-# consumes is purely a function of WHEN the turn fires.  An earlier
-# revision turned rounds inside the arrival path (bkr94acsBaInput's
-# cascade loop), consuming the first n-t; the same eager-schedule
-# reading Step 2 carried, with a different cost: not exclusion (a
-# late round-k message still validates and still serves round-k+1
-# validation) but coin luck.  At 3i+3 the decide/adopt counts are
+# consumes is purely a function of WHEN the turn fires.  Turning a
+# round inside the arrival path, on the delivery that completes it,
+# consumes the first n-t -- the same eager-schedule reading Step 2
+# carries, with a different cost: not exclusion (a late round-k
+# message still validates and still serves round-k+1 validation)
+# but coin luck.  At 3i+3 the decide/adopt counts are
 # monotone thresholds (per-sender dedup: counts only grow), so a
 # fuller sample can only convert coin phases into deterministic
 # decides; at 3i+1 the majority is a comparison a fuller sample can
@@ -172,9 +165,10 @@ no,"BA_j outputs 1",
 # as the fanout.  BA_DECIDED / COMPLETE / BA_EXHAUSTED emerge from
 # turns only; the Step 3 dispatch below rides the turn's decide.
 #
-# bracha87.[hc] needed no change: bracha87Fig3RoundComplete,
-# bracha87Fig3GetValid, and bracha87Fig4Round were already the
-# caller-shaped seam; the eager loop was this composition's choice.
+# bracha87.[hc] carries the caller-shaped seam --
+# bracha87Fig3RoundComplete, bracha87Fig3GetValid,
+# bracha87Fig4Round -- and WHEN a completed round is turned is this
+# composition's choice.
 
 # ================================================================
 # Step 3 - Output SubSet when all n BAs have output

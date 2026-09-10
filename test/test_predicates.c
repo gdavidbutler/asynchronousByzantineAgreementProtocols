@@ -240,6 +240,21 @@ static const unsigned char Alpha[4] = {
   (unsigned char)(1 | BRACHA87_D_FLAG)
 };
 
+/* Never drawn: this arm calls fig4Nfn directly and never reaches
+ * Fig4Round's case (iii).  It exists because bracha87Fig4Init refuses
+ * a null coin. */
+static unsigned char
+predCoin(
+  void *closure
+ ,unsigned char instance
+ ,unsigned char phase
+){
+  (void)closure;
+  (void)instance;
+  (void)phase;
+  return (0);
+}
+
 static void
 testFig4NfnCorrespondence(void) {
   struct bracha87Fig4 *b;
@@ -257,7 +272,7 @@ testFig4NfnCorrespondence(void) {
 
   sz = bracha87Fig4Sz(NN - 1, 10);
   b = (struct bracha87Fig4 *)calloc(1, sz);
-  bracha87Fig4Init(b, NN - 1, TT, 10, 0, 0, /*coin*/0, 0);
+  bracha87Fig4Init(b, NN - 1, TT, 10, 0, 0, predCoin, 0);
   for (i = 0; i < NN; ++i) senders[i] = (unsigned char)i;
 
   total = agreed = 0;

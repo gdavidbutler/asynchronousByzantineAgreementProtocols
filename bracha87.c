@@ -25,7 +25,6 @@
  * Pure state machines for Figures 1, 2, 3, and 4.
  */
 
-#include <assert.h>
 #include <string.h>
 #include "bracha87.h"
 
@@ -122,20 +121,23 @@ bracha87Fig1Sz(
     + BIT_SZ(N));             /* skFrom bitmap */
 }
 
-void
+unsigned int
 bracha87Fig1Init(
   struct bracha87Fig1 *b
  ,unsigned char n
  ,unsigned char t
  ,unsigned char vLen
 ){
-  /* n is encoded: actual process count = n + 1. Bracha requires
-   * actual > 3t.  Use unsigned int to avoid wrap at n = 255. */
-  assert((unsigned int)n + 1 > 3u * t);
+  /* Caller contract, returned rather than aborted: n is encoded, so the
+   * actual process count is n + 1, and Bracha requires actual > 3t.
+   * unsigned int avoids the wrap at n = 255.  A refusal writes nothing. */
+  if (!b || (unsigned int)n + 1 <= 3u * t)
+    return (0);
   memset(b, 0, bracha87Fig1Sz(n, vLen));
   b->n = n;
   b->t = t;
   b->vLen = vLen;
+  return (1);
 }
 
 /*
@@ -740,18 +742,21 @@ bracha87Fig2Sz(
     + (unsigned long)maxRounds * (BIT_SZ(N) + N));
 }
 
-void
+unsigned int
 bracha87Fig2Init(
   struct bracha87Fig2 *b
  ,unsigned char n
  ,unsigned char t
  ,unsigned char maxRounds
 ){
-  assert((unsigned int)n + 1 > 3u * t);
+  /* Caller contract, as bracha87Fig1Init. */
+  if (!b || (unsigned int)n + 1 <= 3u * t)
+    return (0);
   memset(b, 0, bracha87Fig2Sz(n, maxRounds));
   b->n = n;
   b->t = t;
   b->maxRounds = maxRounds;
+  return (1);
 }
 
 unsigned int
@@ -867,7 +872,7 @@ bracha87Fig3Sz(
     + (unsigned long)maxRounds * (2 * BIT_SZ(N) + N));
 }
 
-void
+unsigned int
 bracha87Fig3Init(
   struct bracha87Fig3 *b
  ,unsigned char n
@@ -876,13 +881,17 @@ bracha87Fig3Init(
  ,bracha87Nfn N
  ,void *Nclosure
 ){
-  assert((unsigned int)n + 1 > 3u * t);
+  /* Caller contract, as bracha87Fig1Init.  N is required: fig3IsValid
+   * calls it for every round past 0. */
+  if (!b || !N || (unsigned int)n + 1 <= 3u * t)
+    return (0);
   memset(b, 0, bracha87Fig3Sz(n, maxRounds));
   b->n = n;
   b->t = t;
   b->maxRounds = maxRounds;
   b->N = N;
   b->Nclosure = Nclosure;
+  return (1);
 }
 
 /*
@@ -1277,7 +1286,6 @@ fig4Nfn(
        * In Bracha's regime t < N/3, and cnt[0] > N/2 > t >= excess,
        * so the unsigned subtraction below cannot wrap.
        */
-      assert(cnt[0] >= n_msgs - nt);
       if (n_msgs > nt
        && (cnt[0] - (n_msgs - nt)) * 2 <= B_N(f4))
         return (1); /* permissive, D_FLAG legitimate */
@@ -1285,7 +1293,7 @@ fig4Nfn(
     }
     if (cnt[1] * 2 > B_N(f4)) {
       *result = 1 | BRACHA87_D_FLAG;
-      assert(cnt[1] >= n_msgs - nt);
+      /* Same non-wrap invariant as the cnt[0] arm above. */
       if (n_msgs > nt
        && (cnt[1] - (n_msgs - nt)) * 2 <= B_N(f4))
         return (1); /* permissive, D_FLAG legitimate */
@@ -1328,7 +1336,6 @@ fig4Nfn(
          * dc[dm] > 2t and excess <= t together guarantee
          * dc[dm] > excess, so the subtraction cannot wrap.
          */
-        assert(dc[dm] >= excess);
         if (dc[dm] - excess > 2u * f4->t) {
           *result = dm;
           return (0);
@@ -1348,13 +1355,21 @@ bracha87Fig4Sz(
   unsigned int n
  ,unsigned int maxPhases
 ){
-  /* Refusal, as bracha87Fig1Sz.  maxPhases is clamped rather than
-   * refused because bracha87Fig4Init clamps it identically. */
-  if (n > 255)
+  /* Refusal, as bracha87Fig1Sz.  Both ends of maxPhases are refused.
+   * Above BRACHA87_MAX_PHASES, maxPhases * 3 would not fit the
+   * unsigned char round counter; substituting the ceiling would hand
+   * back a machine that raises BRACHA87_EXHAUSTED earlier than the
+   * caller's own phase budget, and EXHAUSTED has no recovery -- no
+   * unilateral substitute decision is admissible, so the run can only
+   * end in the caller's abandonment policy.  At 0 a Fig 4 contradicts
+   * itself: the sub 0 and sub 1 arms of bracha87Fig4Round answer
+   * BROADCAST without consulting maxPhases -- only sub 2 tests the
+   * ceiling -- while the embedded Fig 3 carries maxRounds 0 and
+   * validates nothing, so the machine and its sub-machine disagree
+   * over whether round 0 exists.  bracha87Fig4Init refuses both, so
+   * the allocation and the machine decline together. */
+  if (n > 255 || !maxPhases || maxPhases > BRACHA87_MAX_PHASES)
     return (0);
-  /* Clamp: maxPhases * 3 must fit in unsigned char round count. */
-  if (maxPhases > BRACHA87_MAX_PHASES)
-    maxPhases = BRACHA87_MAX_PHASES;
   /*
    * sizeof (struct bracha87Fig4) counts the embedded fig3 as exactly
    * sizeof (struct bracha87Fig3) (its declared size, including the
@@ -1365,7 +1380,7 @@ bracha87Fig4Sz(
     + bracha87Fig3Sz(n, maxPhases * 3));
 }
 
-void
+unsigned int
 bracha87Fig4Init(
   struct bracha87Fig4 *b
  ,unsigned char n
@@ -1376,10 +1391,19 @@ bracha87Fig4Init(
  ,bracha87CoinFn coin
  ,void *coinClosure
 ){
-  assert((unsigned int)n + 1 > 3u * t);
-  /* Clamp: maxPhases * 3 must fit in unsigned char round count. */
-  if (maxPhases > BRACHA87_MAX_PHASES)
-    maxPhases = BRACHA87_MAX_PHASES;
+  /* Caller contract, as bracha87Fig1Init.  coin is required: step 3
+   * case (iii) invokes it and the round path does not branch on null.
+   * maxPhases is refused at both ends for the reasons bracha87Fig4Sz
+   * states, identically to Sz.  initialValue is refused outside
+   * {0, 1}: that is Fig 4's whole domain (VALID^1
+   * admits only v in {0, 1}), and a value carrying BRACHA87_D_FLAG or
+   * any other high bit would ride the round-0 broadcast that no
+   * receiver -- including this one -- could validate, so this process
+   * would count as a silent round-0 sender, spending tolerance the
+   * run may need. */
+  if (!b || !coin || !maxPhases || maxPhases > BRACHA87_MAX_PHASES
+   || initialValue > 1 || (unsigned int)n + 1 <= 3u * t)
+    return (0);
   memset(b, 0, bracha87Fig4Sz(n, maxPhases));
   b->n = n;
   b->t = t;
@@ -1395,6 +1419,7 @@ bracha87Fig4Init(
   bracha87Fig3Init(
     &b->fig3
    ,n, t, (maxPhases * 3), fig4Nfn, b);
+  return (1);
 }
 
 unsigned int
@@ -1422,7 +1447,7 @@ bracha87Fig4Round(
   unsigned char adoptV;
   unsigned char setCoin;
 
-  if (!b || !n_msgs)
+  if (!b || !n_msgs || !values)
     return (0);
   if (b->flags & BRACHA87_F4_EXHAUSTED)
     return (0);
@@ -1565,8 +1590,8 @@ bracha87RetryInit(
  * all-echoed / full READY suppress coverage; sent flags live forever), so
  * until convergence every sent instance has actions to output; a
  * tight loop will empty the cursor space onto the wire as fast as
- * the CPU can run, causing the very drops the retry is meant to
- * recover from.  The application's tick rate is the rate limit.
+ * the CPU can run, offering the transport more than the retry exists
+ * to recover from.  The application's tick rate is the rate limit.
  *
  * Walks the cursor forward from p->pos to the next instance with
  * retry actions and returns them.  Returns 0 ONLY when a full

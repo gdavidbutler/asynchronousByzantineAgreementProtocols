@@ -1738,7 +1738,7 @@ testBprProcessGate(
          process0Seen, process1Seen, call + 1);
 
   /* Now flip process 1 to decided 1 (post-decide continuation).
-   * Retry should retry process 1 (Bracha Note 1). */
+   * Retry should retry process 1 (Implementation Note 1). */
   testWriteDecision(a, 1, 1);
 
   /* Reset cursor by calling Init?  No -- we want to test that the

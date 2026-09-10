@@ -33,9 +33,9 @@
  * Together: a Byzantine initiator cannot show different values to
  * different correct processes and have any of them accept different
  * things.  Either all correct processes converge on one v, or none
- * accept anything.  This is the all-or-nothing property -- what TCP
- * and UDP cannot do, and what authenticated point-to-point alone
- * cannot do under a Byzantine sender.
+ * accept anything.  This is the all-or-nothing property, and it is
+ * what authenticated point-to-point channels alone cannot give under
+ * a Byzantine sender.
  *
  * This demo runs ONE Fig 1 instance per process per initiator, with one
  * designated initiator.  The value carried is multi-byte (vLen+1 bytes,
@@ -454,8 +454,9 @@ main(
   /*  by the application's sleep(tickMs).  Looping until idle would       */
   /*  flood the network -- Bracha BPR retries persist, so every sent      */
   /*  Fig 1 has actions until its gates close; a tight loop empties the   */
-  /*  cursor as fast as the CPU runs and overruns kernel buffers.  One    */
-  /*  tick per process per pass of this loop is that rate.                */
+  /*  cursor as fast as the CPU runs, offering the transport more than    */
+  /*  the retry exists to recover from.  One tick per process per pass    */
+  /*  of this loop is that rate.                                          */
   /*                                                                      */
   /*  Each process's instance space here is a single Fig 1, so ONE        */
   /*  bracha87Fig1RetryStep call IS a full sweep of it: the 0 return is   */

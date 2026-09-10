@@ -40,9 +40,8 @@
 #   named-label credit.  Four of the five suites accumulate failures
 #     and print a stable label; the explorer stops at its first and
 #     prints one.  A kill is credited only when the DESIGNATED label
-#     appears.  A nonzero status is not a kill: the machines carry live
-#     asserts with no NDEBUG anywhere, so a mutation can abort the
-#     process before any check runs -- that is the mutation announcing
+#     appears.  A nonzero status is not a kill: a mutation can fault or
+#     run away before any check runs -- that is the mutation announcing
 #     itself, and it is graded CRASH.
 #
 #   suites run one at a time.  `make check` stops at the first failing

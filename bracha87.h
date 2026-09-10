@@ -43,7 +43,7 @@
  *   n:         unsigned char, encodes process count 1..256 (n + 1)
  *   t:         unsigned char, max 85 (n + 1 > 3t required)
  *   vLen:      unsigned char, encodes value length 1..256 (vLen + 1 bytes)
- *   maxPhases: unsigned char, max BRACHA87_MAX_PHASES (85)
+ *   maxPhases: unsigned char, 1..BRACHA87_MAX_PHASES (85)
  *   rounds:    unsigned char, 0-based, max 3 * BRACHA87_MAX_PHASES - 1 (254)
  */
 
@@ -179,8 +179,16 @@ bracha87Fig1Sz(
  ,unsigned int             /* vLen: actual value length = vLen + 1; > 255 refused */
 );
 
-/* Initialize a Fig1 instance. Caller has allocated bracha87Fig1Sz bytes. */
-void
+/*
+ * Initialize a Fig1 instance.  Caller has allocated bracha87Fig1Sz bytes.
+ *
+ * Returns 1 initialized, 0 REFUSED -- a null instance, or a configuration
+ * Bracha's model does not admit (n + 1 > 3t is required).  A refusal
+ * writes NOTHING: the caller still holds its raw allocation, and no
+ * library entry aborts a binding application over bad input.  Every
+ * bracha87Fig*Init answers the same way.
+ */
+unsigned int
 bracha87Fig1Init(
   struct bracha87Fig1 *
  ,unsigned char            /* n: actual process count = n + 1 */
@@ -523,7 +531,7 @@ bracha87Fig1Received(
  * Test a BPR suppress mask -- the bitmap returned by bracha87Fig1Skip
  * (or carried on struct bracha87Fig1Act.skip / bkr94acsAct.skip):
  * non-zero iff process 'p' is to be skipped.  This names the mask's bit
- * convention (a little-endian per-process bitmap, BIT_SZ(n) bytes) so a
+ * convention (a little-endian per-process bitmap, (n + 7) / 8 bytes) so a
  * broadcast loop reads it without re-deriving the layout:
  *
  *   for (p = 0; p < n; ++p)
@@ -604,8 +612,11 @@ bracha87Fig2Sz(
  ,unsigned int             /* maxRounds; > 255 refused */
 );
 
-/* Initialize a Fig2 instance. Caller has allocated bracha87Fig2Sz bytes. */
-void
+/*
+ * Initialize a Fig2 instance.  Caller has allocated bracha87Fig2Sz bytes.
+ * Returns 1 initialized, 0 refused (same contract as bracha87Fig1Init).
+ */
+unsigned int
 bracha87Fig2Init(
   struct bracha87Fig2 *
  ,unsigned char            /* n: actual process count = n + 1 */
@@ -744,7 +755,12 @@ bracha87Fig3Sz(
  ,unsigned int             /* maxRounds; > 255 refused */
 );
 
-void
+/*
+ * Initialize a Fig3 instance.  Caller has allocated bracha87Fig3Sz bytes.
+ * Returns 1 initialized, 0 refused (same contract as bracha87Fig1Init);
+ * N is required, since the VALID^k predicate calls it from round 1 on.
+ */
+unsigned int
 bracha87Fig3Init(
   struct bracha87Fig3 *
  ,unsigned char            /* n: actual process count = n + 1 */
@@ -814,7 +830,7 @@ bracha87Fig3RoundComplete(
 /*  Instantiates Figure 3 with three specific N functions.               */
 /*  Three rounds per phase. Parameterized by coin.                       */
 /*                                                                       */
-/*  maxPhases <= BRACHA87_MAX_PHASES (85).                               */
+/*  maxPhases is 1..BRACHA87_MAX_PHASES (85); outside that is refused.   */
 /*  85 * 3 = 255 rounds fits in unsigned char round count (0..254).      */
 /*  If all phases are exhausted without decision, Fig4Round returns      */
 /*  BRACHA87_EXHAUSTED.                                                  */
@@ -844,16 +860,27 @@ bracha87Fig3RoundComplete(
  * randomness taken as given.  That source must come from OUTSIDE the
  * asynchronous system.  So this call returns a value, always and
  * immediately: it cannot fail, cannot decline, and must not block or
- * perform I/O.  An interactive construction -- one that broadcasts and
- * waits for peers before it can answer -- does not belong behind this
- * callback; it would relocate the impossibility into the coin rather
- * than escape it, and make the protocol's termination rest on a
- * liveness condition no paper here proves.  See README (Coin Choice).
+ * perform I/O.  So a construction that must exchange messages before it
+ * can answer does not belong BEHIND this callback -- not because the
+ * exchange is unsound, but because there is no point in the round for
+ * it to happen.  Bracha's own Section 7 does exactly such an exchange:
+ * with a dealer having pre-distributed the sequence, the processes
+ * "access the global coin toss by exchanging portions of it" and reach
+ * an expected two phases.  Note where the randomness comes from there:
+ * the dealer, before the run.  A construction that instead GENERATES
+ * fresh randomness by agreement inside the run gives up what the local
+ * coin keeps: BKR94 records that its secret-sharing route carries "an
+ * exponentially small but non zero probability of not terminating",
+ * against "the asynchronous Byzantine Agreement problem where the
+ * randomized protocol terminates with probability 1".  It would be
+ * circular here besides -- the exchange needs a reliable broadcast, and
+ * the one at hand is Fig 1.  Either way the values must be in hand when
+ * the call is made: deal them into the closure ahead of need.  See
+ * README (Coin Choice).
  *
  * instance names WHICH state machine is asking; phase names WHICH coin
- * within it.  Together with whatever the closure carries (a session or
- * epoch identity), they are the coin's NAME, and the name is what a
- * common coin must agree on across processes.  A caller running one
+ * within it.  Together they are the coin's NAME, and the name is what
+ * a global coin must agree on across processes.  A caller running one
  * Fig 4 can pass anything for instance and ignore it; bkr94acs sets it
  * to the BA's process index, so the N concurrent BAs of one ACS draw
  * distinct coins rather than sharing a phase's value.  A local coin
@@ -893,7 +920,8 @@ typedef unsigned char (*bracha87CoinFn)(
  * into the bytes Sz() reserves for it.  Caller reads the embedded
  * Fig3 directly as &fig4->fig3 -- no cast.
  *
- * maxPhases must be >= 1 and <= BRACHA87_MAX_PHASES (85).
+ * maxPhases is 1..BRACHA87_MAX_PHASES (85); anything outside is
+ * refused by both bracha87Fig4Sz and bracha87Fig4Init.
  * Fig 4 instantiates Fig 3 with maxRounds = maxPhases * 3.
  */
 struct bracha87Fig4 {
@@ -913,41 +941,64 @@ struct bracha87Fig4 {
 };
 
 /*
- * Size in bytes needed for a Fig4 instance, or 0 if n is out of range
- * (same refusal contract as bracha87Fig1Sz).
+ * Size in bytes needed for a Fig4 instance, or 0 if n or maxPhases is
+ * out of range (same refusal contract as bracha87Fig1Sz).
  *
- * maxPhases is CLAMPED, not refused, because bracha87Fig4Init clamps it
- * identically -- the allocation and the initialized machine agree on the
- * ceiling.  n has no such counterpart: Init takes it as an unsigned char
- * and cannot see an out-of-range value at all, so Sz refuses it.
+ * maxPhases is refused at BOTH ends, never substituted.  ABOVE THE
+ * CEILING, maxPhases * 3 would not fit the unsigned char round
+ * counter; handing back the ceiling instead would give the caller a
+ * machine that raises BRACHA87_EXHAUSTED before its own phase budget
+ * is spent, and EXHAUSTED has no recovery -- no unilateral substitute
+ * decision is admissible, so the run can end only in the caller's
+ * abandonment policy.  A refusal the caller can see beats a shortened
+ * machine it cannot.  AT 0 a Fig 4 contradicts itself: the sub 0 and
+ * sub 1 arms of bracha87Fig4Round answer BROADCAST without consulting
+ * maxPhases, while the embedded Fig 3 carries maxRounds 0 and
+ * validates nothing.  Init refuses both -- the allocation and the
+ * machine decline together, as bkr94acsSz and bkr94acsInit do.  n has
+ * no such counterpart: Init takes it as an unsigned char and cannot
+ * see an out-of-range value at all, so Sz refuses it.
  */
 unsigned long
 bracha87Fig4Sz(
   unsigned int             /* n: actual process count = n + 1; > 255 refused */
- ,unsigned int             /* maxPhases, clamped to BRACHA87_MAX_PHASES (85) */
+ ,unsigned int             /* maxPhases: 1..BRACHA87_MAX_PHASES (85),
+                             * outside refused */
 );
 
 /*
  * Initialize a Fig 4 instance.
  *
- * coin must NOT be 0.  Step 3 case (iii) (no decision-candidate
- * majority) invokes coin(coinClosure, instance, phase) to derive
- * value_p.  Even on input traces where case (iii) never fires, callers
- * must supply a valid coin: the library does not branch on a null coin
- * pointer, and supplying 0 is undefined behavior.
+ * Returns 1 initialized, 0 refused (same contract as bracha87Fig1Init).
+ *
+ * coin must NOT be 0, and a null one is one of the refusals.  Step 3
+ * case (iii) (no decision-candidate majority) invokes
+ * coin(coinClosure, instance, phase) to derive value_p, so a caller
+ * must supply one even on input traces where case (iii) never fires --
+ * the round path does not branch on a null coin.
+ *
+ * initialValue is 0 or 1, and anything else is refused.  That is Fig
+ * 4's whole domain -- VALID^1 admits only v in {0, 1} -- so a value
+ * carrying BRACHA87_D_FLAG or any other high bit would ride the
+ * round-0 broadcast that nothing could validate, and this process
+ * would count as a silent round-0 sender, spending tolerance the run
+ * may need.  It is refused rather than masked because the paper has
+ * no rule that turns a non-binary input into a binary one, and BA
+ * validity is stated over the inputs the callers actually gave.
  *
  * instance is stored and handed back to the coin unexamined -- the
  * library never interprets it.  It exists so a caller running several
  * Fig 4 machines can tell them apart when naming a coin; a caller
  * running one can pass 0.
  */
-void
+unsigned int
 bracha87Fig4Init(
   struct bracha87Fig4 *
  ,unsigned char            /* n: actual process count = n + 1 */
  ,unsigned char            /* t */
- ,unsigned char            /* maxPhases, <= BRACHA87_MAX_PHASES (85) */
- ,unsigned char            /* initialValue: 0 or 1 */
+ ,unsigned char            /* maxPhases: 1..BRACHA87_MAX_PHASES (85),
+                             * outside refused */
+ ,unsigned char            /* initialValue: 0 or 1; anything else refused */
  ,unsigned char            /* instance: opaque, passed to coin */
  ,bracha87CoinFn           /* coin, must not be 0 */
  ,void *                   /* coinClosure */
@@ -971,11 +1022,26 @@ bracha87Fig4Init(
  *
  * BRACHA87_DECIDE is returned exactly once (the first time >2t d-messages
  * are seen).  It carries BRACHA87_BROADCAST whenever a next round exists
- * to broadcast into -- per the paper, a decided process continues
- * participating so others can reach consensus.  A decision taken on the
- * LAST phase has no next round, so there it is returned alone: the
- * decision stands, and the continuation the paper asks for is simply
- * over.  This is the one path that yields a bare BRACHA87_DECIDE.
+ * to broadcast into.  Fig 4 as written never halts, and Theorem 2 is
+ * proved for that figure: Lemma 8's no-deadlock proof takes every
+ * correct process to have broadcast at the first blocked round.  A
+ * process that stops sending at its decision cannot be told apart
+ * from a slow one -- in the model's own words, there is no way to
+ * distinguish between a "slow" message and a message not sent
+ * (Section 1).  To every other process it is therefore a faulty
+ * transmitter, and what that buys is the second arm of the paper's
+ * weak termination (Section 8): either all correct processes
+ * eventually decide, or none of them ever decides.  Nor can anyone
+ * wait it out: Section 1 caps the wait at n-t, "since there is a
+ * possibility that all t faulty processes do not send any message in
+ * that round."  So a silent decider must be budgeted against t, and a
+ * process still short of n-t has no recourse the model admits.  The
+ * paper's only word on halting is one unproved clause (Bracha87.txt;
+ * Implementation Note 1 carries the argument).  So a decided process
+ * keeps broadcasting.  A decision taken on the LAST phase has no next
+ * round, so there it is returned alone: the decision stands, and the
+ * continuation is simply over.  This is the one path that yields a
+ * bare BRACHA87_DECIDE.
  *
  * DECIDE is a success signal, NOT a stop condition.  A decided
  * process keeps broadcasting (post-decide continuation, above) for as
@@ -1047,6 +1113,14 @@ bracha87Fig4Init(
  * the same k stays due.  Only a k mismatch is a caller error; an empty
  * set is the ordinary state of a round whose sample has not arrived.
  *
+ * Outside those four sit the null arguments -- a null instance, or a
+ * null values with a nonzero n_msgs.  They leave no trace either, but
+ * unlike an empty set they are never a legitimate call: an empty
+ * sample is an ordinary round whose k stays due, while a null
+ * argument should not have been passed at all.  They are refused the
+ * way every other bad input is, 0 actions and no abort, rather than
+ * dereferenced.
+ *
  * SENDERS ARE NOT A PARAMETER.  Fig 4's computation is over values
  * alone -- the majority at 3i+1, the d-message counts at 3i+2.  Sender
  * identity belongs to Fig 3, which consumes it building VALID^k (one
@@ -1110,10 +1184,10 @@ bracha87Fig4Round(
 /*  (ACCEPTED / all-echoed / full READY suppress coverage; sent flags    */
 /*  live forever), so until convergence every sent instance has          */
 /*  actions; a `while (Retry(...))` loop empties the cursor space onto   */
-/*  the wire as fast as the CPU runs, burning through kernel buffers     */
-/*  and causing the very drops the retry exists to recover from.  The    */
-/*  application's tick rate is the rate limit.  In healthy operation a   */
-/*  Retry consumer returns >0 on every call until quiescence.            */
+/*  the wire as fast as the CPU runs, offering the transport more than   */
+/*  the retry exists to recover from.  The application's tick rate is    */
+/*  the rate limit.  In healthy operation a Retry consumer returns >0    */
+/*  on every call until quiescence.                                      */
 /*                                                                       */
 /*  The 0 return appears only when a full sweep across the whole cursor  */
 /*  space found no actions: either no sent instance exists yet           */

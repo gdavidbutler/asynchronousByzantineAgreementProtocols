@@ -2038,7 +2038,7 @@ testFig4PostDecide(
 /*
  * Test Fig4 post-decide value preservation under adversarial inputs.
  *
- * Bracha post-decide-continuation (Note 1) requires a decided
+ * Post-decide continuation (Implementation Note 1) requires a decided
  * process to keep broadcasting its decision value -- not whatever
  * majority/(d, majority) the next phase's validated set would suggest.
  * The .dtc-faithful Fig4 dispatch zeroes setMajority and setDMajority
@@ -2569,48 +2569,57 @@ testFig4DflagInjection(
 }
 
 /*
- * Smoke-test that bracha87Fig4Init clamps maxPhases > BRACHA87_MAX_PHASES
- * to BRACHA87_MAX_PHASES (85).  Without the clamp,
- * maxPhases * BRACHA87_ROUNDS_PER_PHASE wraps in unsigned char and
- * silently corrupts the embedded Fig3 size to 2 rounds.
+ * Test that bracha87Fig4Sz and bracha87Fig4Init refuse a maxPhases
+ * above BRACHA87_MAX_PHASES (85) rather than substituting the ceiling.
+ * The value cannot be carried: maxPhases * BRACHA87_ROUNDS_PER_PHASE
+ * wraps in unsigned char.  Substituting the ceiling would carry it by
+ * shortening the caller's phase budget, and a machine that raises
+ * BRACHA87_EXHAUSTED early has no recovery, so the refusal is what the
+ * caller can act on.  A refused Init writes nothing.
  */
 static void
-testFig4MaxPhasesClamp(
+testFig4MaxPhasesRefused(
   void
 ){
   struct bracha87Fig4 *b;
   unsigned long sz;
-  unsigned long sizeClamp;
-  unsigned char senders[1];
-  unsigned char values[1];
-  unsigned int act;
+  unsigned char *probe;
+  unsigned long j;
+  int intact;
 
-  printf("\n  maxPhases clamp:\n");
+  printf("\n  maxPhases refusal:\n");
 
-  /* Sz called with out-of-range value should equal Sz at the cap. */
-  sz = bracha87Fig4Sz(3, 100);
-  sizeClamp = bracha87Fig4Sz(3, BRACHA87_MAX_PHASES);
-  printf("    Sz(100)=%lu Sz(85)=%lu\n", sz, sizeClamp);
-  check("maxPhases: Sz clamps at cap", sz == sizeClamp);
+  sz = bracha87Fig4Sz(3, BRACHA87_MAX_PHASES);
+  printf("    Sz(85)=%lu Sz(86)=%lu Sz(100)=%lu\n",
+         sz, bracha87Fig4Sz(3, BRACHA87_MAX_PHASES + 1),
+         bracha87Fig4Sz(3, 100));
+  check("maxPhases: Sz takes the ceiling", sz != 0);
+  check("maxPhases: Sz refuses one past the ceiling",
+        bracha87Fig4Sz(3, BRACHA87_MAX_PHASES + 1) == 0);
+  check("maxPhases: Sz refuses a far-past value",
+        bracha87Fig4Sz(3, 100) == 0);
 
-  /* Init with out-of-range value should not crash and should produce
-   * a Fig4 with the clamped capacity (round indices 0..254 valid). */
+  /* Init refuses the same values, and writes nothing when it does. */
   b = (struct bracha87Fig4 *)calloc(1, sz);
-  bracha87Fig4Init(b, 3, 1, 100, 0, 0, testCoin, 0);
-
-  check("maxPhases: Init clamps maxPhases field",
+  check("maxPhases: Init takes the ceiling",
+        bracha87Fig4Init(b, 3, 1, BRACHA87_MAX_PHASES, 0, 0,
+                         testCoin, 0) == 1);
+  check("maxPhases: Init carries the ceiling it was given",
         b->maxPhases == BRACHA87_MAX_PHASES);
-
-  /* Smoke: round 0 with all-0 majority validates and advances. */
-  CoinVal = 0;
-  senders[0] = 0;
-  values[0] = 0;
-  /* Skip Fig3 wiring; just confirm Fig4Round operates on a non-corrupt
-   * embedded Fig3 (would dereference past end if size was 2 rounds). */
-  act = bracha87Fig4Round(b, 0, 0, values);
-  check("maxPhases: Fig4Round(0 msgs) returns 0 cleanly", act == 0);
-
   free(b);
+
+  probe = (unsigned char *)malloc(sz);
+  memset(probe, 0xAA, sz);
+  check("maxPhases: Init refuses one past the ceiling",
+        bracha87Fig4Init((struct bracha87Fig4 *)probe, 3, 1,
+                         BRACHA87_MAX_PHASES + 1, 0, 0, testCoin, 0) == 0);
+  intact = 1;
+  for (j = 0; j < sz; ++j)
+    if (probe[j] != 0xAA)
+      intact = 0;
+  check("maxPhases: a refused Init leaves the caller's memory alone",
+        intact);
+  free(probe);
 }
 
 /*
@@ -4392,7 +4401,7 @@ testFig1EvenNplusT(
 /*  have readied -- the regime where minimal retry's accept-retire */
 /*  of INITIAL/ECHO is trivially safe (nobody is behind at accept).      */
 /*  This pins the OTHER regime, the one the pthreadChannel deployments   */
-/*  actually run (local coin => Ben-Or t < sqrt(n) => n >> 3t; up to     */
+/*  actually run (local coin => Ben-Or t = O(sqrt(n)) => n >> 3t; up to  */
 /*  37/6 on a laptop): here 2t+1 << n-t, so processes cross the accept        */
 /*  threshold at widely different times.  Early accepters retire their   */
 /*  INITIAL/ECHO retry (bracha87Fig1Bpr) while many correct processes are   */
@@ -5345,7 +5354,7 @@ main(
   testFig4SubsetMajority();
   testFig4SubsetMajorityBoundary();
   testFig4DflagInjection();
-  testFig4MaxPhasesClamp();
+  testFig4MaxPhasesRefused();
   testFig4MultiPhase();
   testFig4Byzantine();
 

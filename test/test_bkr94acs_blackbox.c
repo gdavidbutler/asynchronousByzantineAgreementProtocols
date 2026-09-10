@@ -1931,15 +1931,14 @@ main(
   /* ---------------------------------------------------------------- */
   BANNER("A1b: Sz refuses a configuration that cannot be built");
   /* ---------------------------------------------------------------- */
-  /* Header: "or 0 if the configuration cannot be built ... n and vLen  */
-  /* are refused ... they are WIDER here than bkr94acsInit's unsigned   */
-  /* char, so Sz is the only entry that can see one out of range.       */
-  /* maxPhases is refused rather than clamped ... because bkr94acsInit  */
-  /* refuses the same values by returning uninitialized."               */
-  /*                                                                    */
-  /* Each pair brackets a boundary: the last value Init can carry, then */
-  /* the first it cannot.  The maxPhases pair is what distinguishes     */
-  /* this refusal from bracha87Fig4Sz's clamp of the same parameter.    */
+  /* Header: "or 0 if the configuration cannot be built ... n and     */
+  /* vLen are refused ... they are WIDER here than bkr94acsInit's     */
+  /* unsigned char, so Sz is the only entry that can see one out of   */
+  /* range.  maxPhases outside 1..BRACHA87_MAX_PHASES is refused ...  */
+  /* bkr94acsInit refuses the same values by returning 0."            */
+  /*                                                                  */
+  /* Each pair brackets a boundary: the last value Init can carry,    */
+  /* then the first it cannot.                                        */
   /* ---------------------------------------------------------------- */
   {
     CHECK(bkr94acsSz(255, 0, 1) != 0, "Sz takes n 255");
@@ -1949,7 +1948,7 @@ main(
     CHECK(bkr94acsSz(3, 0, BRACHA87_MAX_PHASES) != 0,
           "Sz takes maxPhases at the ceiling");
     CHECK(bkr94acsSz(3, 0, BRACHA87_MAX_PHASES + 1) == 0,
-          "Sz refuses maxPhases past the ceiling, never clamps");
+          "Sz refuses maxPhases past the ceiling");
     CHECK(bkr94acsSz(3, 0, 0) == 0, "Sz refuses maxPhases 0");
 
     /* An Init the size call refused must leave the caller's memory
@@ -1977,7 +1976,17 @@ main(
       CHECK(guard > 0, "probe guard size available");
       if ((probe = malloc(guard)) != 0) {
         memset(probe, 0xAA, guard);
-        bkr94acsInit((struct bkr94acs *)probe, 3, 1, 0, 0, 0, testCoin, 0);
+        CHECK(bkr94acsInit((struct bkr94acs *)probe, 3, 1, 0, 0, 0,
+                           testCoin, 0) == 0,
+              "Init returns 0 when maxPhases is refused");
+        CHECK(bkr94acsInit((struct bkr94acs *)probe, 2, 1, 0, 4, 0,
+                           testCoin, 0) == 0,
+              "Init refuses N = 3 with t = 1 (N == 3t)");
+        CHECK(bkr94acsInit(0, 3, 1, 0, 4, 0, testCoin, 0) == 0,
+              "Init refuses a null instance");
+        CHECK(bkr94acsInit((struct bkr94acs *)probe, 3, 1, 0, 4, 9,
+                           testCoin, 0) == 0,
+              "Init refuses self outside 0..n");
         intact = 1;
         for (j = 0; j < guard; ++j)
           if (probe[j] != 0xAA)
@@ -3477,9 +3486,9 @@ main(
   /*  Section F -- Step 2 pacing (bkr94acsFanoutDuty / bkr94acsFanout)*/
   /*                                                                  */
   /*  The same delayed-A-Cast schedule under two patience values: the eager   */
-  /*  schedule (F1) excludes the delayed honest process every time    */
-  /*  and patience (F2) includes it -- the pair is the WAN            */
-  /*  starvation seed and its remedy.  F3 is the liveness half: a     */
+  /*  schedule (F1) excludes the delayed honest process and           */
+  /*  patience (F2) includes it -- the pair is the WAN                */
+  /*  exclusion seed and its remedy.  F3 is the liveness half: a      */
   /*  dead slot holds TOLERANCE forever, patience bounds the tax,   */
   /*  and firing after it completes the instance.  F4 adds the       */
   /*  second sweep clock beside the first: the barren count an       */
@@ -3528,9 +3537,7 @@ main(
 
       /* The delayed A-Cast arrives after the close: it still accepts
        * everywhere (the value is not lost) but the subset is fixed --
-       * the paper's per-instance honest-exclusion allowance.  Under a
-       * persistent latency spread the SAME process re-suffers this
-       * every instance; that compounding is what F2's patience removes. */
+       * the paper's per-instance honest-exclusion allowance. */
       acasts[3] = 0xE3;
       n = bkr94acsAcast(processes[3], &acasts[3], acastOut);
       observeAndOutput(&obs[3], 3, 4, acastOut, n, 1, 0, -1);

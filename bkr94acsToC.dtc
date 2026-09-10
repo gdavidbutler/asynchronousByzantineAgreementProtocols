@@ -4,8 +4,7 @@
 # sites; C-function-scoped labels keep them distinct.
 #
 # The BA-outputs site is the round TURN, not the arrival path:
-# bkr94acsBaInput only banks evidence and dispatches nothing.  An
-# earlier revision turned rounds inside that arrival path (see
+# bkr94acsBaInput only banks evidence and dispatches nothing (see
 # bkr94acs.dtc, round-turn section).
 #
 # Event constants (BKR94ACS_ACS_EVENT_*) and enter constants

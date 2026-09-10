@@ -119,15 +119,14 @@ no,"(echo, v)",
 # ===========================================================
 #
 # Bracha's correctness proof presumes a reliable point-to-point
-# channel between honest parties.  Over an unreliable datagram
-# network that assumption is not satisfied.  BPR is the smallest
-# rule set that, joined with the six paper rules above, restores
-# eventual delivery by retrying the broadcast actions an
-# instance has sent, whenever the application's retry ticks.
-# BPR replaces the application-layer "per-instance bookkeeping
-# + per-process evidence" mechanism: retry state is intrinsic to Bracha's own
-# sent flags (echoed, rdSent) plus an "am initiator" bit that
-# names this process as the broadcast initiator.
+# channel between honest parties.  Over a fair-loss datagram
+# network that assumption is not satisfied.  BPR joins the six
+# paper rules above with rules that restore eventual delivery by
+# retrying the broadcast actions an instance has sent, whenever
+# the application's retry ticks.  No application-layer bookkeeping
+# is needed: retry state is intrinsic to Bracha's own sent flags
+# (echoed, rdSent) plus an "am initiator" bit that names this
+# process as the broadcast initiator.
 #
 # Justification: end-to-end argument (Saltzer/Reed/Clark 1984;
 # see SRC84.txt).  The "still owed" predicate lives at the Bracha
@@ -155,8 +154,7 @@ no,"(echo, v)",
 # with have echoed=yes leaves Rules 1-3 inhibited and Rules 4-6
 # unmet).  Bracha outputs come back all "no" and the chained BPR
 # rules fire from the sent flags.  In silent periods the
-# application omits the call and the protocol stays silent,
-# which is the principled stance under asynchrony.
+# application omits the call and the protocol stays silent.
 #
 # Discriminator.  bracha87.c selects which outputs to apply by
 # entry point: bracha87Fig1Input applies the paper outputs and

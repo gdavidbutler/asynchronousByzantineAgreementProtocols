@@ -772,9 +772,9 @@ main(
        * Do NOT skip messages addressed to locally-complete processes.
        * A process that has decided all N BAs must keep processing
        * incoming messages so its Fig1 echoes/readys continue to
-       * reach processes still working on some BAs.  Skipping replicates
-       * the post-decide stall the library itself was fixed to avoid
-       * (see bkr94acs.c bkr94acsBaInput comment on
+       * reach processes still working on some BAs.  Skipping strands
+       * them -- the post-decide stall the library's own non-short-
+       * circuit avoids (see bkr94acs.c bkr94acsBaInput comment on
        * a->complete).  The loop terminates on completion plus
        * quiescence below, not when any one process reaches complete.
        */
@@ -1085,16 +1085,16 @@ main(
     /*--------------------------------------------------------------------*/
     /*  Terminate by QUIESCENCE: every process has left the rotation on   */
     /*  its own evidence -- a full Retry pass owing nothing.  That is a   */
-    /*  stronger ending than the barren-sweep abandon gate this loop      */
-    /*  used to take, and it is available only because both READY         */
-    /*  annotations round-trip here: the barren gate reads the ABSENCE    */
-    /*  of progress, which a laggard's silence imitates exactly, while    */
-    /*  quiescence reads evidence every process supplied.  Completion is  */
-    /*  then an assertion rather than the gate -- an un-complete process  */
-    /*  is reported below and fails the run.  Abandonment remains the     */
-    /*  policy any deployment still needs (README.md "Abandonment"),      */
-    /*  since loss can hold the rotation open; the cap stands in for it   */
-    /*  here and is a harness guard, not protocol.                        */
+    /*  stronger ending than the barren-sweep abandon gate, and it is     */
+    /*  available only because both READY annotations round-trip here:    */
+    /*  the barren gate reads the ABSENCE of progress, which a laggard's  */
+    /*  silence imitates exactly, while quiescence reads evidence every   */
+    /*  process supplied.  Completion is then an assertion rather than    */
+    /*  the gate -- an un-complete process is reported below and fails    */
+    /*  the run.  Abandonment remains the policy any deployment still     */
+    /*  needs (README.md "Abandonment"), since loss can hold the          */
+    /*  rotation open; the cap stands in for it here and is a harness     */
+    /*  guard, not protocol.                                              */
     /*--------------------------------------------------------------------*/
 
     /*--------------------------------------------------------------------*/

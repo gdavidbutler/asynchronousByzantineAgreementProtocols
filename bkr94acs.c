@@ -46,7 +46,6 @@
  *   (SubSet = { j : BA_j = 1 }).
  */
 
-#include <assert.h>
 #include <string.h>
 #include "bkr94acs.h"
 
@@ -262,7 +261,7 @@ bkr94acsSz(
     + N * baPipe);            /* BA pipelines */
 }
 
-void
+unsigned int
 bkr94acsInit(
   struct bkr94acs *a
  ,unsigned char n
@@ -285,16 +284,17 @@ bkr94acsInit(
    * allocation and the Fig4 step 3 path would crash on the missing
    * coin.  An out-of-range self would index BA Fig1s past the
    * allocation on the first enter (baF1 initiator = self).  Bracha
-   * also requires actual_N > 3t (asserted in each Fig*Init below,
-   * but checking here gives a cleaner failure mode).
+   * also requires actual_N > 3t; each Fig*Init below refuses it too,
+   * but refusing here declines before any of them is called.
    */
-  if (!coin)
-    return;
+  if (!a || !coin)
+    return (0);
   if (!maxPhases || maxPhases > BRACHA87_MAX_PHASES)
-    return;
+    return (0);
   if (self > n)
-    return;
-  assert((unsigned int)n + 1 > 3u * t);
+    return (0);
+  if ((unsigned int)n + 1 <= 3u * t)
+    return (0);
 
   memset(a, 0, bkr94acsSz(n, vLen, maxPhases));
   a->n = n;
@@ -324,7 +324,7 @@ bkr94acsInit(
       /*
        * instance = the process index this BA decides on.  The N BAs
        * share one (coin, coinClosure), so without it every BA in a
-       * phase would name the same coin; a common coin would then hand
+       * phase would name the same coin; a global coin would then hand
        * all N the identical value.  i is the discriminator the coin
        * names them by.  A local coin ignores it.
        */
@@ -332,6 +332,7 @@ bkr94acsInit(
                        i, coin, coinClosure);
     }
   }
+  return (1);
 }
 
 /*
@@ -424,13 +425,14 @@ bkr94acsAcastInput(
    * Do NOT short-circuit on a->complete.  This process has locally
    * decided all N BAs, but other processes may still be working on
    * some BAs and depend on THIS process's continued Fig1 echoes and
-   * readys to reach their own n-t thresholds.  Bracha requires
-   * post-decide continuation at the BA level (Note 1); the
-   * same obligation applies at the BKR94 ACS level -- a
+   * readys to reach their own n-t thresholds.  Post-decide
+   * continuation is the premise of Bracha's Lemma 8 (Implementation
+   * Note 1 carries the argument); it applies at the
+   * BA level and again at the BKR94 ACS level -- a
    * locally-complete process must keep participating until the
    * application decides to exit (e.g. the barren-sweep gate).
-   * A blanket complete-guard causes classic post-decide stalls
-   * where the fastest process strands the slowest.  Step 1's enter
+   * A blanket complete-guard stalls the protocol here, the fastest
+   * process stranding the slowest.  Step 1's enter
    * below is idempotent (bkr94acsEnter's entered-state dedup), and
    * the terminal actions live in bkr94acsTurn, gated there by
    * Fig4's once-only DECIDE, so continuing after complete cannot
@@ -567,8 +569,8 @@ bkr94acsBaInput(
     return (0);
 
   /*
-   * Two intentional non-short-circuits -- both are Bracha post-decide
-   * continuation (Note 1) applied at different layers.
+   * Two intentional non-short-circuits -- both are post-decide
+   * continuation (Implementation Note 1) applied at different layers.
    *
    * 1. We do NOT short-circuit on bkr94acsDecision[process] != 0xFF.
    *    Bracha Fig4 requires a decided process to continue
@@ -580,8 +582,7 @@ bkr94acsBaInput(
    *    working on some BAs.  Their Fig1 instances for (process_X,
    *    round_Y, initiator_THIS) wait on THIS process's continued
    *    echoes and readys to cross n-t thresholds.  Dropping inputs
-   *    after local complete strands lagging processes -- a classic
-   *    post-decide stall.
+   *    after local complete strands lagging processes.
    *    Application exit is a separate concern (see the
    *    barren-sweep gate).
    */
@@ -633,11 +634,9 @@ bkr94acsBaInput(
 
     /*
      * Non-ACCEPT: must be ECHO_ALL or READY_ALL.  bracha87Fig1Input
-     * never outputs BRACHA87_INITIAL_ALL (that's a Bpr-only output);
-     * the assert documents the contract so the type-mapping ternary
-     * below isn't reading a stale assumption.
+     * never outputs BRACHA87_INITIAL_ALL (that's a Bpr-only output),
+     * which is what the type-mapping ternary below rests on.
      */
-    assert(f1out[k] == BRACHA87_ECHO_ALL || f1out[k] == BRACHA87_READY_ALL);
     {
       const unsigned char *cv;
 
@@ -982,8 +981,7 @@ bkr94acsRetryStep(
 /*  a moment; both decisions consume evidence that is still growing when    */
 /*  it first suffices, so the caller paces each from its sweep tick,        */
 /*  counting sweeps against its patience while TOLERANCE holds.             */
-/*  Zero patience (fire whenever enabled) is the eager schedule an          */
-/*  earlier revision hardwired into the arrival paths.                      */
+/*  Zero patience (fire whenever enabled) is the eager schedule.            */
 /*--------------------------------------------------------------------------*/
 
 /*
@@ -1159,8 +1157,8 @@ bkr94acsTurn(
      * Post-output decided count, derived from baDecision[]
      * (the decision just recorded above included).  Derived,
      * not stored: a stored counter is a denormalization of
-     * baDecision[], and as an unsigned char it wrapped on the
-     * 256th decision, suppressing COMPLETE at 256 processes.  Only
+     * baDecision[], and one held in an unsigned char would wrap on
+     * the 256th decision, suppressing COMPLETE at 256 processes.  Only
      * 0 and 1 match -- the 0xFF (undecided) and 0xFE (exhausted)
      * sentinels fall out of the scan with no separate rule.
      * One O(N) pass per BA decision, a rare event.

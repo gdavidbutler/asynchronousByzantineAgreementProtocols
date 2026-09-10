@@ -69,6 +69,32 @@ and none of it carries the same cover: before it, a broadcast may
 never accept (Theorems 4 and 5, Section 8 below); after it, halting
 is one unproved clause (quoted at the end of this file).
 
+The methodology, which the paper calls its main contribution
+(Section 1, p. 133; the scan reads "FaillStop" for Fail-Stop):
+
+  The main contribution of this paper is in the methodology that it
+  illustrates. Instead of dealing directly with the worst behavior of
+  the Byzantine processes, we develop a general technique that reduces
+  their effect on the system so they can do little more than Fail-Stop
+  processes. The technique has two parts, a reliable broadcast
+  primitive and a validation method. The broadcast primitive forces
+  the faulty processes either to send nothing or to send the same
+  message to all correct processes. The validation method forces the
+  faulty processes to send only messages that could have been sent by
+  correct processes. This validation method is then plugged as a
+  communication primitive in an agreement protocol for Fail-Stop
+  processes.
+
+And what Figure 4 therefore is (Section 4, p. 137-138; the sentence
+straddles the page break, and the scan renders "Bracha" as "Bra&"
+where the page turns):
+
+  In this section we show how to construct an n/3-resilient consensus
+  protocol using the primitives described in the previous sections.
+  The protocol is basically the consensus protocol of Ben-Or (1983)
+  and Bracha and Toueg (1985), into which we plugged our stronger
+  communication primitives.
+
 The perspective: every figure is written from ONE process's seat --
 "(By process p)" (Fig 1), "round(k) by process p" (Figs 2 and 3),
 "Phase(i): (by process p)" (Fig 4).  A process acts unilaterally: it
@@ -202,6 +228,28 @@ Key properties from the paper:
 
   Termination: probability of not terminating is
   lim_{r->inf} (1 - p)^r = 0, where p > 2^{-(n-1)}.
+
+Rabin's model and the global coin (Section 7, p. 141):
+
+  These protocols assume a stronger model of a distributed system
+  than our own and therefore are not comparable to our protocol.
+  This model assumes an initial phase in which a trusted dealer
+  computes a sequences of coin tosses and distributes it to all the
+  processes. Each coin toss value is shared among the processes by
+  the "secret sharing" method, which guarantees that a collaboration
+  of at least t + 1 processes is needed to find the value of the
+  coin. Thus, the rth coin toss will be available to processes only
+  in the rth phase. A coin toss such that, after the toss, all the
+  processes are guaranteed to have the same value of the coin is
+  known as a global coin toss.
+
+  We can easily modify Protocol 2 to accommodate Rabin's model and
+  immediately obtain the result of Toueg (1984). Instead of having
+  each process toss its own coin in the third round of each phase,
+  the processes access the global coin toss by exchanging portions
+  of it. The resulting protocol is a consensus protocol that
+  tolerates up to t < n/3 Byzantine processes and whose expected
+  number of phases to termination is two.
 
 The second impossibility (Section 8, p. 141) -- why waiting on a
 named process is forbidden, in the paper's own words:

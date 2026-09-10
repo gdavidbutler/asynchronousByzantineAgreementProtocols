@@ -62,8 +62,7 @@
  * from the BPR sweep (bkr94acsFanoutDuty / bkr94acsFanout).
  * Firing at the instant the count holds -- zero patience
  * -- closes SubSet against every honest process whose A-Cast is
- * still in flight, and under a persistent latency spread that
- * excludes the same honest processes every ACS instance.
+ * still in flight.
  *
  * The same reading governs the BA round turn.  Bracha's Fig4 "wait
  * until validate n-t k-messages" is enabling evidence too, and the
@@ -111,7 +110,7 @@
 /*  class structurally (which entry function the caller invokes), not as  */
 /*  a stored value -- so these positions are a CONTRACT FOR PACKERS, not  */
 /*  a format the library reads or writes.  The bundled example,           */
-/*  example/bkr94acs.c, frame to this layout; new framers should too.     */
+/*  example/bkr94acs.c, frames to this layout; new framers should too.    */
 /*                                                                        */
 /*    bit:  7      | 6     | 5         | 4        | 3  | 2   | 1 0       */
 /*          D_FLAG   (app)   RECEIVED    ACCEPTED   cv   cls   type       */
@@ -208,7 +207,7 @@
  *                 process's actual decision, breaking SubSet agreement
  *                 (Part C).  The application surfaces it as the run's
  *                 failure cause and exits through its abandonment
- *                 policy, optionally restarting with fresh state.
+ *                 policy.
  *                 Output exactly once per BA per ACS instance.)
  *
  * .value is a borrowed pointer into library-owned storage (the
@@ -270,9 +269,9 @@ struct bkr94acs {
                              * directly. */
   /*
    * The BKR94 step-2 / step-3 decision counts are not stored: a
-   * stored counter is a denormalization of baDecision[] (and, as the
-   * unsigned char it once was, wrapped on the 256th decision so
-   * BKR94ACS_ACT_COMPLETE could never fire at 256 processes).  They
+   * stored counter is a denormalization of baDecision[], and one held
+   * in an unsigned char would wrap on the 256th decision, so
+   * BKR94ACS_ACT_COMPLETE could never fire at 256 processes.  They
    * are derived by scanning baDecision[] on demand: the step-3 count
    * once per BA decision (bkr94acsTurn's DECIDE branch, a rare
    * event), the step-2 count at every bkr94acsFanoutDuty query --
@@ -296,9 +295,9 @@ struct bkr94acs {
  * makes.  n and vLen are refused for the reason stated at
  * bracha87Fig1Sz: they are WIDER here than bkr94acsInit's unsigned
  * char, so Sz is the only entry that can see one out of range.
- * maxPhases is refused rather than clamped (bracha87Fig4Sz clamps it)
- * because bkr94acsInit refuses the same values by returning
- * uninitialized -- the allocation and the machine decline together.
+ * maxPhases outside 1..BRACHA87_MAX_PHASES is refused, as it is at
+ * bracha87Fig4Sz.  bkr94acsInit refuses the same values by returning
+ * 0, so the allocation and the machine decline together.
  */
 unsigned long
 bkr94acsSz(
@@ -312,15 +311,21 @@ bkr94acsSz(
 /*
  * Initialize a BKR94 ACS instance. Caller has allocated bkr94acsSz bytes.
  *
+ * Returns 1 initialized, 0 REFUSED, and a refusal writes NOTHING -- the
+ * caller still holds its raw allocation.  Refused: a null instance, a
+ * null coin, maxPhases 0 or above BRACHA87_MAX_PHASES, self outside
+ * 0..n, and a configuration Bracha's model does not admit (n + 1 > 3t
+ * is required).  Same contract as every bracha87Fig*Init.
+ *
  * The N binary BAs share the single (coin, coin closure) supplied here.
  * Each is given the process index it decides on as its bracha87CoinFn
  * instance argument, so the coin can name them apart -- without that a
- * common coin would hand every BA in a phase the identical value.  The
+ * global coin would hand every BA in a phase the identical value.  The
  * index is the BA's identity, not this process's, so it is the same
- * name at every process, which is what a common coin must agree on.  A
+ * name at every process, which is what a global coin must agree on.  A
  * local coin ignores it and draws fresh entropy per call.
  */
-void
+unsigned int
 bkr94acsInit(
   struct bkr94acs *
  ,unsigned char            /* n: actual process count = n + 1 */
@@ -588,9 +593,9 @@ bkr94acsAcast(
  * the library takes the arm).  Termination is an application choice;
  * the library prescribes no policy (see BPR.md).
  *
- * Replaces the application-layer retry bookkeeping entirely.  Per-instance
+ * No application-layer retry bookkeeping is needed.  Per-instance
  * destination masks, per-process evidence tracking, and retry
- * scheduling over an external instance list are not needed; the retry
+ * scheduling over an external instance list are all absent; the retry
  * state is entirely intrinsic -- Bracha's own per-instance state (the
  * sent flags, and the announcement bitmaps behind the READY retire)
  * plus this layer's per-process BA decision byte.
@@ -664,10 +669,10 @@ bkr94acsRetryStep(
  *
  * Caller discipline: per decision, count completed sweeps while
  * duty is TOLERANCE; fire when the count exceeds the deployment's
- * patience.  Zero patience recovers the eager schedule an earlier
- * revision hardwired into the arrival paths -- provided the caller
- * evaluates the verdict on EVERY attempt, since a clock that only
- * advances at a sweep boundary fires one boundary late even at zero.
+ * patience.  Zero patience recovers the eager schedule -- provided the
+ * caller evaluates the verdict on EVERY attempt, since a clock that
+ * only advances at a sweep boundary fires one boundary late even at
+ * zero.
  *
  * THE UNIT IS THE FULL SWEEP -- one complete pass of the Retry
  * cursor over every sent Fig 1 instance, read off the cursor's own
@@ -713,9 +718,8 @@ bkr94acsRetryStep(
  * closes its passes on the counter alone, the whole rule in one
  * comparison.  What it pays is a full walk of the Fig 1 instance space
  * per tick, since a quiescent process finds nothing and returns 0 only
- * at the end of the pass -- bounded by that space, and far below a
- * tick at any size this state can be allocated at, because a tick is a
- * wire rate limit and the walk is a few nanoseconds per position.
+ * at the end of the pass -- bounded by that space, and a tick is a wire
+ * rate limit rather than a compute budget.
  * Park to save that, or to report quiescence as the bundled example
  * does; do not park believing the boundary requires it.
  *
@@ -751,9 +755,7 @@ bkr94acsRetryStep(
  * 1, enter input 0 to every BA protocol for which you have not yet
  * entered a value."  Fired at the instant the local count crosses,
  * the fastest n-t processes close SubSet against every honest
- * process whose A-Cast is still in flight, and under a persistent
- * latency spread that excludes the same honest processes every ACS
- * instance.
+ * process whose A-Cast is still in flight.
  *
  * bkr94acsFanoutDuty (derived by scanning baDecision[] and the
  * entered set; nothing stored):
