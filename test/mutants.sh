@@ -1192,6 +1192,199 @@ disagrees with every other process.
       (bkr94acsEnterd(a)[process] == BKR94ACS_ENTER_ONE) ? 1 : 0;
 #END
 
+#MUTANT M45
+#FAMILY annotation containment -- an accept announcement marks every readier
+#FILE bracha87.c
+#ORACLE test_bkr94acs_blackbox
+#LABEL P1: no honest process ever recorded an accept nobody announced
+#EXPECT KILLED
+#WHY
+The accept announcement is the one wire field no paper backs, and its
+whole Byzantine argument is per-sender containment: the annotation
+rides a (ready, v) whose sender authentication binds, so it marks the
+SENDER and nobody else.  Widening it to every process already in the
+readied set is the plausible slip -- a process that readied is on its
+way to accepting anyway.  The designated arm reads the accepted
+evidence at every tick of a schedule carrying a lying process and a
+correct laggard, and requires every bit to be a process that actually
+announced; under the mutation the readied-but-not-yet-accepted
+processes appear in it and the unannounced count goes nonzero.
+
+What reds here does NOT depend on the forger.  The mutated setter is
+called on every announcement-carrying READY AND on every local
+self-accept, honest ones included, so the unearned bits appear in
+forger-free schedules too and this defect reds several lanes that have
+no Byzantine process at all.  The lying process is what makes the
+arm's OTHER readings meaningful -- the containment question only
+exists if a lie is in flight -- but the credit here is for the
+widening itself.
+
+WHAT THIS ENTRY IS AND IS NOT.  The MECHANISM is already covered from
+below and this run says so: the same defect reds the white-box
+"Received: an unannounced process is not marked", the composition's
+"Ingress: skip leaves process 3 clear (no accept announced)", and the
+never-announcer's short-by-exactly-the-leaver's-bit reading.  The
+explorer is NOT in that list: it prints count drift only, and this
+harness's own preamble says a count that moves is sensitivity to a
+behavioral change and never by itself a detected defect.  This entry
+is not a first detector and does not claim to be.  What it red-proves
+is the END-TO-END sentence -- that a forged announcement can never
+strand a correct laggard -- which until the forging arm existed had no
+arm at all, only the argument at the gate.
+
+The laggard half does not red here, and the reason is narrower than
+"the laggard has readied nowhere" -- it readied on the pre-cut
+instances, and after the heal it readies on every instance before it
+accepts, which is how it catches up.  What protects it is that the
+widening can only copy a readied bit into the accepted set at the
+moment an announcement or a self-accept arrives, and on the instances
+the laggard lacks, no announcement-carrying READY arrives at an honest
+process between the laggard's READY and the laggard's own true
+announcement: the honest cohort is mutually suppressed on those
+instances by then, and the forger's forged one came earlier.  So the
+arm did not move under this mutation in this schedule, and the
+recorded counters are identical to the clean run.  The laggard
+sentence carries no teeth from this entry, and none are claimed.
+
+Nor from any other.  The one anchored defect that DOES strand the
+laggard -- widening the marking to ALL n rather than to the readied
+set -- turns out to fire on the local self-accept call, filling the
+mask before any announcement arrives; that is the local-accept READY
+retire, Note 10's forbidden gate, and it is M01's class under a
+different anchor (its red set is a strict subset of M01's, forger-free
+lanes included).  A probe entry to that effect was built, graded
+KILLED, and withdrawn once its mechanism was read.  No
+announcement-containment defect reaches the laggard half; the sentence
+rests on the argument at the gate.
+#ANCHOR
+  if (!b || from > b->n)
+    return;
+  BIT_SET(F1_ACFROM(b), from);
+#WITH
+  if (!b || from > b->n)
+    return;
+  {
+    unsigned int q;
+
+    for (q = 0; q < B_N(b); ++q)
+      if (BIT_TST(F1_RDFROM(b), q))
+        BIT_SET(F1_ACFROM(b), q);
+  }
+  BIT_SET(F1_ACFROM(b), from);
+#END
+
+#MUTANT M46
+#FAMILY annotation containment -- an arm un-suppresses every process
+#FILE bracha87.c
+#ORACLE test_bkr94acs_blackbox
+#LABEL P2: and every one of them is aimed at the forger alone
+#EXPECT KILLED
+#WHY
+The other half of the containment argument: an unmarked READY
+un-suppresses ITS OWN SENDER for one egress, so a forger that keeps
+re-sending unmarked buys one masked READY per instance per pass of the
+victim's cursor, aimed back at itself, and displaces nothing owed to a
+correct process.  Arming every process instead turns each lie into a
+broadcast the whole cohort pays for.  The designated arm prices every
+honest READY egress by its recipient set -- the set the caller's
+broadcast would actually reach, read off the act's own suppress mask --
+and requires that set to be the forger alone; under the mutation the
+first arm each pass carries that instance's READY to the honest
+processes too and the reaching-a-correct-process count goes nonzero.
+
+WHAT THIS ENTRY IS AND IS NOT, and the run is the authority.  The
+MECHANISM is covered from below at the unit level: this defect reds
+the black-box "Resend: un-suppresses the armed sender only" and the
+white-box "Resend: an un-armed accept stays suppressed" and "Gate: the
+egress's mask excludes the armed sender only".  The two suites carry
+DIFFERENT check text -- an earlier draft of this paragraph claimed one
+string in both and the tree refuted it -- so read the strings, not the
+summary.  The composed arm was expected to be first at this and is
+not.
+
+THE DESIGNATED LABEL IS SENSITIVE, NOT SPECIFIC, and that is a
+limitation of this entry rather than of the arm.  P2's
+reaching-a-correct-process reading goes red under M15 (the suppress
+mask's negation dropped) and under M29 (the RECEIVED mask dropped at
+the A-Cast retry egress) with a signature indistinguishable from this
+one, because all three end with an egress whose recipient set is no
+longer the forger alone.  The masks genuinely differ -- under M15 the
+forger stays suppressed, under this mutation nobody is -- and no arm
+in the battery separates them.  A reader taking KILLED here as
+"the per-sender routing of the arm is what failed" is reading more
+than the grade carries.
+
+What the composed arm adds that no unit arm states is the drain: stop
+the forger and the residue owes one more masked READY per armed
+instance and then falls silent, at a depth its rate did not buy.  That
+is the bitmap rather than the counter, and it is measured by the arm's
+two rates plus its drain lane, not detected -- no single anchored
+defect in this catalogue makes it fail.
+#ANCHOR
+  BIT_SET(F1_ARMFROM(b), from);
+  BIT_CLR(F1_SKFROM(b), from);
+#WITH
+  {
+    unsigned int q;
+
+    for (q = 0; q < B_N(b); ++q) {
+      BIT_SET(F1_ARMFROM(b), q);
+      BIT_CLR(F1_SKFROM(b), q);
+    }
+  }
+#END
+
+#MUTANT M47
+#FAMILY retire gates -- the whole-action retire ignores outstanding arms
+#FILE bracha87.c
+#ORACLE test_bkr94acs_blackbox
+#LABEL P3: the retry still owes after the gate, mask-complete or not
+#EXPECT KILLED
+#WHY
+The READY whole-action retire reads the effective mask -- the announced
+accepts NET OF the outstanding arms -- and reading the raw accepted set
+instead retires the action while a process is still showing that it
+lacks this instance's announcement.  That is the stranding the second
+annotation exists to prevent, and it is the exact defect a forged
+announcement would exploit if containment did not hold: an announcement
+this process never earned would then close its gate for good.  The
+designated arm is the residue lane, where the accepted evidence covers
+all n -- the forger accepts and announces like anyone else, and turning
+its announcement forgery off moves none of that -- while its unmarked
+re-sends keep taking the arm; the arm requires the retry to still owe,
+and to owe it to the forger alone.  Under the mutation the count reaches n on the raw set,
+the action retires, and the still-owes check reads zero -- red.
+
+This is a second detector at a state the others do not reach, not a
+first one, and the run names the others: the white-box "Gate: an arm
+keeps READY alive at all-n accepted" and its phase-offset stranding
+arm, and the composed quiescence lane, whose processes never reach the
+zero return because the one whose arm is ignored never receives the
+marked re-send.  What this arm holds that they do not is the shape a
+re-arming adversary produces: evidence complete at all n and still
+owing, indefinitely, against a cohort that has nothing left to answer
+with.  The never-announcer residue lane is its opposite -- evidence
+short by one bit -- so between them the two readings separate the two
+ways a run can fail to fall silent.
+
+THE DESIGNATED LABEL IS SENSITIVE, NOT SPECIFIC.  It reads zero
+whenever the residue egress dies for ANY reason, and M02 -- READY
+quiescence on a lowered count threshold, a different file and a
+different defect class -- produces a P3 signature identical to this
+one, check for check.  The white-box gate arm does not separate them
+either; both red it.  What does separate them in the recorded run is
+the explorer, which under this mutation additionally reaches "no
+schedule reached a QUIESCENT terminal" and under M02 does not.  That
+reading is not this entry's designated credit; it is named here so the
+grade is not read for more than it carries.
+#ANCHOR
+      if (fig1FromCnt(sk, B_N(b)) < B_N(b))
+        out[nout++] = BRACHA87_READY_ALL;
+#WITH
+      if (fig1FromCnt(ac, B_N(b)) < B_N(b))
+        out[nout++] = BRACHA87_READY_ALL;
+#END
+
 CATALOGUE_END
 
 # ---------------------------------------------------------------------

@@ -363,11 +363,12 @@ bracha87Fig1Value(
  *     other process's count below n.  That is safe -- it can only
  *     persist once every correct process has accepted, and the
  *     un-quiesced process merely retries a READY no correct process
- *     consumes.  An outstanding arm costs one masked READY per tick,
- *     aimed only at the process it un-suppressed; a Byzantine process
- *     that announced and then keeps re-arming can hold the gate open at
- *     that price, forfeiting nothing owed to any correct process.  The
- *     application's abandonment policy remains the backstop.
+ *     consumes.  An outstanding arm costs one masked READY per tick of
+ *     the process holding this instance, aimed only at the process it
+ *     un-suppressed; a Byzantine process that announced and then keeps
+ *     re-arming can hold the gate open at that price, displacing
+ *     nothing owed to any correct process.  The application's
+ *     abandonment policy remains the backstop.
  *
  * Per-process suppression: every retry action carries a suppress mask
  * (bracha87Fig1Skip; on the array path, struct bracha87Fig1Act.skip)
@@ -486,11 +487,16 @@ bracha87Fig1ProcessAccepted(
  *
  * Byzantine note, the mirror of ProcessAccepted's: an arm only ever
  * un-suppresses its own sender, so a forged unmarked READY buys the forger
- * one masked READY per tick, aimed at the forger.  It can hold this
- * instance's READY retire open -- the same standing an announcement it
- * never sends already has -- and can neither delay nor displace anything
- * owed to a correct process, since every other bit of the mask still
- * suppresses.
+ * one masked READY per tick of the process holding this instance, aimed
+ * at the forger.  It can hold this instance's READY retire open -- the
+ * same standing an announcement it never sends already has, and at a
+ * message cost silence does not pay -- and displaces nothing owed to a
+ * correct process, since every other bit of the mask still suppresses.
+ * Displaces, not delays: an instance that still owes costs its holder a
+ * tick where a quiesced one is walked past, so arming many instances
+ * does lengthen a sweep -- by no more than a Byzantine-silent process
+ * costs it already, since silence leaves the same instances owing and
+ * pays nothing to do it.
  */
 void
 bracha87Fig1ProcessResend(

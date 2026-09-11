@@ -540,7 +540,7 @@ bracha87Fig1Bpr(
      * CORRECT process's true accept -- a byzantine process's forged
      * ACCEPTED only marks itself, never strands a correct laggard -- so the
      * gate is byzantine-safe; a byzantine process that keeps re-arming
-     * costs one masked READY aimed back at itself per tick and delays
+     * costs one masked READY aimed back at itself per tick and displaces
      * nothing owed to a correct process, since every other bit of skFrom
      * still suppresses.
      *

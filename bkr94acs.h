@@ -439,7 +439,13 @@ bkr94acsInit(
  * sender, so it retires this process's retry to the liar alone and can
  * never strand a correct laggard.  A forged missing RECEIVED
  * un-suppresses only its own sender, buying the forger one masked READY
- * per sweep aimed at itself.
+ * per instance per sweep of the RECEIVING process's cursor, aimed at
+ * itself.  Neither is the cheap way to hold an instance open: a process
+ * that simply never announces buys the same rate for no messages at
+ * all, so the re-arming forgery costs its sender one unmarked READY per
+ * instance per sweep to sustain what silence gets free.  Why the rate is
+ * the receiver's and not the sender's is BPR.md's (*Suppression and the
+ * Announcements*).
  *
  * CALLER OBLIGATION, the one the library cannot absorb: a caller that
  * parks a process on bkr94acsRetryStep's quiescent 0 return must

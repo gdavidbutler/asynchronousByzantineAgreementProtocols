@@ -55,6 +55,19 @@
  *   N. The sustained-rate skew lane -- the fairness non-invariant and
  *      its cost scaling (N1); duty verdicts are pure functions of
  *      state (N2).
+ *   O. A BA's decision versus this process's input to it -- a BA
+ *      decides 1 for an A-Cast this process never accepted (O1), two
+ *      fanout enter-0 exclusions at n=7 t=2 (O2), and a BA this
+ *      process entered with 0 deciding 1 (O3).
+ *   P. Annotation forgery -- the two READY annotations are the one
+ *      wire field no paper backs.  A forged accept announcement is
+ *      contained to its own sender and strands no correct laggard
+ *      (P1); a forged unmarked READY reaches the forger alone, and the
+ *      backlog it accumulates is priced by stopping the forger and
+ *      draining it, at one and at four times the honest rate (P2); and
+ *      the residue it leaves is mask-complete and perpetually re-armed,
+ *      ending in the barren gate, with or without the announcement lie
+ *      (P3).
  *
  * Sections I through N are the README "Abandonment" scenarios
  * mechanized.  Every assertion about the MACHINE is grounded in a
@@ -1979,6 +1992,357 @@ nDrive(
   }
   freeCluster(processes, 4);
   return (done ? 0 : -1);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Section P plumbing -- the annotation forger.                      */
+/*                                                                    */
+/*  Every other adversary in this file lies with a PROTOCOL message:  */
+/*  A5 forges an INITIAL's initiator, E1 equivocates its own A-Cast,  */
+/*  K1 trickles fresh state advances, C7 says nothing at all.  None   */
+/*  of them touches the two READY annotations -- every arm above      */
+/*  derives those bits honestly from the library's own act output.    */
+/*  The forger below is a full struct bkr94acs running the protocol   */
+/*  correctly and lying ONLY in those two bits, which is the whole of */
+/*  what an attacker holding an authenticated identity can do to them */
+/*  (README, Message System assumptions 2 and 3: it chooses content,  */
+/*  never its own 'from').                                            */
+/*                                                                    */
+/*  The lie is applied at DELIVERY, per receiver, over the existing   */
+/*  queue -- Section O's shape rather than a coarse side[] cut -- so   */
+/*  the wire the forger's own machine produced is still intact in w   */
+/*  and the non-vacuity counters can say what the lie actually        */
+/*  changed.  Self-delivery is never forged: a broadcast to self is a */
+/*  local hand-back (README, Message System item 4), not a packet an  */
+/*  attacker rewrites on its way anywhere.                            */
+/*                                                                    */
+/*  Every flag below is cleared on the way out of every arm.          */
+/* ------------------------------------------------------------------ */
+
+/* Instance keys at the sizes this section runs: n + n * (maxPhases *
+ * BRACHA87_ROUNDS_PER_PHASE) * n, largest at n=7 maxPhases=2. */
+#define P_INST_MAX 320
+
+static int PForger = -1;                /* which process lies; -1 = nobody */
+static unsigned int PForgeAccepted = 0; /* claim ACCEPTED it does not hold */
+static unsigned int PForgeUnmarked = 0; /* strip the RECEIVED it does hold */
+static unsigned char PCut = 0xFF;       /* process off the network; 0xFF none */
+static unsigned int PRate = 1;          /* forger Retry calls per honest tick */
+
+/* Non-vacuity: what the lie actually changed on the wire. */
+static unsigned int PForgedEarly = 0;
+static unsigned int PStripped = 0;
+
+/* The announcement ledger.  PAnnounced[to][from][process] is set when an
+ * A-Cast READY carrying the HONEST accepted bit reached 'to' -- read off
+ * w before pAnnot forges anything, so it records true announcements
+ * only, which is what makes the containment audit a real question. */
+static unsigned char PAnnounced[MAX_PROCESSES][MAX_PROCESSES][MAX_PROCESSES];
+
+/* READY egress accounting, armed once the honest processes have covered
+ * each other.  The recipient set is read off the act's own skip mask,
+ * so "aimed at" is a fact about the honest machine's egress and never
+ * about what the harness chose to deliver. */
+static unsigned int PAimArmed = 0;
+static unsigned int PReadyEgress = 0;
+static unsigned int PAimedAtForger = 0;
+static unsigned int PReachingCorrect = 0;
+
+/* The re-arming half of the adversary.  Suppression is per RECIPIENT and
+ * the forger's own machine honors it, so a forger that lies and then
+ * runs its retry honestly goes SILENT toward everyone who announced --
+ * it has nothing left to send and nothing to strip.  Holding a gate open
+ * therefore takes the other thing an authenticated attacker chooses:
+ * MULTIPLICITY.  The forger keeps re-sending its own READY for every
+ * instance it ever sent one for, unmarked, ignoring the mask its own
+ * machine computed -- which is the "keeps re-arming" process
+ * bracha87.h's retry banner prices.  Its content is its own authentic
+ * READY, replayed; only the two annotation bits are chosen. */
+static unsigned int PReplayOn = 0;
+static struct wire PReplay[P_INST_MAX];
+static unsigned char PReplayHas[P_INST_MAX];
+static unsigned int PArmsSent = 0;
+
+/* "Never strands a correct laggard", read off the egress rather than
+ * inferred from the laggard finishing.  Stranding is an honest process
+ * dropping the laggard from a READY recipient set for an A-Cast the
+ * laggard does not hold, so the reading is that recipient set, taken at
+ * every egress while the value is still missing there. */
+static int PLagWatch = -1;
+static unsigned int PLagSuppressed = 0;
+static unsigned int PLagServed = 0;
+static unsigned int PLagOther = 0;
+
+static void
+pReset(
+  void
+){
+  PForger = -1;
+  PForgeAccepted = 0;
+  PForgeUnmarked = 0;
+  PCut = 0xFF;
+  PRate = 1;
+  PForgedEarly = 0;
+  PStripped = 0;
+  PAimArmed = 0;
+  PReadyEgress = 0;
+  PAimedAtForger = 0;
+  PReachingCorrect = 0;
+  PReplayOn = 0;
+  PArmsSent = 0;
+  PLagWatch = -1;
+  PLagSuppressed = 0;
+  PLagServed = 0;
+  PLagOther = 0;
+  memset(PAnnounced, 0, sizeof (PAnnounced));
+  memset(PReplayHas, 0, sizeof (PReplayHas));
+}
+
+/* The annot byte as the forger's victim sees it. */
+static unsigned char
+pAnnot(
+  const struct wire *w
+){
+  unsigned char annot;
+
+  annot = wireAnnot(w);
+  if (PForger < 0 || (int)w->from != PForger || w->from == w->to
+   || w->type != BRACHA87_READY)
+    return (annot);
+  if (PForgeAccepted && !(annot & BKR94ACS_ACCEPTED)) {
+    ++PForgedEarly;
+    annot |= BKR94ACS_ACCEPTED;
+  }
+  if (PForgeUnmarked) {
+    if (annot & BKR94ACS_RECEIVED)
+      ++PStripped;
+    annot &= ~BKR94ACS_RECEIVED;
+  }
+  return (annot);
+}
+
+/* The Fig 1 instance a wire names, in the cursor's own linear space
+ * (A-Casts first, then process x round x initiator) -- the walk order
+ * bkr94acs.h documents at bkr94acsRetryStep. */
+static unsigned int
+pWireInst(
+  const struct wire *w
+ ,unsigned int nAct
+ ,unsigned int mr
+){
+  if (w->cls == BKR94ACS_CLS_ACAST)
+    return (w->process);
+  return (nAct + ((unsigned int)w->process * mr + w->round) * nAct
+          + w->initiator);
+}
+
+/* The containment audit.  bracha87Fig1Received is acFrom itself, and
+ * acFrom has exactly two writers: the local self-accept the composition
+ * records, and the ACCEPTED annotation, which marks the SENDER of the
+ * READY that carried it.  So a bit for q != self is the claim that q
+ * announced -- 'violations' counts bits no announcement, true or
+ * forged, accounts for, and 'unearned' counts the ones the forgery
+ * bought.  Run every tick, so the property is a standing fact rather
+ * than a reading at one instant.
+ *
+ * Scoped to the A-Cast instances: the BA class routes its annotations
+ * through the same bracha87Fig1ProcessAccepted call on the same
+ * argument, and a per-instance ledger over the BA space would cost more
+ * than the second reading of one mechanism is worth. */
+static void
+pMaskAudit(
+  struct bkr94acs **processes
+ ,unsigned int nAct
+ ,unsigned int *unearned
+ ,unsigned int *violations
+){
+  const struct bracha87Fig1 *f1;
+  const unsigned char *ans;
+  unsigned int p, j, q;
+
+  for (p = 0; p < nAct; ++p) {
+    if ((int)p == PForger)
+      continue;
+    for (j = 0; j < nAct; ++j) {
+      if (!(f1 = bkr94acsAcastFig1(processes[p], (unsigned char)j))
+       || !bracha87Fig1Value(f1))
+        continue;
+      if (!(ans = bracha87Fig1Received(f1)))
+        continue;
+      for (q = 0; q < nAct; ++q) {
+        if (q == p || !BRACHA87_SKIP_TST(ans, q) || PAnnounced[p][q][j])
+          continue;
+        if ((int)q == PForger)
+          ++*unearned;
+        else
+          ++*violations;
+      }
+    }
+  }
+}
+
+/* One honest process's READY egress, priced.  The recipient set is the
+ * one observeAndOutput would broadcast to -- the act's own suppress
+ * mask, read the same way -- so "aimed at the forger alone" is read off
+ * the machine's egress and not inferred from what arrives. */
+static void
+pAimCount(
+  const struct bkr94acsAct *acts
+ ,unsigned int n
+ ,unsigned int nAct
+){
+  unsigned int k, q, alone, recipients;
+
+  for (k = 0; k < n; ++k) {
+    if (acts[k].type != BRACHA87_READY)
+      continue;
+    alone = 1;
+    recipients = 0;
+    for (q = 0; q < nAct; ++q) {
+      if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, q))
+        continue;
+      ++recipients;
+      if ((int)q != PForger)
+        alone = 0;
+    }
+    if (!recipients)
+      continue;
+    ++PReadyEgress;
+    if (alone)
+      ++PAimedAtForger;
+    else
+      ++PReachingCorrect;
+  }
+}
+
+static void
+pTick(
+  struct bkr94acs **processes
+ ,struct processObs *obs
+ ,struct bracha87Retry *cursors
+ ,struct sweepPolicy *pol
+ ,unsigned int nAct
+ ,unsigned int mr
+){
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(6)];  /* encoded n; 7 processes */
+  struct wire w;
+  unsigned int p, b, n, k, rep, inst;
+
+  while (qSize() > 0) {
+    qPopHead(&w);
+    /* The cut takes a process off the network in both directions; its
+     * own loopback still lands, since delivery to self is a local
+     * hand-back and not something a network partition reaches. */
+    if (PCut != 0xFF && w.from != w.to
+     && (w.from == PCut || w.to == PCut))
+      continue;
+    if (PReplayOn && (int)w.from == PForger && w.from != w.to
+     && w.type == BRACHA87_READY
+     && (inst = pWireInst(&w, nAct, mr)) < P_INST_MAX) {
+      PReplay[inst] = w;
+      PReplayHas[inst] = 1;
+    }
+    if (w.cls == BKR94ACS_CLS_ACAST) {
+      if (w.type == BRACHA87_READY && w.accepted)
+        PAnnounced[w.to][w.from][w.process] = 1;
+      n = bkr94acsAcastInput(processes[w.to], w.process, w.type,
+                             pAnnot(&w), w.from, w.value, out);
+    } else
+      n = bkr94acsBaInput(processes[w.to], w.process, w.round, w.initiator,
+                          w.type, pAnnot(&w), w.from, w.baValue, out);
+    if (n)
+      ++pol[w.to].progress;
+    observeAndOutput(&obs[w.to], w.to, nAct, out, n, 1, 0, -1);
+  }
+
+  /* The re-arming, PRate rounds of it per honest tick.  Delivered
+   * straight, the way Section K delivers its trickler's wires: the
+   * forger runs no queue discipline anyone can hold it to. */
+  for (rep = 0; PReplayOn && rep < PRate; ++rep)
+    for (inst = 0; inst < P_INST_MAX; ++inst) {
+      if (!PReplayHas[inst])
+        continue;
+      w = PReplay[inst];
+      for (p = 0; p < nAct; ++p) {
+        const struct bracha87Fig1 *f1;
+        const unsigned char *ans;
+
+        if ((int)p == PForger)
+          continue;
+        w.to = (unsigned char)p;
+        /* What the forger's OWN machine would put on the wire for THIS
+         * recipient, read now rather than carried over from whoever the
+         * captured copy was addressed to.  Only against that is the
+         * stripped bit a lie about this recipient's accept rather than
+         * a bit that was never there. */
+        f1 = (w.cls == BKR94ACS_CLS_ACAST)
+           ? bkr94acsAcastFig1(processes[PForger], w.process)
+           : bkr94acsBaFig1(processes[PForger], w.process, w.round,
+                            w.initiator);
+        ans = f1 ? bracha87Fig1Received(f1) : 0;
+        /* The mask records nothing before the instance is accepted and
+         * its first entry is the local self-accept, so the sender's own
+         * bit in its own mask is exactly the accept the honest egress
+         * would announce. */
+        w.accepted = (ans && BRACHA87_SKIP_TST(ans, w.from)) ? 1 : 0;
+        w.received = (ans && BRACHA87_SKIP_TST(ans, p)) ? 1 : 0;
+        if (w.cls == BKR94ACS_CLS_ACAST)
+          n = bkr94acsAcastInput(processes[p], w.process, w.type,
+                                 pAnnot(&w), w.from, w.value, out);
+        else
+          n = bkr94acsBaInput(processes[p], w.process, w.round, w.initiator,
+                              w.type, pAnnot(&w), w.from, w.baValue, out);
+        ++PArmsSent;
+        if (n)
+          ++pol[p].progress;
+        observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
+      }
+    }
+
+  for (p = 0; p < nAct; ++p) {
+    n = bkr94acsRetryStep(processes[p], &cursors[p], out);
+    if (PAimArmed && (int)p != PForger)
+      pAimCount(out, n, nAct);
+    /* CORRECT senders only, and only while the laggard is reachable:
+     * an egress counted while the cut stands is discarded at :pTick's
+     * filter below, so counting it would credit the carrying with
+     * messages that provably never landed.  The forger is excluded
+     * because the question is what the HONEST cohort still sends. */
+    if (PLagWatch >= 0 && PCut == 0xFF && (int)p != PLagWatch
+     && (int)p != PForger)
+      for (k = 0; k < n; ++k) {
+        if (out[k].act != BKR94ACS_ACT_ACAST_SEND
+         || bkr94acsAcastValue(processes[PLagWatch], out[k].process))
+          continue;
+        if (out[k].type != BRACHA87_READY) {
+          /* What else is still going out for an instance the laggard
+           * lacks.  A reading of the drain discipline as much as of
+           * the retire gates: this harness runs the queue to fixpoint
+           * before any retry egress, so an instance is accepted at its
+           * sender -- INITIAL and ECHO retired -- before the first act
+           * is ever counted here. */
+          if (!out[k].skip || !BRACHA87_SKIP_TST(out[k].skip, PLagWatch))
+            ++PLagOther;
+          continue;
+        }
+        if (out[k].skip && BRACHA87_SKIP_TST(out[k].skip, PLagWatch))
+          ++PLagSuppressed;
+        else
+          ++PLagServed;
+      }
+    observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
+    spTick(&pol[p], cursors[p].sweeps, 0);
+    for (b = 0; b < nAct; ++b)
+      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
+        for (k = 0; k < n; ++k)
+          if (out[k].act == BKR94ACS_ACT_BA_DECIDED
+           || out[k].act == BKR94ACS_ACT_COMPLETE)
+            ++pol[p].progress;
+        observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
+      }
+    n = bkr94acsFanout(processes[p], 1, out);
+    observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
+  }
 }
 
 /* ================================================================== */
@@ -5990,6 +6354,626 @@ main(
       }
       freeCluster(processes, 7);
     }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /*  Section P -- annotation forgery                                  */
+  /* ---------------------------------------------------------------- */
+  /*  The two READY annotations are the one part of the wire NO paper   */
+  /*  backs -- BPR is this repository's own -- and bkr94acs.h states    */
+  /*  their Byzantine safety in two sentences at bkr94acs{Acast,Ba}-    */
+  /*  Input:                                                           */
+  /*                                                                   */
+  /*    "A forged ACCEPTED marks only its own sender, so it retires     */
+  /*     this process's retry to the liar alone and can never strand a  */
+  /*     correct laggard.  A forged missing RECEIVED un-suppresses only */
+  /*     its own sender, buying the forger one masked READY per         */
+  /*     instance per sweep of the RECEIVING process's cursor, aimed    */
+  /*     at itself."                                                    */
+  /*                                                                   */
+  /*  The per-sender containment MECHANISM is unit-tested; both         */
+  /*  sentences above are end-to-end and quantitative, and no arm       */
+  /*  anywhere forged an annotation.  These three do.  Nothing here     */
+  /*  specifies what the answer should be: the arms measure, and the    */
+  /*  header's sentence stands or is corrected by what they say.        */
+  /* ---------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------- */
+  BANNER("P1: a forged accept announcement is contained to its own sender");
+  /* ---------------------------------------------------------------- */
+  {
+    /* n=7 t=2.  Process 6 announces ACCEPTED on every READY from its
+     * first one, long before it holds any accept.  Process 5 is a
+     * correct laggard, cut off the network in both directions while
+     * A-Cast 4 is raised, so it holds ZERO evidence of that instance --
+     * the I1 shape, which is what makes "strand a correct laggard"
+     * something the arm can actually witness.  The connected side is
+     * exactly n-t = 5 honest processes plus the forger. */
+    struct bracha87Retry cursors[MAX_PROCESSES];
+    struct sweepPolicy pol[MAX_PROCESSES];
+    struct bkr94acsAct acastOut[1];
+    unsigned char subset0[MAX_PROCESSES];
+    unsigned char subsetP[MAX_PROCESSES];
+    unsigned int nAct = 7;
+    unsigned int mr = 6;
+    unsigned int unearned = 0;
+    unsigned int violations = 0;
+    unsigned int tick, n, p, j, sz0, szP, done;
+
+    if (allocCluster(processes, 7, 2, 0, 2) == 0) {
+      pReset();
+      PForger = 6;
+      PForgeAccepted = 1;
+      PLagWatch = 5;
+      for (p = 0; p < MAX_PROCESSES; ++p)
+        obsInit(&obs[p]);
+      for (p = 0; p < nAct; ++p) {
+        bracha87RetryInit(&cursors[p]);
+        memset(&pol[p], 0, sizeof (pol[p]));
+      }
+      qReset();
+
+      /* Pre-cut: 0-3 A-Cast into a whole network and the laggard banks
+       * real evidence, so the cut below is a laggard and not a process
+       * that never started. */
+      for (p = 0; p < 4; ++p) {
+        acasts[p] = (unsigned char)(0x20 + p);
+        n = bkr94acsAcast(processes[p], &acasts[p], acastOut);
+        observeAndOutput(&obs[p], (unsigned char)p, nAct, acastOut, n, 1, 0,
+                         -1);
+      }
+      for (tick = 0; tick < 2000; ++tick) {
+        pTick(processes, obs, cursors, pol, nAct, mr);
+        pMaskAudit(processes, nAct, &unearned, &violations);
+        if (bkr94acsAcastValue(processes[5], 0)
+         && bkr94acsAcastValue(processes[5], 3))
+          break;
+      }
+      CHECK(tick < 2000, "P1: the laggard holds real pre-cut evidence");
+
+      /* THE CUT, and the remaining A-Casts raised behind it. */
+      PCut = 5;
+      for (p = 4; p < nAct; ++p) {
+        acasts[p] = (unsigned char)(0x20 + p);
+        n = bkr94acsAcast(processes[p], &acasts[p], acastOut);
+        observeAndOutput(&obs[p], (unsigned char)p, nAct, acastOut, n, 1, 0,
+                         -1);
+      }
+      for (tick = 0; tick < 40000; ++tick) {
+        pTick(processes, obs, cursors, pol, nAct, mr);
+        pMaskAudit(processes, nAct, &unearned, &violations);
+        done = 1;
+        for (p = 0; p < 5; ++p)
+          if (!processes[p]->complete)
+            done = 0;
+        if (done)
+          break;
+      }
+      CHECK(tick < 40000,
+            "P1: the connected honest side completes while the cut stands");
+
+      /* NON-VACUITY.  The forgery has to have reached the evidence, or
+       * every containment reading below is about nothing. */
+      CHECK(PForgedEarly > 0,
+            "P1: the forger announced accepts it did not hold");
+      CHECK(unearned > 0,
+            "P1: and the lie is in the honest processes' accepted evidence");
+      CHECK(bkr94acsAcastValue(processes[5], 4) == 0,
+            "P1: the laggard holds nothing for the instance raised at the cut");
+
+      /* THE HEAL.  The laggard must still be carried even though the
+       * forger has by now "announced" for every instance at every
+       * honest process.  What does the carrying is measured below, not
+       * assumed here. */
+      PCut = 0xFF;
+      for (tick = 0; tick < 40000; ++tick) {
+        pTick(processes, obs, cursors, pol, nAct, mr);
+        pMaskAudit(processes, nAct, &unearned, &violations);
+        if (processes[5]->complete)
+          break;
+      }
+      CHECK(tick < 40000, "P1: the laggard reaches COMPLETE after the heal");
+      /* COMPLETE is not the carrying: a BA decides for an A-Cast this
+       * process never accepted (O1), so the value is owed past the
+       * close and the carrying is what arrives after it. */
+      for (tick = 0; tick < 40000; ++tick) {
+        pTick(processes, obs, cursors, pol, nAct, mr);
+        pMaskAudit(processes, nAct, &unearned, &violations);
+        if (bkr94acsAcastValue(processes[5], 4)
+         && bkr94acsAcastValue(processes[5], 6))
+          break;
+      }
+      CHECK(tick < 40000,
+            "P1: and ACCEPT on the instances it held nothing for");
+
+      /* THE CONTAINMENT READING, standing across every tick above. */
+      CHECK(violations == 0,
+            "P1: no honest process ever recorded an accept nobody announced");
+      /* The stranding reading, taken off the egress itself.  The guard
+       * admits egress whenever the laggard is reachable, which includes
+       * the pre-cut warm-up; it contributes nothing there only because
+       * this harness drains to fixpoint before the first retry, so the
+       * pre-cut A-Casts are accepted everywhere before any retry egress
+       * exists to count.  What it reads, in effect, is the heal: while
+       * an A-Cast's value was missing at the laggard, the honest cohort
+       * kept it in that instance's READY recipient set.  The load-bearing witness is the ACCEPT loop
+       * above, which is end-to-end; this one adds only that the
+       * carrying is visible in the egress the whole way.
+       *
+       * NOT witnessed here: that any counted READY was delivered, and
+       * that the eventual ACCEPT was caused by the counted egress
+       * rather than by another path.  There is no check on
+       * PLagSuppressed, because its being zero is entailed by the
+       * guard above rather than measured: the guard admits an act only
+       * while the laggard has not accepted, so the laggard announced
+       * no accept, so its bit is in no sender's accepted mask, so it
+       * cannot be in a suppress mask, which is that mask net of arms.
+       * Only a mis-indexed announcement could break it, and that is
+       * what `violations` already covers. */
+      CHECK(PLagServed > 0,
+            "P1: honest READY egress carried the laggard while it lacked");
+      /* A reading of the drain discipline in THIS arm, not a law. */
+      CHECK(PLagOther == 0,
+            "P1: READY alone did the carrying -- no INITIAL, no ECHO");
+
+      /* What the announcement lie costs its teller: nothing lasting.
+       * Measured, against the obvious reading.  The honest processes do
+       * drop the forger from their READY recipient sets on its false
+       * announcement -- but the forger's own machine then re-sends
+       * unmarked toward each of them, since it genuinely lacks their
+       * accepts, and each such re-send arms its receiver, whose next
+       * egress carries the announcement.  After a long drive the forger
+       * stands short on exactly the instance every honest process is
+       * short on, the decided-0 one the retry gate skips.  The lie buys
+       * one pass of delay per instance and leaves no mark. */
+
+      sz0 = bkr94acsSubset(processes[0], subset0);
+      CHECK(sz0 >= nAct - 2, "P1: |SubSet| >= n-t");
+      for (p = 1; p < 6; ++p) {
+        szP = bkr94acsSubset(processes[p], subsetP);
+        CHECK(szP == sz0, "P1: honest SubSet sizes agree");
+        if (szP == sz0)
+          CHECK(memcmp(subset0, subsetP, sz0) == 0,
+                "P1: honest SubSet contents byte-identical");
+      }
+      for (j = 0; j < sz0; ++j)
+        for (p = 0; p < 6; ++p)
+          CHECK(bkr94acsAcastValue(processes[p], subset0[j]) != 0,
+                "P1: Part D -- SubSet members have accepted values");
+
+      /* The audit runs per tick, so its two counts are bit READINGS
+       * accumulated over the drive rather than distinct bits.  Its
+       * DISCRIMINATING window is early convergence only: PAnnounced is
+       * monotone and never cleared, so once every honest process has
+       * announced every instance to every other, a later re-scan can
+       * no longer find an unearned bit.  The zero is standing; the
+       * power to detect is not. */
+      printf("      P1: %u forged announcements, %u unearned bit readings,"
+             " %u unannounced, %u egresses carried the laggard and %u"
+             " dropped it (%u non-READY), |SubSet| %u, forger completed %u\n",
+             PForgedEarly, unearned, violations, PLagServed, PLagSuppressed,
+             PLagOther, sz0, processes[6]->complete);
+      pReset();
+      freeCluster(processes, 7);
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("P2: a forged unmarked READY buys one re-send per pass, aimed at"
+         " the forger");
+  /* ---------------------------------------------------------------- */
+  {
+    /* n=4 t=1, process 3 forging the RECEIVED half alone -- the
+     * sentence's own subject.  It announces its accepts honestly, so
+     * the honest processes announce back and it really does hold their
+     * accepts; every READY it re-sends then DENIES holding them.  Each
+     * re-send is built from the forger's OWN mask as of that moment,
+     * so the mark stripped is the one its honest egress would have
+     * carried to that same recipient -- a forged missing RECEIVED
+     * rather than an honestly unmarked one, which is what PStripped
+     * counts.
+     *
+     * Once the honest three have covered each other the only READY
+     * egress left anywhere is the one the lie buys, so the two
+     * questions the sentence asks -- how many, and aimed where -- are
+     * both readable off that egress.
+     *
+     * Run at two forger rates, and then STOPPED at both.  Nothing here
+     * says what the answer should be: while the forger keeps re-arming
+     * there is an arm outstanding at every egress whatever the arm is
+     * made of, so the running yield is the cursor's cadence and settles
+     * nothing.  The drain after the stop is the lane where a bitmap and
+     * a counter would differ, and what it prints is what this arm
+     * claims. */
+    static const unsigned int rates[] = { 1, 4 };
+    struct bracha87Retry cursors[MAX_PROCESSES];
+    struct sweepPolicy pol[MAX_PROCESSES];
+    struct bkr94acsAct acastOut[1];
+    unsigned int aimed[2];
+    unsigned int reaching[2];
+    unsigned int drained[2];
+    unsigned int lastInc[2];
+    unsigned int passes[2];
+    unsigned int stripped[2];
+    unsigned int nAct = 4;
+    unsigned int mr = 6;
+    unsigned int ri, tick, n, p, armedAt, drainAt;
+
+    for (ri = 0; ri < sizeof (rates) / sizeof (rates[0]); ++ri) {
+      aimed[ri] = 0;
+      reaching[ri] = 0;
+      drained[ri] = 0;
+      passes[ri] = 0;
+      stripped[ri] = 0;
+      if (allocCluster(processes, 4, 1, 0, 2))
+        continue;
+      pReset();
+      PForger = 3;
+      PForgeUnmarked = 1;
+      PReplayOn = 1;
+      PRate = rates[ri];
+      for (p = 0; p < MAX_PROCESSES; ++p)
+        obsInit(&obs[p]);
+      for (p = 0; p < nAct; ++p) {
+        bracha87RetryInit(&cursors[p]);
+        memset(&pol[p], 0, sizeof (pol[p]));
+      }
+      qReset();
+      for (p = 0; p < nAct; ++p) {
+        acasts[p] = (unsigned char)(0x30 + p);
+        n = bkr94acsAcast(processes[p], &acasts[p], acastOut);
+        observeAndOutput(&obs[p], (unsigned char)p, nAct, acastOut, n, 1, 0,
+                         -1);
+      }
+
+      for (tick = 0; tick < 40000; ++tick) {
+        pTick(processes, obs, cursors, pol, nAct, mr);
+        if (processes[0]->complete && processes[1]->complete
+         && processes[2]->complete)
+          break;
+      }
+      CHECK(tick < 40000, "P2: the honest processes complete beside the forger");
+
+      /* Settle first: the arm prices what is left once the honest
+       * processes have finished covering each other, so the measurement
+       * window must not include the ordinary exchange. */
+      for (tick = 0; tick < 40000; ++tick) {
+        pTick(processes, obs, cursors, pol, nAct, mr);
+        if (pol[0].barren && pol[1].barren && pol[2].barren)
+          break;
+      }
+      CHECK(tick < 40000, "P2: the honest processes settle");
+
+      /* THE SETTLE'S PREMISE, witnessed rather than inferred.  A barren
+       * sweep is an input-act fact; what the window below needs is a
+       * MASK fact -- that no honest process still owes a READY to
+       * another -- and the two are different.  So read the masks: a
+       * non-forger bit still clear in any honest instance's READY
+       * suppress mask means the settle was cursor luck. */
+      {
+        unsigned int openBits = 0, hp, hq, hj, hr, hb;
+
+        for (hp = 0; hp < nAct; ++hp) {
+          const struct bracha87Fig1 *f1;
+          const unsigned char *sk;
+
+          if ((int)hp == PForger) continue;
+          for (hj = 0; hj < nAct; ++hj) {
+            if ((f1 = bkr94acsAcastFig1(processes[hp], (unsigned char)hj))
+             && bracha87Fig1Value(f1)
+             && (sk = bracha87Fig1Skip(f1, BRACHA87_READY_ALL)))
+              for (hq = 0; hq < nAct; ++hq)
+                if ((int)hq != PForger && hq != hp && !BRACHA87_SKIP_TST(sk, hq))
+                  ++openBits;
+            for (hr = 0; hr < mr; ++hr)
+              for (hb = 0; hb < nAct; ++hb)
+                if ((f1 = bkr94acsBaFig1(processes[hp], (unsigned char)hj,
+                                         (unsigned char)hr, (unsigned char)hb))
+                 && bracha87Fig1Value(f1)
+                 && (sk = bracha87Fig1Skip(f1, BRACHA87_READY_ALL)))
+                  for (hq = 0; hq < nAct; ++hq)
+                    if ((int)hq != PForger && hq != hp && !BRACHA87_SKIP_TST(sk, hq))
+                      ++openBits;
+          }
+        }
+        CHECK(openBits == 0,
+              "P2: at the settle the honest masks are complete toward"
+              " each other");
+      }
+      armedAt = pol[0].sweeps + pol[1].sweeps + pol[2].sweeps;
+      PAimArmed = 1;
+      for (tick = 0; tick < 2000; ++tick)
+        pTick(processes, obs, cursors, pol, nAct, mr);
+      passes[ri] = pol[0].sweeps + pol[1].sweeps + pol[2].sweeps - armedAt;
+      aimed[ri] = PAimedAtForger;
+      reaching[ri] = PReachingCorrect;
+
+      /* THE DRAIN, and it is the only lane that can tell a bitmap from
+       * a counter.  While the forger keeps re-arming there is an arm
+       * outstanding at every egress either way, so the yield under a
+       * counter would look exactly like the yield under a bitmap --
+       * which is why the two rates above cannot settle the question.
+       * Stop the forger entirely -- no replay, no stripping of its own
+       * machine's honest egress -- and keep counting.
+       *
+       * The two readings that separate the shapes, and why a relative
+       * comparison between the lanes could not: three honest cursors
+       * emit at most one aimed READY each per tick, so any backlog
+       * deeper than the window saturates it, and a counter would
+       * saturate it in BOTH lanes alike.  A bitmap holds one bit per
+       * (instance, sender), so it owes at most one masked READY per
+       * armed instance per honest process -- an ABSOLUTE bound, not a
+       * ratio -- and it owes them inside the next sweep, after which
+       * the last increment tick stops moving. */
+      PReplayOn = 0;
+      PForgeUnmarked = 0;
+      drainAt = PAimedAtForger;
+      lastInc[ri] = 0;
+      {
+        unsigned int prev = PAimedAtForger;
+
+        for (tick = 0; tick < 2000; ++tick) {
+          pTick(processes, obs, cursors, pol, nAct, mr);
+          if (PAimedAtForger != prev) {
+            lastInc[ri] = tick;
+            prev = PAimedAtForger;
+          }
+        }
+      }
+      drained[ri] = PAimedAtForger - drainAt;
+      PAimArmed = 0;
+
+      CHECK(PReadyEgress > 0,
+            "P2: the forgery keeps a READY egress alive after the settle");
+      /* WHAT THIS WITNESSES.  By the settle above, nothing is owed to a
+       * correct process inside this window -- that is what made the
+       * residue egress readable in isolation.  So this is the
+       * RECIPIENT SET reading, not an end-to-end non-displacement one:
+       * every egress the lie keeps alive names the forger and nobody
+       * else.  Non-displacement rests on that plus the per-recipient
+       * mask, and P1 is where a correct process is concurrently owed. */
+      CHECK(PReachingCorrect == 0,
+            "P2: and every one of them is aimed at the forger alone");
+      CHECK(PArmsSent > 0,
+            "P2: the forger really did keep re-sending unmarked");
+      CHECK(PStripped > 0,
+            "P2: and the unmarked bit is a LIE -- it held the accept");
+      stripped[ri] = PStripped;
+      pReset();
+      freeCluster(processes, 4);
+    }
+    /* WHAT THESE TWO LANES DO AND DO NOT SETTLE.  That the armed yield
+     * is one masked READY per instance per pass is NOT a fact about
+     * the annotation: the retry cursor visits an instance once per
+     * pass and one visit emits at most one READY act, so any
+     * non-quiescent instance is served at exactly that cadence.  The
+     * lanes are here for the two things that ARE the annotation's --
+     * that nothing owed to a correct process is displaced at either
+     * rate, and that stopping the forger drains at a cost the forger's
+     * rate did not buy. */
+    CHECK(reaching[0] == 0 && reaching[1] == 0,
+          "P2: the residue egress names the forger alone at either rate");
+    CHECK(passes[0] > 0 && passes[1] > 0,
+          "P2: both lanes completed passes to price");
+    CHECK(drained[0] > 0 && drained[1] > 0,
+          "P2: stopping the forger leaves the accumulated arms owed");
+    /* One masked READY per armed instance per honest process is the
+     * most a bitmap can owe; the sweep length bounds the armed
+     * instances and there are nAct-1 honest processes.  A counter that
+     * accumulated one arm per re-send would owe the window's whole
+     * capacity in both lanes. */
+    CHECK(drained[0] <= (nAct - 1) * (nAct + nAct * mr * nAct)
+       && drained[1] <= (nAct - 1) * (nAct + nAct * mr * nAct),
+          "P2: the drain owes at most one per armed instance per honest"
+          " process at either rate");
+    CHECK(lastInc[0] < 2 * (nAct + nAct * mr * nAct)
+       && lastInc[1] < 2 * (nAct + nAct * mr * nAct),
+          "P2: and falls silent within a sweep at either rate");
+    printf("      P2: rate 1: %u aimed / %u passes, %u drained (silent at"
+           " tick %u), %u stripped; rate 4: %u aimed / %u passes, %u"
+           " drained (silent at tick %u), %u stripped; %u reaching a"
+           " correct process\n",
+           aimed[0], passes[0], drained[0], lastInc[0], stripped[0],
+           aimed[1], passes[1], drained[1], lastInc[1], stripped[1],
+           reaching[0] + reaching[1]);
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("P3: the re-armed residue is mask-complete and still owed");
+  /* ---------------------------------------------------------------- */
+  {
+    /* M1's residue is the never-announcer: its bit is MISSING from every
+     * survivor's accepted evidence, which is why their gates stand
+     * short.  This residue is the opposite shape and the same outcome.
+     * The forger announces -- falsely, from its first READY -- so the
+     * evidence is COMPLETE at all n, and what holds the gate open is
+     * the arm its unmarked re-sends keep taking.  The ending is the
+     * same one M1 reaches: the barren gate, on the harness policy's own
+     * S, with the honest outcome unharmed.
+     *
+     * TWO LANES, because the obvious reading of the paragraph above is
+     * wrong and only a counterfactual can say so.  Lane 0 forges the
+     * announcement, lane 1 does not; everything else is identical.  If
+     * the announcement forgery were what completes the masks, lane 1
+     * would come up short.  The comparison is the arm -- the prose
+     * follows whatever it prints, and the CHECK below is written to
+     * the measurement rather than to the expectation. */
+    struct bracha87Retry cursors[MAX_PROCESSES];
+    struct sweepPolicy pol[MAX_PROCESSES];
+    struct bkr94acsAct acastOut[1];
+    unsigned char subset0[MAX_PROCESSES];
+    unsigned char subsetP[MAX_PROCESSES];
+    unsigned int nAct = 4;
+    unsigned int mr = 6;
+    unsigned int served, complete, tick, n, p, j, r, b, q, sz0, szP;
+    unsigned int lane;
+    unsigned int laneServed[2];
+    unsigned int laneComplete[2];
+    unsigned int laneArms[2];
+    unsigned int laneAimed[2];
+
+    for (lane = 0; lane < 2; ++lane) {
+    laneServed[lane] = 0;
+    laneComplete[lane] = 0;
+    laneArms[lane] = 0;
+    laneAimed[lane] = 0;
+    if (allocCluster(processes, 4, 1, 0, 2) == 0) {
+      pReset();
+      PForger = 3;
+      PForgeAccepted = (lane == 0) ? 1 : 0;
+      PForgeUnmarked = 1;
+      PReplayOn = 1;
+      for (p = 0; p < MAX_PROCESSES; ++p)
+        obsInit(&obs[p]);
+      for (p = 0; p < nAct; ++p) {
+        bracha87RetryInit(&cursors[p]);
+        memset(&pol[p], 0, sizeof (pol[p]));
+      }
+      qReset();
+      for (p = 0; p < nAct; ++p) {
+        acasts[p] = (unsigned char)(0x40 + p);
+        n = bkr94acsAcast(processes[p], &acasts[p], acastOut);
+        observeAndOutput(&obs[p], (unsigned char)p, nAct, acastOut, n, 1, 0,
+                         -1);
+      }
+      for (tick = 0; tick < 40000; ++tick) {
+        pTick(processes, obs, cursors, pol, nAct, mr);
+        if (processes[0]->complete && processes[1]->complete
+         && processes[2]->complete)
+          break;
+      }
+      CHECK(tick < 40000, "P3: the honest processes complete");
+
+      /* The ending: the harness policy's S, reached under the shared
+       * narrow progress definition -- the forger's re-sends are
+       * duplicates and return no acts, so they are not progress. */
+      for (tick = 0; tick < 40000; ++tick) {
+        pTick(processes, obs, cursors, pol, nAct, mr);
+        if (pol[0].barren >= BARREN_S && pol[1].barren >= BARREN_S
+         && pol[2].barren >= BARREN_S)
+          break;
+      }
+      CHECK(tick < 40000,
+            "P3: the honest barren counters reach the policy's S");
+
+      /* THE SHAPE.  Every served instance's accepted evidence covers
+       * all n -- the forger's bit among them, and unearned.  M1's
+       * survivors read the opposite here. */
+      served = 0;
+      complete = 0;
+      for (p = 0; p < 3; ++p) {
+        for (j = 0; j < nAct; ++j) {
+          const struct bracha87Fig1 *f1;
+          const unsigned char *ans;
+
+          if (!(f1 = bkr94acsAcastFig1(processes[p], (unsigned char)j))
+           || !bracha87Fig1Value(f1))
+            continue;
+          /* Scope per F1b: a BA that decided 0 takes its A-Cast out of
+           * the retry walk, so there the gate is the retire and the
+           * evidence carries no claim. */
+          if (!bkr94acsBaDecision(processes[p], (unsigned char)j))
+            continue;
+          ++served;
+          ans = bracha87Fig1Received(f1);
+          for (q = 0; q < nAct; ++q)
+            if (!ans || !BRACHA87_SKIP_TST(ans, q))
+              break;
+          if (q == nAct)
+            ++complete;
+        }
+        for (j = 0; j < nAct; ++j)
+          for (r = 0; r < mr; ++r)
+            for (b = 0; b < nAct; ++b) {
+              const struct bracha87Fig1 *f1;
+              const unsigned char *ans;
+
+              if (!(f1 = bkr94acsBaFig1(processes[p], (unsigned char)j,
+                                        (unsigned char)r, (unsigned char)b))
+               || !bracha87Fig1Value(f1))
+                continue;
+              ++served;
+              ans = bracha87Fig1Received(f1);
+              for (q = 0; q < nAct; ++q)
+                if (!ans || !BRACHA87_SKIP_TST(ans, q))
+                  break;
+              if (q == nAct)
+                ++complete;
+            }
+      }
+      CHECK(served > 0, "P3: served instances were actually examined");
+      CHECK(served == complete,
+            "P3: every served instance's accepted evidence covers all n");
+
+      /* And yet nothing rests: the arm is retaken on every unmarked
+       * re-send, so the retry keeps owing across a bounded further
+       * drive -- and owes it to the forger alone. */
+      PAimArmed = 1;
+      for (tick = 0; tick < 500; ++tick)
+        pTick(processes, obs, cursors, pol, nAct, mr);
+      PAimArmed = 0;
+      CHECK(PAimedAtForger > 0,
+            "P3: the retry still owes after the gate, mask-complete or not");
+      CHECK(PReachingCorrect == 0,
+            "P3: and owes it to the forger alone");
+      CHECK(PArmsSent > 0, "P3: the forger kept re-sending unmarked");
+      /* PArmsSent counts unmarked READYs DELIVERED by the replay, not
+       * arms recorded -- ProcessResend records nothing at a receiver
+       * that has not accepted.  In this lossless run the two coincide;
+       * the name is the honest one. */
+      /* Lane 0 only, and it is not a non-vacuity guard for anything
+       * below it: the lane comparison at the end of the arm is what
+       * says whether this lie carried any of the weight. */
+      if (lane == 0)
+        CHECK(PForgedEarly > 0,
+              "P3: lane 0 announced accepts it did not hold");
+      laneServed[lane] = served;
+      laneComplete[lane] = complete;
+      laneArms[lane] = PArmsSent;
+      laneAimed[lane] = PAimedAtForger;
+
+      sz0 = bkr94acsSubset(processes[0], subset0);
+      CHECK(sz0 >= 3, "P3: |SubSet| >= n-t");
+      for (p = 0; p < 3; ++p) {
+        CHECK(processes[p]->complete, "P3: honest process completed");
+        szP = bkr94acsSubset(processes[p], subsetP);
+        CHECK(szP == sz0, "P3: honest SubSet sizes agree");
+        if (szP == sz0)
+          CHECK(memcmp(subset0, subsetP, sz0) == 0,
+                "P3: honest SubSet contents byte-identical");
+      }
+      printf("      P3 lane %u (announcement forgery %s): %u served,"
+             " %u covering all n, %u arms, %u aimed, %u forged,"
+             " |SubSet| %u\n",
+             lane, lane == 0 ? "on" : "off", served, complete,
+             PArmsSent, PAimedAtForger, PForgedEarly, sz0);
+      pReset();
+      freeCluster(processes, 4);
+    }
+    }
+
+    /* THE COUNTERFACTUAL, and what it can and cannot say.  The claim
+     * is that the announcement forgery moves none of the residue: the
+     * masks fill because this forger goes on to accept and announce
+     * like anyone else, and the gate stays open because of the
+     * re-arming alone.  Lane 1 is the witness -- every served instance
+     * mask-complete with the announcement lie never told, and the arm
+     * still owing.  The lane's own per-lane checks already required
+     * both; these two name the counterfactual as such.
+     *
+     * NOT compared across lanes: the aimed count and the arm count.
+     * The replay arms every captured instance before every honest
+     * RetryStep in the same tick, so the aimed count is honest
+     * processes x drive ticks in either lane by construction, and the
+     * arm count is ticks x captured x honest.  Their equality would be
+     * schedule identity, not the property.  Nor does the lie cost the
+     * forger anything here: it re-arms every tick, so the suppression
+     * its announcement invites never holds long enough to matter. */
+    CHECK(laneComplete[1] == laneServed[1],
+          "P3: without the announcement lie every served instance is"
+          " still mask-complete");
+    CHECK(laneAimed[1] > 0,
+          "P3: and the gate is still held open by the arm alone");
   }
 
   /* ---------------------------------------------------------------- */
