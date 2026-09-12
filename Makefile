@@ -76,13 +76,17 @@ test_bkr94acs_blackbox: test/test_bkr94acs_blackbox.c bkr94acs.o bracha87.o bkr9
 test_schedules: test/test_schedules.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) -I. -o $@ test/test_schedules.c bkr94acs.o bracha87.o
 
-check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules
+test_ingress: test/test_ingress.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
+	$(CC) $(CFLAGS) -I. -o $@ test/test_ingress.c bkr94acs.o bracha87.o
+
+check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules test_ingress
 	./test_bracha87
 	./test_bkr94acs
 	./test_predicates
 	./test_bracha87_blackbox
 	./test_bkr94acs_blackbox
 	./test_schedules smoke
+	./test_ingress
 
 # The schedule explorer is a DELIBERATE act, like `rules` above, and for
 # the same reason: cost.  `check` runs only its measured-subsecond smoke
@@ -91,6 +95,13 @@ check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_b
 # means exhaustive WITHIN those bounds and nothing more.
 schedules: test_schedules
 	./test_schedules all
+
+# The adversary configs of the same explorer: every well-formed
+# Byzantine strategy inside a printed bound, each strategy its own
+# explorer run.  Deliberate for the same reason, and included in
+# `schedules` above; this runs only them.
+strategies: test_schedules
+	./test_schedules strategies
 
 # A suite that passes proves something only if it would FAIL on a
 # machine that is wrong.  This applies single anchored defects to
@@ -107,7 +118,7 @@ mutants: test/mutants.sh
 clean:
 	rm -f bracha87.o bkr94acs.o
 	rm -f example_bracha87Fig1 example_bkr94acs
-	rm -f test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules
+	rm -f test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules test_ingress
 	rm -rf mutantWork
 
 # the .psu are dtc's intermediate output, left behind by `make rules`;

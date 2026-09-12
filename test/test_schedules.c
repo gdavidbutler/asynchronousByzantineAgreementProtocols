@@ -11,14 +11,16 @@
  * WHAT IT CAN FIND, and what it cannot.  Within its printed bounds it
  * finds stranding (no schedule reaches quiescence), agreement
  * violation, act-contract violation, and ending-claim violation under
- * honest adversarial scheduling.  It does NOT touch the
- * Byzantine-safety arguments for the READY retire gates (README
- * Implementation Note 16) -- those are other instruments' work.
- * Deliberate non-goals: message loss, Byzantine behavior, patience
- * above zero, and coin branching.  The coin here is the
- * examples' deterministic phase%2, so every process gets the same
- * value in Bracha Fig 4 case (iii) and exhaustion requires the
- * schedule to split case (ii)/(iii) every phase.
+ * honest adversarial scheduling; and, on the adversary configs (THE
+ * ADVERSARY below), a violation of the papers' properties by a
+ * well-formed Byzantine content within the bounds it prints.  It does
+ * NOT touch the Byzantine-safety arguments for the READY retire gates
+ * (README Implementation Note 16) -- those are the annotation forgery
+ * tests' work.  Deliberate non-goals: message loss, patience above
+ * zero, and coin branching.  The coin here is the examples'
+ * deterministic phase%2, so every process gets the same value in
+ * Bracha Fig 4 case (iii) and exhaustion requires the schedule to
+ * split case (ii)/(iii) every phase.
  *
  *
  * THE TWO SURFACES
@@ -93,13 +95,114 @@
  *
  * The content key carries every field ingress reads.  Surface 2:
  * class, process, round, initiator, type, the ACCEPTED bit, the
- * RECEIVED bit, from, to, and the BA binary value with its D_FLAG.
- * The RECEIVED bit is computed PER RECIPIENT at expansion
- * (struct bracha87Fig1Act.received), not per act, and is part of the key.  The
- * A-Cast value bytes are a function of the A-Cast's process here --
- * honest processes, one value each, no equivocation -- so `process`
- * carries them, and the framing region asserts that identity rather
- * than assuming it.
+ * RECEIVED bit, from, to, the BA binary value with its D_FLAG, and
+ * one value bit.  The RECEIVED bit is computed PER RECIPIENT at
+ * expansion (struct bracha87Fig1Act.received), not per act, and is
+ * part of the key.  The A-Cast value bytes are a function of the
+ * A-Cast's process and the value bit: an honest process A-Casts one
+ * value, and the bit names the ONE foreign symbol an adversary can
+ * put in its place -- the alphabet is two symbols per instance, the
+ * grammar comment in main says why -- so the framing region asserts
+ * that every honest act's value is one of the two rather than
+ * assuming it.
+ *
+ *
+ * THE ADVERSARY
+ *
+ * BKR94ACS.txt's adversary schedules every message; Bracha87.txt's
+ * faulty processes also SAY things.  The adversary configs give one
+ * of the n an authenticated identity and nothing else: it holds no
+ * library image, every honest message to it is dropped at push, it
+ * never ticks, and it speaks only what its STRATEGY seeds into the
+ * pool at the root.  It chooses content (value, BA value, and at
+ * surface 1 the two annotation bits -- surface 2 seeds one setting,
+ * the grammar comment in main says why), the fields naming a third
+ * party (process, round, initiator), and -- through the explorer
+ * above, as far as its ceiling reaches -- timing, order and silence.
+ * It does not choose `from`: that is the authenticated channel, and a
+ * forged INITIAL is not a strategy here but a byte the library drops
+ * (bkr94acs{Acast,Ba}Input) or the surface-1 caller filter drops.
+ *
+ * ROOT-SEEDED, NOT INJECTED.  A strategy is a subset of at most J
+ * contents from the grammar (one instance's part of it), all pending
+ * from the root; the inner explorer is then free to vary when each
+ * lands against the honest traffic -- free in the state graph, and
+ * as far as the ceiling reaches in the search, which at these
+ * ceilings is not far: see "one timing" in the grammar comment.
+ * Bracha87.txt's scheduler "determine[s] in each round for each
+ * process which n - t messages it receives", and BenOr83.txt's
+ * adversary "knows all about the system": content fixed at the root
+ * plus explored delivery is that adversary, because a content's
+ * effect on a Fig 1 is through per-sender, per-value counts at its
+ * receiver, and those do not depend on what the adversary saw.  An
+ * adversary EVENT inside the DFS would instead be cut by the ceiling
+ * before its root-level alternatives were tried: a sibling event
+ * placed after the honest deliveries of the first dive is never
+ * explored, and the ceiling-bound counts would then be a prefix over
+ * the adversary's CONTENT as well as its timing.  Every strategy runs
+ * its own explorer under the config's ceilings, and EVERY COUNT THE
+ * CONFIG PRINTS IS A SUM over the strategies it enumerated, with the
+ * strategy count printed beside K.  The bounds and the defect each
+ * gives up are in the grammar comment in main; J is a knob like K.
+ *
+ * The papers are the ORACLE here, not the subject: their algorithms
+ * are assumed correct up to t, so a red on a paper-named check under
+ * Byzantine content is this implementation deviating from what they
+ * prove, never a finding about them.
+ *
+ * WHAT THE ORACLE SAYS UNDER IT is scoped to the honest processes and
+ * named by the papers (Bracha87.txt, BenOr83.txt, BKR94ACS.txt):
+ *
+ *   surface 1, adversary initiator (b1): Theorem 1 property 2 --
+ *     all correct processes agree on a value or none accepts.  Lemma
+ *     2 pairwise at every transition is the "agree" half; the "or
+ *     none" half is eventual and is not asserted.  Lemma 1 pairwise
+ *     among honest READY senders.  QUIESCENT needs the adversary to
+ *     announce to all three besides broadcasting, J = 6, so at J = 4
+ *     no b1 strategy reaches one; the witness there is every honest
+ *     process accepted.
+ *   surface 1, honest initiator (b2): Theorem 1 property 1 -- every
+ *     honest accept carries the initiator's value (Lemma 4's value
+ *     half), and no honest echo carries any other (Lemma 1's
+ *     threshold argument: more than (n+t)/2 echoes or t+1 readys of a
+ *     value the initiator never sent would need an honest first
+ *     sender of it).
+ *   surface 2 (b3, the adversary's own broadcasts; b4, its echoes and
+ *     readys on the honest ones): Lemma 2 on every A-Cast (accepted
+ *     values agree), Theorem 2 on every BA (honest decisions agree),
+ *     C1 -- BenOr83's validity, which Theorem 2 inherits -- once every
+ *     honest process has entered one value into a BA no honest
+ *     decision on it is the other, all at every transition; and at
+ *     every completion BKR94
+ *     Lemma 2 Parts A, C and D: |SubSet| >= n-t (A), SubSet agreement
+ *     (C), and D -- a SubSet member's BA was entered
+ *     1 by an honest process holding its accepted A-Cast.  Part D is
+ *     the one the hand-picked arms never reach end to end: it is the
+ *     check that a BA decided 1 on the adversary's say-so alone.
+ *     Part B (every BA terminates) is the per-strategy completion
+ *     witness: every strategy of b3 and b4 completes, measured, and
+ *     the config asserts it.
+ *
+ * WHAT QUIESCENCE MEANS UNDER IT.  A READY retires only when every
+ * process has announced its accept and holds this one's
+ * (bracha87.h's retry banner), so an adversary silent on an instance
+ * holds every honest READY on it open forever.  At surface 1 a
+ * strategy reaches QUIESCENT only if it announces to every honest
+ * process; at surface 2 the adversary is silent on every instance but
+ * the one its strategy names, so QUIESCENT is unreachable by
+ * construction and the reachability witnesses there are completion,
+ * |SubSet| = n (the adversary A-Cast honestly and is in), and
+ * |SubSet| < n (the adversary is out).  Surface 1's witness is every
+ * honest process accepted.  None of this is a defect: it is the
+ * honest residue the header names, and the measured fact that
+ * silence is the cheapest strategy.
+ *
+ * SENSITIVITY, NOT DETECTION.  A count that moves under a strategy is
+ * a story; a paper property that fails is a finding.  EXHAUSTED under
+ * an adversary is sensitivity: the coin is the deterministic phase%2,
+ * README says that coin is unsafe against an adaptive adversary, and
+ * maxPhases is a knob.  The frozen counts on the adversary configs are
+ * sums and regression constants like every other count here.
  *
  * The pool holds COPIES of act values (here, the one-byte values
  * indexed by process).  struct bkr94acsAct.value is a borrowed
@@ -186,16 +289,18 @@
  *                claim for that config and says so on the line it
  *                prints.
  *
- * EVERY CONFIG HERE IS CEILING-BOUND, and that is a measurement, not a
- * preference.  The smallest configuration here -- surface 1, n=2,
- * t=0, two Fig 1 instances and ten root contents -- was run to
- * 100,663,296 distinct states at K=3 without closing, which is where
- * a 1.5 GB visited table fills.  The blow-up is the pool: each
+ * EVERY CONFIG HERE IS CEILING-BOUND.  The smallest configuration --
+ * surface 1, n=2, t=0, two Fig 1 instances and ten root contents --
+ * CLOSES at K=3: 84,708,681 distinct states, 632,200,620 edges, 135 s
+ * and a 1.5 GB visited table (-c 200000000 -b 27), so its 4,000,000
+ * ceiling is a budget, and the closed graph's four QUIESCENT terminals
+ * are the same four the ceiling-bound prefix finds.  No larger config
+ * has been run to closure.  What grows the space is the pool: each
  * tick pushes fresh copies of contents whose count had dropped, and a
  * duplicate unmarked READY re-arms its sender after an egress consumed
  * the previous arm (bracha87Fig1ProcessResend), so copies are semantically
- * live and cannot be coalesced.  What that costs is the ONE property
- * a completed search would have had: the counts below are a
+ * live and cannot be coalesced.  What a ceiling costs is the ONE
+ * property a completed search would have had: the counts below are a
  * deterministic PREFIX under the branch order, so they are regression
  * constants at every config, not order-independent facts.  Keying the
  * allowance still buys the tiny configs a search-order-independent
@@ -300,11 +405,25 @@
  *     would be an identity at the library layer anyway --
  *     bracha87Fig1Received RETURNS acFrom.
  *   - single input per BA: bkr94acsBaEntered latched once entered.
- *   - Bracha Lemma 1 (surface 1), in its observable form: every
+ *   - Bracha Lemma 1 (surface 1): under an honest initiator every
  *     instance whose echoed value exists carries the initiator's
- *     value, so no two READY senders can carry different ones.
+ *     value; and pairwise, any two honest READY senders carry the
+ *     same value -- the form that is live under an adversary
+ *     initiator.
  *   - Bracha Lemma 2 (surface 1): any two accepts of one broadcast
- *     agree.
+ *     agree.  Surface 2: the same on every A-Cast, over the
+ *     ACCEPT-gated bkr94acsAcastValue.
+ *   - Bracha Theorem 2 (surface 2), per BA: honest decisions agree.
+ *   - C1 (surface 2), per BA: once every honest process has entered
+ *     one value, no honest decision is the other.  The entered value
+ *     is read off the image -- the INITIATOR slot of the round-0 BA
+ *     Fig 1 this process initiated -- not tracked.
+ *
+ * At every completion (surface 2, every honest process complete):
+ *
+ *   - SubSet agreement and |SubSet| >= n-t (BKR94 Lemma 2 Parts C
+ *     and A), and Part D: every SubSet member's BA was entered 1 by
+ *     an honest process that holds its accepted A-Cast.
  *
  * At every QUIESCENT terminal:
  *
@@ -381,18 +500,25 @@
  *
  * USAGE
  *
- *   test_schedules [-m] [-k ticks] [-c states] [-D depth]
- *                  [-b hashbits] [-w witness] config
+ *   test_schedules [-m] [-k ticks] [-J contents] [-c states] [-D depth]
+ *                  [-b hashbits] [-s strategy] [-w witness] config
  *
- *   config      1 | 2 | 3a | 3b | 4 | smoke | all
+ *   config      1 | 2 | 3a | 3b | 4 | b1 | b2 | b3 | b4 | smoke
+ *               | strategies | all
  *   -m          report the frozen counts, do not assert them
  *   -k ticks    tick allowance per process override -- K above, so a
  *               run under it is exhaustive over a SMALLER schedule set
- *   -c states   state ceiling override
+ *   -J contents contents per strategy override -- J above, the same
+ *               way, on the adversary configs
+ *   -c states   state ceiling override (per strategy)
  *   -D depth    depth ceiling override
  *   -b hashbits visited-table size, 1 << hashbits entries
+ *   -s strategy run ONE hand-seeded strategy instead of the
+ *               enumeration: comma-separated content keys in the
+ *               form a failure prints
  *   -w witness  re-derive one event sequence from the root with a
- *               trace, in the comma-separated form a failure prints
+ *               trace, in the comma-separated form a failure prints;
+ *               with -s, under that strategy
  *
  * Style: C89, -pedantic -Wall -Wextra, Unix kernel style, 2-space
  * indent.  The explorer is one recursive function with labeled
@@ -417,10 +543,12 @@
 #define MAX_N        8     /* processes this instrument will host */
 #define POOL_MAX  8192     /* distinct live contents; overflow aborts */
 #define MAX_ACTS    64     /* out[] for any single library call here */
+#define GRAM_MAX  4096     /* the adversary's grammar, distinct contents */
+#define SEL_MAX      8     /* J: contents per strategy this will host */
 
 /*
  * Content-key field layout.  One unsigned long per distinct wire
- * content; 29 bits used.
+ * content; 30 bits used.
  */
 #define KEY_TYPE_SH   0   /* BRACHA87_INITIAL / ECHO / READY  */
 #define KEY_ACC_SH    2   /* wire ACCEPTED bit                */
@@ -432,6 +560,10 @@
 #define KEY_INIT_SH  17
 #define KEY_FROM_SH  21
 #define KEY_TO_SH    25
+#define KEY_VAL_SH   29   /* A-Cast / surface-1 value symbol: 0 = the
+                           * instance's own, 1 = the foreign one.  Under
+                           * an equivocating adversary `process` no
+                           * longer determines the value bytes. */
 
 #define KEY_FLD(k, sh, w) (((k) >> (sh)) & ((1UL << (w)) - 1))
 
@@ -482,8 +614,22 @@ struct config {
   unsigned char expectNoExhausted;
   unsigned char expectSubsetFull;
   unsigned char expectSubsetShort;
+  unsigned char expectAllAccepted; /* surface 1: every honest process
+                                    * accepted -- 1 = some strategy
+                                    * reaches it, 2 = every strategy */
+  unsigned char expectComplete;    /* surface 2: completion, same code */
   unsigned char smoke;
+  unsigned char adv;        /* the Byzantine process, 0xFF = none */
+  unsigned char advInit;    /* surface 1: the adversary is the initiator */
+  unsigned char advInst;    /* surface 2: ADV_INST_* instance classes */
+  unsigned char j;          /* J: at most this many contents per strategy */
 };
+
+/* Surface-2 instance classes the adversary's grammar covers. */
+#define ADV_INST_OWN_ACAST 1  /* its own A-Cast, as initiator          */
+#define ADV_INST_OWN_BA    2  /* its own BA broadcasts, as initiator    */
+#define ADV_INST_ACAST     4  /* honest A-Casts, echo and ready only    */
+#define ADV_INST_BA        8  /* honest BA broadcasts, echo and ready   */
 
 static struct config Configs[] = {
   /* s1, s2 -- the smoke subset `make check` runs: the same two shapes
@@ -495,13 +641,26 @@ static struct config Configs[] = {
    * detector and not a token. */
   { "s1", "smoke: surface 1, n=2 t=0, K=3",
     60000UL, 4000UL,
-    60000UL, 188184UL, 30UL, 0UL, 770UL, 1UL,
-    18, 3, 1, 2, 0, 0, 0xFF, 1, 1, 0, 0, 0, 1 },
+    60000UL, 254604UL, 4UL, 0UL, 35UL, 1UL,
+    18, 3, 1, 2, 0, 0, 0xFF, 1, 1, 0, 0, 0, 1, 0, 1, 0xFF, 0, 0, 0 },
 
   { "s2", "smoke: surface 2, n=2 t=0 maxPhases=1, K=40",
     60000UL, 4000UL,
-    60000UL, 112533UL, 19822UL, 0UL, 0UL, 1UL,
-    18, 40, 2, 2, 0, 1, 0xFF, 1, 1, 1, 0, 0, 1 },
+    60000UL, 190885UL, 676UL, 0UL, 7UL, 1UL,
+    18, 40, 2, 2, 0, 1, 0xFF, 1, 1, 1, 0, 0, 0, 1, 1, 0xFF, 0, 0, 0 },
+
+  /* s3 -- the adversary smoke: b2's shape at J=2 under a ceiling
+   * measured to keep the 466 strategies under a fifth of a second.
+   * Two contents cannot announce to three honest processes, so no
+   * strategy quiesces; the witness it carries is every honest process
+   * accepted (Lemma 4 under an adversary), and the per-transition
+   * checks -- Lemma 1, Lemma 2, the honest initiator's value -- run
+   * on every state of every strategy. */
+  { "s3", "smoke: surface 1, n=4 t=1, K=3, honest initiator 0,"
+          " adversary 3, J=2",
+    500UL, 4000UL,
+    233000UL, 632500UL, 0UL, 0UL, 2800UL, 466UL,
+    12, 3, 1, 4, 1, 0, 0xFF, 1, 0, 0, 0, 0, 2, 0, 1, 3, 0, 0, 2 },
 
   /* 1 -- THE ANCHOR.  Surface 1, n=2 t=0.  K=3 is the measured floor
    * and not a guess: a process must tick once to announce its accept
@@ -510,19 +669,20 @@ static struct config Configs[] = {
    * example/bracha87Fig1.c), once for the marked re-send the
    * announcement's unmarked arrival arms, and once more to read the
    * retired 0 return that IS quiescence.  It is the anchor because it
-   * is the smallest shape that reaches quiescence at all, not because
-   * it closes: see the ceiling paragraph in the banner. */
+   * is the smallest shape that reaches quiescence at all.  It is also
+   * the one config that has been run to closure (the ceiling paragraph
+   * in the banner); the 4,000,000 ceiling here is a budget. */
   { "1", "surface 1, n=2 t=0, K=3 -- the anchor",
     4000000UL, 4000UL,
-    4000000UL, 18835154UL, 43UL, 0UL, 2585UL, 1UL,
-    24, 3, 1, 2, 0, 0, 0xFF, 1, 1, 0, 0, 0, 0 },
+    4000000UL, 24075069UL, 4UL, 0UL, 64UL, 1UL,
+    24, 3, 1, 2, 0, 0, 0xFF, 1, 1, 0, 0, 0, 1, 0, 0, 0xFF, 0, 0, 0 },
 
   /* 2 -- surface 1 at real thresholds.  n=4 t=1: echo threshold
    * (n+t)/2+1 = 3, ready t+1 = 2, accept 2t+1 = 3. */
   { "2", "surface 1, n=4 t=1, K=3 -- real thresholds",
     4000000UL, 4000UL,
-    4000000UL, 11300072UL, 473UL, 0UL, 129349UL, 1UL,
-    24, 3, 1, 4, 1, 0, 0xFF, 1, 1, 0, 0, 0, 0 },
+    4000000UL, 21752396UL, 15UL, 0UL, 833UL, 1UL,
+    24, 3, 1, 4, 1, 0, 0xFF, 1, 1, 0, 0, 0, 1, 0, 0, 0xFF, 0, 0, 0 },
 
   /* 3a -- THE TARGET.  Surface 2, n=4 t=1, maxPhases=1, every A-Cast
    * submitted at the root.  The |SubSet| = n witness is on the first
@@ -531,8 +691,8 @@ static struct config Configs[] = {
    * the unentered set is empty and FanoutDuty is MET forever. */
   { "3a", "surface 2, n=4 t=1 maxPhases=1, all A-Casts at the root",
     400000UL, 6000UL,
-    400000UL, 1399492UL, 112916UL, 0UL, 0UL, 1UL,
-    21, 200, 2, 4, 1, 1, 0xFF, 0, 1, 0, 1, 0, 0 },
+    400000UL, 2351444UL, 1UL, 0UL, 0UL, 1UL,
+    21, 200, 2, 4, 1, 1, 0xFF, 0, 1, 0, 1, 0, 0, 1, 0, 0xFF, 0, 0, 0 },
 
   /* 3b -- the same, with process 3's A-Cast behind an acast() event.
    * With it unfired, processes 0/1/2's A-Casts accept everywhere, all
@@ -542,8 +702,8 @@ static struct config Configs[] = {
    * needle, and the branch order puts the explorer inside it first. */
   { "3b", "surface 2, n=4 t=1 maxPhases=1, process 3's A-Cast deferred",
     400000UL, 6000UL,
-    400000UL, 2478544UL, 3842UL, 0UL, 0UL, 1UL,
-    21, 200, 2, 4, 1, 1, 3, 0, 1, 0, 0, 1, 0 },
+    400000UL, 3591919UL, 19UL, 0UL, 0UL, 1UL,
+    21, 200, 2, 4, 1, 1, 3, 0, 1, 0, 0, 1, 0, 1, 0, 0xFF, 0, 0, 0 },
 
   /* 4 -- the degenerate control.  At t=0, n-t = n, so TurnDuty's
    * TOLERANCE band (">= n-t and < n") is empty by arithmetic and
@@ -552,8 +712,66 @@ static struct config Configs[] = {
    * claims and the EXHAUSTED-empty structural fact. */
   { "4", "surface 2, n=2 t=0 maxPhases=1 -- degenerate control",
     1000000UL, 4000UL,
-    1000000UL, 2234911UL, 188183UL, 0UL, 0UL, 1UL,
-    22, 40, 2, 2, 0, 1, 0xFF, 1, 1, 1, 0, 0, 0 }
+    1000000UL, 3783178UL, 676UL, 0UL, 7UL, 1UL,
+    22, 40, 2, 2, 0, 1, 0xFF, 1, 1, 1, 0, 0, 0, 1, 0, 0xFF, 0, 0, 0 },
+
+  /* THE ADVERSARY CONFIGS.  Process 3 holds no library image, receives
+   * nothing, and speaks only what its strategy seeds at the root; the
+   * inner explorer above varies WHEN each seeded content lands.  Every
+   * count is a SUM over the strategies enumerated, and the per-strategy
+   * ceiling is hit by design -- see THE ADVERSARY in the banner.  The
+   * counts were frozen from two identical measurement passes. */
+
+  /* b1 -- surface 1, n=4 t=1, the adversary IS the initiator: Theorem 1
+   * property 2 (Lemma 2 pairwise at every transition; "all accepted" at
+   * a QUIESCENT terminal, which J=4 never reaches -- see below), Lemma
+   * 1 pairwise among honest READY senders.
+   * J=4 is MEASURED, not chosen: a non-strict echo threshold (>= (n+t)/2
+   * for the proofs' >) is reached by INITIAL a to one process, INITIAL b
+   * to another, and one supporting echo to each -- four contents -- and
+   * by nothing at J=3; the Lemma 1 red on that mutant is the witness.
+   * Announcing to all three besides would take J=6, so QUIESCENT is not
+   * expected here; the witness is every honest process accepted. */
+  { "b1", "surface 1, n=4 t=1, K=3, adversary 3 is the initiator",
+    2000UL, 4000UL,
+    104504656UL, 426320190UL, 0UL, 0UL, 88580UL, 34781UL,
+    14, 3, 1, 4, 1, 0, 0xFF, 1, 0, 0, 0, 0, 1, 0, 0, 3, 1, 0, 4 },
+
+  /* b2 -- surface 1, n=4 t=1, honest initiator 0, adversary 3 echoes
+   * and readies: Theorem 1 property 1 -- every honest accept carries
+   * the initiator's value (Lemma 4's value half) -- and Lemma 1. */
+  { "b2", "surface 1, n=4 t=1, K=3, honest initiator 0, adversary 3",
+    2000UL, 4000UL,
+    9052000UL, 26128026UL, 256UL, 0UL, 86228UL, 4526UL,
+    14, 3, 1, 4, 1, 0, 0xFF, 1, 1, 0, 0, 0, 2, 0, 0, 3, 0, 0, 3 },
+
+  /* b3 -- surface 2, n=4 t=1 maxPhases=1, adversary 3 plays its own
+   * broadcasts: its A-Cast and its BA round-r INITIALs (round 2 as a
+   * (d,v) decision candidate), driven through Fig 3 validation into
+   * Fig 4 at the composition.  Theorem 2 per BA at every transition,
+   * BKR94 Lemma 2 Parts A-D at every completion.  QUIESCENT is
+   * unreachable here by construction (an instance the adversary is
+   * silent on never retires its READY -- bracha87.h's retry banner),
+   * so the reachability witnesses are the completion ones. */
+  { "b3", "surface 2, n=4 t=1 maxPhases=1, adversary 3 plays its own"
+          " broadcasts",
+    3000UL, 6000UL,
+    38496000UL, 71435612UL, 0UL, 0UL, 702UL, 12832UL,
+    15, 200, 2, 4, 1, 1, 0xFF, 0, 0, 0, 1, 1, 0, 2, 0,
+    3, 0, ADV_INST_OWN_ACAST | ADV_INST_OWN_BA, 3 },
+
+  /* b4 -- the same, with the adversary echoing and readying on the
+   * HONEST broadcasts: every honest A-Cast and every honest BA round
+   * broadcast, its own silent.  Lemma 2 on each A-Cast and Lemma 1's
+   * threshold argument under the composition, Theorem 2 and C1 on
+   * every BA.  |SubSet| = n is out of reach by construction -- the
+   * adversary never A-Casts -- so only the exclusion witness stands. */
+  { "b4", "surface 2, n=4 t=1 maxPhases=1, adversary 3 plays the honest"
+          " broadcasts",
+    3000UL, 6000UL,
+    34869000UL, 62836112UL, 0UL, 0UL, 1989UL, 11623UL,
+    15, 200, 2, 4, 1, 1, 0xFF, 0, 0, 0, 0, 1, 0, 2, 0,
+    3, 0, ADV_INST_ACAST | ADV_INST_BA, 3 }
 };
 
 /*--------------------------------------------------------------------------*/
@@ -577,6 +795,43 @@ static unsigned char Allow[MAX_N];
 
 static unsigned char Val1 = 'v';            /* surface 1 broadcast value */
 static unsigned char Aval[MAX_N];           /* surface 2 A-Cast values */
+static unsigned char Sym[2];                /* surface 1: Val1, foreign */
+static unsigned char Alt = 'z';             /* surface 2 foreign A-Cast */
+
+/* The adversary.  0xFF is no adversary, and every honest-only loop
+ * below compares against it, so the no-adversary path is the one the
+ * frozen counts were measured on. */
+static unsigned int Adv;
+
+/* The adversary's grammar -- every content its strategies draw from,
+ * partitioned by instance -- and the strategy under exploration, as
+ * indices into it.  A hand-seeded strategy (-s) IS the grammar. */
+static unsigned long Gram[GRAM_MAX];
+static unsigned int GramCnt;
+static unsigned int PartLo[64];
+static unsigned int PartHi[64];
+static unsigned int PartCnt;
+static unsigned int Sel[SEL_MAX];
+static unsigned int SelCnt;
+
+/* Per-config sums over strategies, and how many strategies reached
+ * each witness.  Under no adversary there is one strategy and these
+ * equal the per-run counts. */
+static unsigned long TotStates;
+static unsigned long TotEdges;
+static unsigned long TotQuiescent;
+static unsigned long TotExhausted;
+static unsigned long TotAllowance;
+static unsigned long TotCeiling;
+static unsigned long TotMaxDepth;
+static unsigned long StratCnt;
+static unsigned long StratQuiescent;
+static unsigned long StratComplete;
+static unsigned long StratSubFull;
+static unsigned long StratSubShort;
+static unsigned long StratExhausted;
+static unsigned long StratAdvIn;
+static unsigned long StratAllAccepted;
 
 static unsigned long PoolKey[POOL_MAX];     /* ascending, distinct */
 static unsigned int PoolCnt[POOL_MAX];
@@ -632,6 +887,7 @@ static const unsigned char *Skip;
 static const unsigned char *Received;
 static unsigned char PushType;
 static unsigned char PushAcc;
+static unsigned char PushVal;
 static unsigned char PreDec;
 static unsigned int Self;
 static unsigned int NActs;
@@ -652,6 +908,9 @@ static unsigned long FirstQuiescent;  /* the state count at the first one */
 static int SawQuiescent;
 static int SawSubsetFull;
 static int SawSubsetShort;
+static int SawComplete;
+static int SawAdvIn;                  /* the adversary in an honest SubSet */
+static int SawAllAccepted;            /* surface 1: every honest process */
 
 static const char *FailMsg;
 static int Failed;
@@ -743,7 +1002,8 @@ static void
 explore(
   unsigned long depth
 ){
-  unsigned long koff;      /* this frame's base in KeyStk / NumStk */
+  unsigned long koff;      /* this frame's base in KeyStk          */
+  unsigned long noff;      /* this frame's base in NumStk          */
   unsigned long boff;      /* this frame's base in BytStk          */
   unsigned long nLive;     /* pool live count at the snapshot      */
   unsigned long key;
@@ -751,6 +1011,8 @@ explore(
   unsigned long j;
   unsigned long evArg;
   unsigned long ev;
+  unsigned long frameSum;  /* this frame's arena witness; see the restore */
+  unsigned long sum;
   unsigned int p;
   unsigned int q;
   unsigned int evKind;
@@ -763,6 +1025,7 @@ explore(
   int anyExhausted;
   int allComplete;
   int allQuiescent;
+  int allAccepted;
 
   if (Failed || CeilingHit || TableFull)
     return;
@@ -906,9 +1169,14 @@ explore(
   anyExhausted = 0;
   allComplete = (Cfg->surface == 2);
   allQuiescent = 1;
+  allAccepted = (Cfg->surface == 1);
   for (p = 0; p < N; ++p) {
+    if (p == Adv)
+      continue;
     if (!Quiescent[p])
       allQuiescent = 0;
+    if (!Accepted[p])
+      allAccepted = 0;
     if (Cfg->surface != 2)
       continue;
     Acsp = (struct bkr94acs *)Img[p];
@@ -919,13 +1187,17 @@ explore(
         anyExhausted = 1;
   }
 
-  /* The SubSet reachability witnesses read COMPLETION, not
-   * quiescence: completion lands early and the retirement tail after
-   * it is long. */
+  /* The reachability witnesses read the OUTCOME, not quiescence:
+   * every honest accept (surface 1) and completion (surface 2) land
+   * early, and the retirement tail after them is long. */
+  if (allAccepted)
+    SawAllAccepted = 1;
   if (allComplete) {
     haveFirst = 0;
     firstCnt = 0;
     for (p = 0; p < N; ++p) {
+      if (p == Adv)
+        continue;
       cnt = bkr94acsSubset((struct bkr94acs *)Img[p], Subset);
       if (!haveFirst) {
         firstCnt = cnt;
@@ -940,10 +1212,39 @@ explore(
       FailMsg = "|SubSet| below n-t";
       goto fail;
     }
+    SawComplete = 1;
     if (firstCnt == N)
       SawSubsetFull = 1;
     else
       SawSubsetShort = 1;
+    /* BKR94 Lemma 2 Part D: j is in SubSet only because "at least one
+     * honest player entered 1 as his input to BA_j", and step 1 enters
+     * 1 on Q(j) = 1, so that process holds j's accepted A-Cast.  The
+     * entered value is read off the image, not tracked: the round-0
+     * BA Fig 1 this process initiated carries it in its INITIATOR
+     * slot.  Under an adversary this is the check that a BA decided 1
+     * on the adversary's say-so alone. */
+    for (i = 0; i < firstCnt; ++i) {
+      if (FirstSub[i] == Adv)
+        SawAdvIn = 1;
+      for (p = 0; p < N; ++p) {
+        const unsigned char *ev;
+
+        if (p == Adv)
+          continue;
+        Acsp = (struct bkr94acs *)Img[p];
+        if (!bkr94acsBaEntered(Acsp, FirstSub[i]))
+          continue;
+        ev = bracha87Fig1Value(bkr94acsBaFig1(Acsp, FirstSub[i], 0, p));
+        if (ev && (*ev & 1) && bkr94acsAcastValue(Acsp, FirstSub[i]))
+          break;
+      }
+      if (p >= N) {
+        FailMsg = "BKR94 Lemma 2 Part D: a SubSet member's BA was never"
+                  " entered 1 by an honest process holding its A-Cast";
+        goto fail;
+      }
+    }
   }
 
   nEnabled = PoolLive;
@@ -961,6 +1262,8 @@ explore(
      * (checked above).  Their SubSets are never read further. */
     ++TermExhausted;
     for (p = 0; p < N; ++p) {
+      if (p == Adv)
+        continue;
       Acsp = (struct bkr94acs *)Img[p];
       for (q = 0; q < N; ++q)
         if (bkr94acsBaDecision(Acsp, (unsigned char)q) == 0xFE
@@ -981,11 +1284,20 @@ explore(
       for (p = 0; p < N; ++p) {
         const unsigned char *sk;
 
+        if (p == Adv)
+          continue;
+        /* Under an adversary initiator the property is Theorem 1's
+         * second: all correct processes agree on a value or none
+         * accepts.  Quiescence is the all-sent case, and a sent
+         * instance quiesces only accepted, so here it is "all";
+         * pairwise agreement rode every transition (Lemma 2). */
         if (!Accepted[p]) {
-          FailMsg = "Lemma 4: a quiescent process never accepted";
+          FailMsg = Cfg->advInit
+            ? "Theorem 1 property 2: a quiescent process never accepted"
+            : "Lemma 4: a quiescent process never accepted";
           goto fail;
         }
-        if (AcceptVal[p] != Val1) {
+        if (!Cfg->advInit && AcceptVal[p] != Val1) {
           FailMsg = "Lemma 4: the accepted value is not the initiator's";
           goto fail;
         }
@@ -1019,6 +1331,8 @@ explore(
       haveFirst = 0;
       firstCnt = 0;
       for (p = 0; p < N; ++p) {
+        if (p == Adv)
+          continue;
         Acsp = (struct bkr94acs *)Img[p];
         if (!Acsp->complete) {
           FailMsg = "a quiescent surface-2 process is not complete";
@@ -1115,12 +1429,20 @@ explore(
         for (p = 0; p < N; ++p) {
           const unsigned char *cv;
 
+          if (p == Adv)
+            continue;
           cv = bkr94acsAcastValue((struct bkr94acs *)Img[p], FirstSub[i]);
           if (!cv) {
             FailMsg = "quiescent terminal: a SubSet member's value is absent";
             goto fail;
           }
-          if (*cv != Aval[FirstSub[i]]) {
+          /* An honest member's value is the one it A-Cast; the
+           * adversary's is whichever of its two symbols got through,
+           * and that it is the same at every honest process is Lemma
+           * 2, checked at every transition below. */
+          if (FirstSub[i] == Adv
+              ? (*cv != Aval[Adv] && *cv != Alt)
+              : *cv != Aval[FirstSub[i]]) {
             FailMsg = "quiescent terminal: a SubSet member's value differs";
             goto fail;
           }
@@ -1149,6 +1471,7 @@ explore(
 
   nLive = PoolLive;
   koff = KeyStkTop;
+  noff = NumStkTop;
   boff = BytStkTop;
 
   if (KeyStkTop + nLive + 1 > KeyStkSz) {
@@ -1176,13 +1499,25 @@ explore(
     }
   }
 
+  /*
+   * frameSum is this frame's own witness that its arena words come back
+   * the way they went in.  It is a LOCAL, so the recursion gives every
+   * frame its own copy with no indexing of its own to get wrong -- the
+   * point of the check is to be independent of the offset arithmetic it
+   * audits, and a checksum kept in a depth-indexed array would share
+   * exactly the mechanism under test.  Accumulated in the loops that
+   * already walk these words, so it costs a multiply-add per word.
+   */
+  frameSum = 0;
   for (i = 0; i < nLive; ++i) {
     KeyStk[koff + i] = PoolKey[i];
-    NumStk[koff + i] = PoolCnt[i];
+    NumStk[noff + i] = PoolCnt[i];
+    frameSum = frameSum * 31 + PoolKey[i] + PoolCnt[i];
   }
   for (p = 0; p < N; ++p) {
-    NumStk[koff + nLive + 2 * p] = Cursor[p].pos;
-    NumStk[koff + nLive + 2 * p + 1] = Cursor[p].sweepActs;
+    NumStk[noff + nLive + 2 * p] = Cursor[p].pos;
+    NumStk[noff + nLive + 2 * p + 1] = Cursor[p].sweepActs;
+    frameSum = frameSum * 31 + Cursor[p].pos + Cursor[p].sweepActs;
     memcpy(BytStk + boff + p * ImgSz, Img[p], ImgSz);
   }
   memcpy(BytStk + boff + N * ImgSz + 0 * MAX_N, Quiescent, MAX_N);
@@ -1191,8 +1526,13 @@ explore(
   memcpy(BytStk + boff + N * ImgSz + 3 * MAX_N, Pending, MAX_N);
   memcpy(BytStk + boff + N * ImgSz + 4 * MAX_N, Allow, MAX_N);
 
+  /* Each arena has its OWN base.  The number arena holds nLive counts
+   * plus 2 * MAX_N cursor words per frame, so its frames are longer
+   * than the key arena's by the cursor words; a child frame based at
+   * the key arena's top lands on this frame's cursor words, and the
+   * restore below then reads the child's counts back as the cursors. */
   KeyStkTop = koff + nLive;
-  NumStkTop = koff + nLive + 2 * MAX_N;
+  NumStkTop = noff + nLive + 2 * MAX_N;
   BytStkTop = boff + N * ImgSz + 5 * MAX_N;
 
   /*------------------------------------------------------------------*/
@@ -1263,7 +1603,7 @@ explore(
       printf("  %5lu ", depth);
       if (evKind == EV_DELIVER)
         printf("deliver cls=%lu proc=%lu round=%lu init=%lu type=%lu"
-               " from=%lu to=%lu acc=%lu ans=%lu bav=%lu\n",
+               " from=%lu to=%lu acc=%lu rcv=%lu bav=%lu val=%lu\n",
                KEY_FLD(evArg, KEY_CLS_SH, 1),
                KEY_FLD(evArg, KEY_PROC_SH, 4),
                KEY_FLD(evArg, KEY_ROUND_SH, 6),
@@ -1273,7 +1613,8 @@ explore(
                KEY_FLD(evArg, KEY_TO_SH, 4),
                KEY_FLD(evArg, KEY_ACC_SH, 1),
                KEY_FLD(evArg, KEY_RCV_SH, 1),
-               KEY_FLD(evArg, KEY_BAV_SH, 2));
+               KEY_FLD(evArg, KEY_BAV_SH, 2),
+               KEY_FLD(evArg, KEY_VAL_SH, 1));
       else
         printf("%s process %lu\n",
                (evKind == EV_TICK) ? "tick   " : "acast  ", evArg);
@@ -1352,7 +1693,7 @@ explore(
       NActs = bracha87Fig1Input(F1p,
                                 (unsigned char)KEY_FLD(key, KEY_TYPE_SH, 2),
                                 (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4),
-                                &Val1, Out1);
+                                &Sym[KEY_FLD(key, KEY_VAL_SH, 1)], Out1);
       if (NActs > 3) {
         FailMsg = "bracha87Fig1Input output more than 3 acts";
         goto fail;
@@ -1376,10 +1717,23 @@ explore(
         cv = bracha87Fig1Value(F1p);
         if (!cv)
           continue;
-        if (*cv != Val1) {
-          FailMsg = "Lemma 1: an echoed value is not the initiator's";
+        if (*cv != Sym[0] && *cv != Sym[1]) {
+          FailMsg = "a Fig 1 act carries a value outside the run's alphabet";
           goto fail;
         }
+        /* Under an honest initiator every honest echo carries its
+         * value: Lemma 1's threshold argument -- more than (n+t)/2
+         * echoes, or t+1 readys, of a value the initiator never sent
+         * would need honest senders of it, and there is no first one.
+         * Under an adversary initiator any symbol is legal here and
+         * the pairwise forms at `applied` carry Lemmas 1 and 2. */
+        if (!Cfg->advInit && *cv != Val1) {
+          FailMsg = "an honest echo carries a value the initiator never"
+                    " sent -- a Rule 2 or 3 threshold fired below the"
+                    " proofs' (Lemma 1's pigeonhole)";
+          goto fail;
+        }
+        PushVal = (*cv == Sym[1]);
         if (Out1[i] == BRACHA87_ACCEPT) {
           Accepted[Self] = 1;
           AcceptVal[Self] = *cv;
@@ -1409,7 +1763,8 @@ explore(
                 (unsigned char)KEY_FLD(key, KEY_TYPE_SH, 2),
                 KEY_ANNOT(key),
                 (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4),
-                &Aval[KEY_FLD(key, KEY_PROC_SH, 4)], Acts);
+                KEY_FLD(key, KEY_VAL_SH, 1)
+                  ? &Alt : &Aval[KEY_FLD(key, KEY_PROC_SH, 4)], Acts);
       if (NActs > 3) {
         FailMsg = "bkr94acsAcastInput output more than 3 acts";
         goto fail;
@@ -1472,6 +1827,13 @@ explore(
           FailMsg = "a RECEIVED mask rode an act that is not READY_ALL";
           goto fail;
         }
+        if (!Pacts[i].value
+         || (*Pacts[i].value != Sym[0] && *Pacts[i].value != Sym[1])) {
+          FailMsg = "a Fig 1 retry act carries a value outside the run's"
+                    " alphabet";
+          goto fail;
+        }
+        PushVal = (*Pacts[i].value == Sym[1]);
         PushType = (unsigned char)
           (Pacts[i].act == BRACHA87_INITIAL_ALL ? BRACHA87_INITIAL
          : Pacts[i].act == BRACHA87_ECHO_ALL    ? BRACHA87_ECHO
@@ -1567,12 +1929,15 @@ explore(
     /* The bootstrap broadcast honors no suppress mask and marks
      * nobody, exactly as example/bkr94acs.c pushes it. */
     for (i = 0; i < NActs; ++i)
-      for (j = 0; j < N; ++j)
+      for (j = 0; j < N; ++j) {
+        if (j == Adv)
+          continue;
         poolPush(((unsigned long)BRACHA87_INITIAL << KEY_TYPE_SH)
                  | ((unsigned long)(Acts[i].accepted ? 1 : 0) << KEY_ACC_SH)
                  | ((unsigned long)Acts[i].process << KEY_PROC_SH)
                  | ((unsigned long)Self << KEY_FROM_SH)
                  | (j << KEY_TO_SH));
+      }
     goto applied;
 
     /*--------------------------------------------------------------*/
@@ -1586,14 +1951,15 @@ explore(
      * only where the mask says so -- framer discipline, since
      * bracha87Fig1Received RETURNS acFrom. */
     for (j = 0; j < N; ++j) {
-      if (Skip && BRACHA87_SKIP_TST(Skip, j))
+      if (j == Adv || (Skip && BRACHA87_SKIP_TST(Skip, j)))
         continue;
       poolPush(((unsigned long)PushType << KEY_TYPE_SH)
                | ((unsigned long)(PushAcc ? 1 : 0) << KEY_ACC_SH)
                | ((unsigned long)((Received && BRACHA87_SKIP_TST(Received, j))
                                   ? 1 : 0) << KEY_RCV_SH)
                | ((unsigned long)Self << KEY_FROM_SH)
-               | (j << KEY_TO_SH));
+               | (j << KEY_TO_SH)
+               | ((unsigned long)PushVal << KEY_VAL_SH));
     }
     switch (PushRet) {
     case 1:  goto push1r1;
@@ -1613,13 +1979,19 @@ explore(
       case BKR94ACS_ACT_ACAST_SEND:
         if (!Acts[i].value)
           break;
-        /* The key carries the A-Cast value through `process`; this is
-         * where that identity is checked rather than assumed. */
-        if (*Acts[i].value != Aval[Acts[i].process]) {
-          FailMsg = "an A-Cast act carries a value no process A-Cast";
+        /* The key carries the A-Cast value through `process` and the
+         * value bit; this is where that identity is checked rather
+         * than assumed.  The foreign symbol enters a run only from the
+         * adversary, so under none this is the old equality. */
+        if (*Acts[i].value == Aval[Acts[i].process])
+          base = 0;
+        else if (*Acts[i].value == Alt)
+          base = 1UL << KEY_VAL_SH;
+        else {
+          FailMsg = "an A-Cast act carries a value outside the run's"
+                    " alphabet";
           goto fail;
         }
-        base = 0;
         goto frame;
 
       case BKR94ACS_ACT_BA_SEND:
@@ -1639,7 +2011,7 @@ explore(
               | ((unsigned long)Acts[i].process << KEY_PROC_SH)
               | ((unsigned long)Self << KEY_FROM_SH);
         for (j = 0; j < N; ++j) {
-          if (Acts[i].skip && BRACHA87_SKIP_TST(Acts[i].skip, j))
+          if (j == Adv || (Acts[i].skip && BRACHA87_SKIP_TST(Acts[i].skip, j)))
             continue;
           poolPush(base
                    | ((unsigned long)((Acts[i].received
@@ -1709,6 +2081,8 @@ explore(
         const unsigned char *ac;
         const unsigned char *rd;
 
+        if (p == Adv)
+          continue;
         /* acFrom \ {self} is a subset of rdFrom.  acFrom raw is the
          * RECEIVED mask; rdFrom is the ECHO_ALL suppress mask.  The self
          * bit is excluded because the self-accept is recorded with no
@@ -1726,15 +2100,35 @@ explore(
               goto fail;
             }
           }
-        /* Lemma 2: any two accepts of one broadcast agree. */
-        for (q = p + 1; q < N; ++q)
+        /* Lemma 1: two correct READY senders carry the same value.
+         * Lemma 2: any two accepts of one broadcast agree.  Both
+         * pairwise over the honest processes; under an honest
+         * initiator the per-act value check above already implies
+         * them, under an adversary initiator they are the live ones. */
+        for (q = p + 1; q < N; ++q) {
+          const struct bracha87Fig1 *fp;
+          const struct bracha87Fig1 *fq;
+
+          if (q == Adv)
+            continue;
+          fp = (struct bracha87Fig1 *)Img[p];
+          fq = (struct bracha87Fig1 *)Img[q];
+          if ((fp->flags & BRACHA87_F1_RDSENT)
+           && (fq->flags & BRACHA87_F1_RDSENT)
+           && *bracha87Fig1Value(fp) != *bracha87Fig1Value(fq)) {
+            FailMsg = "Lemma 1: two READY senders carry different values";
+            goto fail;
+          }
           if (Accepted[p] && Accepted[q] && AcceptVal[p] != AcceptVal[q]) {
             FailMsg = "Lemma 2: two accepts of one broadcast disagree";
             goto fail;
           }
+        }
       }
-    } else
+    } else {
       for (p = 0; p < N; ++p) {
+        if (p == Adv)
+          continue;
         Acsp = (struct bkr94acs *)Img[p];
         if (bkr94acsFanoutDuty(Acsp) < PreFan[p]) {
           FailMsg = "bkr94acsFanoutDuty is not monotone";
@@ -1752,6 +2146,72 @@ explore(
           }
         }
       }
+      /* Per process j, over the honest processes:
+       *   - Lemma 2 on A-Cast j: the accepted values agree
+       *     (bkr94acsAcastValue is ACCEPT-gated for non-self);
+       *   - Theorem 2 on BA_j: the decisions agree;
+       *   - C1 (BenOr83, the validity Theorem 2 inherits): once every
+       *     honest process has entered BA_j with one value v, no
+       *     honest decision on it is the other.  Decisions latch, so a
+       *     decision taken before the last entry is caught by the
+       *     transition that makes it.  The entered value is the
+       *     INITIATOR slot of the round-0 BA Fig 1 this process
+       *     initiated, read off the image. */
+      for (q = 0; q < N; ++q) {
+        const unsigned char *av;
+        unsigned int dec;
+        unsigned int ent;
+        int allEnt;
+
+        av = 0;
+        dec = 0xFF;
+        ent = 0xFF;
+        allEnt = 1;
+        for (p = 0; p < N; ++p) {
+          const unsigned char *v;
+          unsigned char d;
+
+          if (p == Adv)
+            continue;
+          Acsp = (struct bkr94acs *)Img[p];
+          if ((v = bkr94acsAcastValue(Acsp, q))) {
+            if (!av)
+              av = v;
+            else if (*av != *v) {
+              FailMsg = "Lemma 2: two accepts of one A-Cast disagree";
+              goto fail;
+            }
+          }
+          d = bkr94acsBaDecision(Acsp, q);
+          if (d <= 1) {
+            if (dec == 0xFF)
+              dec = d;
+            else if (dec != d) {
+              FailMsg = "Theorem 2: two honest processes decided one BA"
+                        " differently";
+              goto fail;
+            }
+          }
+          if (!bkr94acsBaEntered(Acsp, q)) {
+            allEnt = 0;
+            continue;
+          }
+          if (!(v = bracha87Fig1Value(bkr94acsBaFig1(Acsp, q, 0, p)))) {
+            FailMsg = "an entered BA's round-0 Fig 1 carries no value";
+            goto fail;
+          }
+          if (ent == 0xFF)
+            ent = *v & 1;
+          else if (ent != (*v & 1))
+            ent = 2;
+        }
+        if (allEnt && ent <= 1 && dec <= 1 && dec != ent) {
+          FailMsg = "C1: every honest process entered one value and an"
+                    " honest process decided the other";
+          goto fail;
+        }
+      }
+    }
 
     explore(depth + 1);
 
@@ -1761,15 +2221,46 @@ explore(
 
     PoolLive = (unsigned int)nLive;
     PoolTot = 0;
+    sum = 0;
     for (i = 0; i < nLive; ++i) {
       PoolKey[i] = KeyStk[koff + i];
-      PoolCnt[i] = NumStk[koff + i];
+      PoolCnt[i] = NumStk[noff + i];
       PoolTot += PoolCnt[i];
+      sum = sum * 31 + PoolKey[i] + PoolCnt[i];
     }
     for (p = 0; p < N; ++p) {
-      Cursor[p].pos = NumStk[koff + nLive + 2 * p];
-      Cursor[p].sweepActs = NumStk[koff + nLive + 2 * p + 1];
+      Cursor[p].pos = NumStk[noff + nLive + 2 * p];
+      Cursor[p].sweepActs = NumStk[noff + nLive + 2 * p + 1];
+      sum = sum * 31 + Cursor[p].pos + Cursor[p].sweepActs;
       memcpy(Img[p], BytStk + boff + p * ImgSz, ImgSz);
+    }
+    /*
+     * THE INSTRUMENT AUDITING ITSELF, and it is here because this
+     * exact check was missing when it was needed.  The typed arenas
+     * are the one place in this file with offset arithmetic a frame
+     * can get wrong, and a frame that overwrites its parent's words
+     * corrupts a search that still reports counts and still passes:
+     * on 2026-09-10 the number arena was based at the key arena's
+     * top, every child frame's pool counts landed on the parent's
+     * cursor words, and every restore read them back as cursors.  It
+     * survived two full mutation runs and re-baselined every frozen
+     * count in the table before a reading of the arithmetic found it.
+     * Measured against that defect reintroduced: this reds inside the
+     * first seventeen events of the smallest config, and prints the
+     * witness that reaches it.
+     *
+     * Scope: the two typed arenas only.  The image bytes go through
+     * BytStk by memcpy and checksumming them would double the copy
+     * this search spends most of its time in -- so a corruption of
+     * the image arena is still caught only by the counts moving,
+     * which is the weaker signal this whole file calls sensitivity.
+     */
+    if (sum != frameSum) {
+      FailMsg = "the snapshot arenas did not survive the descent -- a"
+                " frame's pool or cursor words came back changed, so"
+                " the search below this state explored something other"
+                " than this state";
+      goto fail;
     }
     memcpy(Quiescent, BytStk + boff + N * ImgSz + 0 * MAX_N, MAX_N);
     memcpy(Accepted,  BytStk + boff + N * ImgSz + 1 * MAX_N, MAX_N);
@@ -1786,13 +2277,19 @@ explore(
   }
 
   KeyStkTop = koff;
-  NumStkTop = koff;
+  NumStkTop = noff;
   BytStkTop = boff;
   return;
 
  fail:
   Failed = 1;
   printf("\nFAILURE: %s\n", FailMsg);
+  if (Adv != 0xFF) {
+    printf("strategy: ");
+    for (i = 0; i < SelCnt; ++i)
+      printf("%s%lx", i ? "," : "", Gram[Sel[i]]);
+    printf("%s\n", SelCnt ? "" : "(silent)");
+  }
   printf("witness: ");
   for (i = 0; i <= depth && PathKind[i]; ++i) {
     if (i)
@@ -1802,12 +2299,21 @@ explore(
     else
       printf("%c%lu", (PathKind[i] == EV_TICK) ? 't' : 'a', PathArg[i]);
   }
-  printf("\nre-run: ./test_schedules -w <the sequence above> %s\n",
+  printf("\nre-run: ./test_schedules %s-w <the sequence above> %s\n",
+         (Adv != 0xFF && SelCnt) ? "-s <the strategy above> " : "",
          Cfg->name);
 }
 
 /*--------------------------------------------------------------------------*/
-/*  Main -- set a config up, run it, report, assert.                        */
+/*  Main -- set a config up, run it once per strategy, report, assert.      */
+/*                                                                          */
+/*  Under no adversary there is exactly one strategy, the empty one, and    */
+/*  the run is the one the frozen counts were measured on.  Under an        */
+/*  adversary the grammar is built, then walked: the silent strategy        */
+/*  first, then every subset of at most J contents drawn from one           */
+/*  instance's part of the grammar, each seeded at the root of its own      */
+/*  explorer run.  Re-seeding is a full reset of the run state; the         */
+/*  allocations are made once per config.                                   */
 /*--------------------------------------------------------------------------*/
 
 int
@@ -1822,11 +2328,19 @@ main(
   unsigned long argCeilDepth;
   unsigned int argHashBits;
   unsigned int argK;
+  unsigned int argJ;
   const char *witness;
+  const char *strategy;
   const char *want;
   unsigned int c;
   unsigned int i;
   unsigned int ran;
+  unsigned int part;
+  unsigned long silentStates;
+  unsigned long silentQuiescent;
+  unsigned long silentExhausted;
+  unsigned long silentAllowance;
+  int silentComplete;
 
   measure = 0;
   exitCode = 0;
@@ -1834,7 +2348,9 @@ main(
   argCeilDepth = 0;
   argHashBits = 0;
   argK = 0;
+  argJ = 0;
   witness = 0;
+  strategy = 0;
   ran = 0;
 
   arg = 1;
@@ -1848,6 +2364,9 @@ main(
     } else if (argv[arg][1] == 'k' && !argv[arg][2]) {
       if (++arg >= argc) goto usage;
       argK = (unsigned int)atoi(argv[arg++]);
+    } else if (argv[arg][1] == 'J' && !argv[arg][2]) {
+      if (++arg >= argc) goto usage;
+      argJ = atoi(argv[arg++]);
     } else if (argv[arg][1] == 'D' && !argv[arg][2]) {
       if (++arg >= argc) goto usage;
       argCeilDepth = strtoul(argv[arg++], 0, 10);
@@ -1857,6 +2376,9 @@ main(
     } else if (argv[arg][1] == 'w' && !argv[arg][2]) {
       if (++arg >= argc) goto usage;
       witness = argv[arg++];
+    } else if (argv[arg][1] == 's' && !argv[arg][2]) {
+      if (++arg >= argc) goto usage;
+      strategy = argv[arg++];
     } else
       goto usage;
   }
@@ -1880,18 +2402,34 @@ main(
     Cfg = &Configs[c];
     if (strcmp(want, "all")
      && strcmp(want, Cfg->name)
-     && !(!strcmp(want, "smoke") && Cfg->smoke))
+     && !(!strcmp(want, "smoke") && Cfg->smoke)
+     && !(!strcmp(want, "strategies") && Cfg->adv != 0xFF && !Cfg->smoke))
       continue;
     ++ran;
 
     N = Cfg->n;
     T = Cfg->t;
-    Initiator = 0;
+    Adv = Cfg->adv;
+    Initiator = Cfg->advInit ? Adv : 0;
+    Sym[0] = Val1;
+    Sym[1] = 'x';
     if (argK)
       Cfg->k = argK;
     if (Cfg->k > 255) {
       fprintf(stderr, "test_schedules: K above 255 does not fit the"
               " allowance vector\n");
+      return (2);
+    }
+    if (argJ > SEL_MAX || Cfg->j > SEL_MAX) {
+      fprintf(stderr, "test_schedules: J above %u does not fit the"
+              " strategy\n", (unsigned)SEL_MAX);
+      return (2);
+    }
+    if (argJ)
+      Cfg->j = argJ;
+    if (strategy && Adv == 0xFF) {
+      fprintf(stderr, "test_schedules: -s needs a config with an"
+              " adversary\n");
       return (2);
     }
     if (argCeilStates)
@@ -1900,8 +2438,11 @@ main(
       Cfg->ceilDepth = argCeilDepth;
 
     /*----------------------------------------------------------------*/
-    /*  Fixed allocations, held for the whole run: that is what makes  */
-    /*  the byte fingerprint sound (see the snapshot audit above).     */
+    /*  Fixed allocations, held for the whole config: that is what     */
+    /*  makes the byte fingerprint sound (see the snapshot audit       */
+    /*  above).  The adversary's image is allocated and initialized    */
+    /*  like the others and never called, so the fingerprint loop is   */
+    /*  the same loop with or without one.                             */
     /*----------------------------------------------------------------*/
 
     if (Cfg->surface == 1)
@@ -1915,33 +2456,7 @@ main(
         return (2);
       }
       Aval[i] = (unsigned char)('A' + i);
-      if (Cfg->surface == 1)
-        bracha87Fig1Init((struct bracha87Fig1 *)Img[i],
-                         (unsigned char)(N - 1), (unsigned char)T, 0);
-      else
-        bkr94acsInit((struct bkr94acs *)Img[i], (unsigned char)(N - 1),
-                     (unsigned char)T, 0, Cfg->maxPhases,
-                     (unsigned char)i, demoCoin, 0);
-      bracha87RetryInit(&Cursor[i]);
-      Allow[i] = (unsigned char)Cfg->k;
     }
-
-    memset(Quiescent, 0, sizeof (Quiescent));
-    memset(Accepted, 0, sizeof (Accepted));
-    memset(AcceptVal, 0, sizeof (AcceptVal));
-    memset(Pending, 0, sizeof (Pending));
-    PoolLive = 0;
-    PoolTot = 0;
-
-    States = Edges = 0;
-    TermQuiescent = TermExhausted = TermAllowance = 0;
-    CeilingCuts = 0;
-    MaxDepthSeen = 0;
-    CeilingHit = TableFull = Failed = 0;
-    SawQuiescent = SawSubsetFull = SawSubsetShort = 0;
-    FirstQuiescent = 0;
-    HashCnt = 0;
-    FrCnt = 1;
 
     bits = argHashBits ? argHashBits : Cfg->hashBits;
     HashSz = 1UL << bits;
@@ -1949,7 +2464,6 @@ main(
     PathCap = Cfg->ceilDepth + 8;
     KeyStkSz = NumStkSz = 4096;
     BytStkSz = 1UL << 20;
-    KeyStkTop = NumStkTop = BytStkTop = 0;
 
     if (!(Hash = calloc(HashSz, sizeof (unsigned long)))
      || !(HashHead = calloc(HashSz, sizeof (unsigned int)))
@@ -1965,38 +2479,209 @@ main(
     }
 
     /*----------------------------------------------------------------*/
-    /*  The root state.                                                */
+    /*  The adversary's grammar, partitioned by instance.  Every       */
+    /*  content here is well-formed and authenticated as the           */
+    /*  adversary: `from` is fixed, and an INITIAL appears only on an  */
+    /*  instance the adversary initiates (the library drops the        */
+    /*  others at ingress -- bkr94acs{Acast,Ba}Input -- and surface    */
+    /*  1's caller filter does the same, so a forged INITIAL is not a  */
+    /*  strategy but a dropped byte).  `to` ranges over the honest     */
+    /*  processes.  The value alphabet per instance is TWO symbols: a  */
+    /*  A-Cast's own value and one foreign symbol, {0, 1} for a BA     */
+    /*  round 3i / 3i+1, {(d,0), (d,1)} for a round 3i+2.  A READY     */
+    /*  carries all four annotation settings at surface 1 and the one   */
+    /*  announcing, marked setting at surface 2 (the loop below).       */
+    /*                                                                 */
+    /*  THE BOUNDS, and the defect each would miss:                    */
+    /*    one identity    -- t = 1 here and one process speaks; a       */
+    /*                       threshold defect that only two colluding   */
+    /*                       identities reach (2t+1 readys served by 2t */
+    /*                       at t = 2, say) is outside every config.    */
+    /*    two symbols     -- every pairwise property checked here       */
+    /*                       (Lemmas 1 and 2, Theorem 2's agreement) is */
+    /*                       stated over two values, and a third can    */
+    /*                       only lower a per-value count.  The BA      */
+    /*                       alphabet is where this bites: a round has  */
+    /*                       four well-formed bytes, {0, 1} x D_FLAG,   */
+    /*                       and the grammar emits two per round, so    */
+    /*                       Fig 3's rejection of a (d,v) below a 3i+2  */
+    /*                       round, or of a plain v at one, never sees  */
+    /*                       a Byzantine byte.                          */
+    /*    one instance    -- a strategy's contents all name one Fig 1   */
+    /*                       instance; a defect needing the adversary   */
+    /*                       to act on two instances at once (a cross-  */
+    /*                       instance count, a BA round fed from two    */
+    /*                       forged broadcasts) is outside it.          */
+    /*    J               -- at most J contents; at n = 4 a full        */
+    /*                       equivocation with supporting echoes needs  */
+    /*                       more than the floor of three, so a defect  */
+    /*                       that only a J+1-content strategy reaches   */
+    /*                       is outside it.  Printed like K.            */
+    /*    one copy        -- a content is seeded once.  READYs that     */
+    /*                       differ only in annotation are copies of    */
+    /*                       one (ready, v) to Fig 1's per-sender       */
+    /*                       dedup, so a surface-1 strategy can carry   */
+    /*                       up to four copies to one receiver, two of  */
+    /*                       them unmarked -- the re-arming forger's    */
+    /*                       duplicate -- and no third unmarked one; a  */
+    /*                       surface-2 strategy carries one copy, which */
+    /*                       arms nothing.                              */
+    /*    one timing      -- THE BOUND THAT BINDS.  Every content is    */
+    /*                       pending from the root, and the DFS drains  */
+    /*                       deliveries in key order before it ticks;   */
+    /*                       under the per-strategy ceiling the         */
+    /*                       backtracking never climbs back to an       */
+    /*                       adversary delivery's siblings (measured:   */
+    /*                       at s3, b2, b3 no seeded content lands      */
+    /*                       after any honest tick, and none is ever    */
+    /*                       delivered in a second order).  So at every */
+    /*                       config but b1 -- where the adversary is    */
+    /*                       the only root sender -- a content's TIMING */
+    /*                       is one sample, the key order's: by value   */
+    /*                       bit, then recipient, then sender (honest   */
+    /*                       before the adversary), and only then       */
+    /*                       INITIAL before ECHO before READY.  A defect */
+    /*                       that needs the adversary's READY to land   */
+    /*                       after an honest egress consumed an arm, or */
+    /*                       its round-0 value to land after the honest */
+    /*                       turn, is outside it.  The content axis is  */
+    /*                       what this enumerates; the order axis it    */
+    /*                       inherits only as far as the ceiling lets   */
+    /*                       the first dive's tail vary.                */
     /*----------------------------------------------------------------*/
 
-    if (Cfg->surface == 1) {
-      bracha87Fig1Initiator((struct bracha87Fig1 *)Img[Initiator], &Val1);
-      for (i = 0; i < N; ++i)
-        poolPush(((unsigned long)BRACHA87_INITIAL << KEY_TYPE_SH)
-                 | ((unsigned long)Initiator << KEY_FROM_SH)
-                 | ((unsigned long)i << KEY_TO_SH));
-    } else
-      for (i = 0; i < N; ++i) {
-        struct bkr94acsAct act;
-        unsigned int j;
+    GramCnt = 0;
+    PartCnt = 0;
+    if (Adv != 0xFF && !strategy) {
+      unsigned long base;
+      unsigned int inst;
+      unsigned int r;
+      unsigned int w;
+      unsigned int v;
+      unsigned int a;
+      int own;
 
-        if (Cfg->defer == i) {
-          /* A deferred submission is an EVENT, not a root fact --
-           * BKR94ACS.txt, and the example's -d is exactly this. */
-          Pending[i] = 1;
-          continue;
-        }
-        if (bkr94acsAcast((struct bkr94acs *)Img[i], &Aval[i], &act) != 1)
-          continue;
-        for (j = 0; j < N; ++j)
-          poolPush(((unsigned long)BRACHA87_INITIAL << KEY_TYPE_SH)
-                   | ((unsigned long)(act.accepted ? 1 : 0) << KEY_ACC_SH)
-                   | ((unsigned long)act.process << KEY_PROC_SH)
-                   | ((unsigned long)i << KEY_FROM_SH)
-                   | ((unsigned long)j << KEY_TO_SH));
+      if (Cfg->surface == 1) {
+        inst = 0;
+        own = Cfg->advInit;
+        base = 0;
+        goto gramInst;
       }
+      for (inst = 0; inst < N * (1 + 3u * Cfg->maxPhases * N); ++inst) {
+        /* inst enumerates A-Cast[p], then BA[p][r][w]. */
+        if (inst < N) {
+          own = ((unsigned int)inst == Adv);
+          if (!(Cfg->advInst & (own ? ADV_INST_OWN_ACAST : ADV_INST_ACAST)))
+            continue;
+          base = ((unsigned long)inst << KEY_PROC_SH);
+        } else {
+          w = (inst - N) % N;
+          r = ((inst - N) / N) % (3u * Cfg->maxPhases);
+          own = (w == Adv);
+          if (!(Cfg->advInst & (own ? ADV_INST_OWN_BA : ADV_INST_BA)))
+            continue;
+          base = (1UL << KEY_CLS_SH)
+               | ((unsigned long)((inst - N) / N / (3u * Cfg->maxPhases))
+                  << KEY_PROC_SH)
+               | ((unsigned long)r << KEY_ROUND_SH)
+               | ((unsigned long)w << KEY_INIT_SH);
+        }
+       gramInst:
+        if (PartCnt >= sizeof (PartLo) / sizeof (PartLo[0])) {
+          fprintf(stderr, "test_schedules: instance overflow\n");
+          return (2);
+        }
+        PartLo[PartCnt] = GramCnt;
+        for (i = 0; i < N; ++i) {
+          if (i == Adv)
+            continue;
+          for (v = 0; v < 2; ++v) {
+            unsigned long k;
+
+            k = base | ((unsigned long)Adv << KEY_FROM_SH)
+                     | ((unsigned long)i << KEY_TO_SH);
+            /* The value: bit 29 for an A-Cast or surface-1 symbol,
+             * the BA value field for a BA content -- {0, 1} below a
+             * 3i+2 round, {(d,0), (d,1)} at one. */
+            if (!KEY_FLD(base, KEY_CLS_SH, 1))
+              k |= (unsigned long)v << KEY_VAL_SH;
+            else if (KEY_FLD(base, KEY_ROUND_SH, 6) % 3 != 2)
+              k |= (unsigned long)v << KEY_BAV_SH;
+            else
+              k |= (unsigned long)(2 + v) << KEY_BAV_SH;
+            if (GramCnt + 6 > GRAM_MAX) {
+              fprintf(stderr, "test_schedules: grammar overflow\n");
+              return (2);
+            }
+            if (own)
+              Gram[GramCnt++] = k | ((unsigned long)BRACHA87_INITIAL
+                                     << KEY_TYPE_SH);
+            Gram[GramCnt++] = k | ((unsigned long)BRACHA87_ECHO
+                                   << KEY_TYPE_SH);
+            /* Surface 1 seeds a READY under all four annotation
+             * settings; surface 2 seeds it announcing and marked
+             * (ACCEPTED and RECEIVED both set), the setting that arms
+             * nothing.  The annotation exchange's Byzantine arms are
+             * the annotation forgery tests', the surface-1 configs
+             * here carry every setting through the same Fig 1, and
+             * QUIESCENT is unreachable at surface 2 under an adversary
+             * silent on any instance -- so what this bound gives up
+             * is a composition-level defect reachable only through
+             * an unannounced or unmarked READY on one instance. */
+            for (a = (Cfg->surface == 1) ? 0 : 3; a < 4; ++a)
+              Gram[GramCnt++] = k | ((unsigned long)BRACHA87_READY
+                                     << KEY_TYPE_SH)
+                                  | ((unsigned long)(a & 1) << KEY_ACC_SH)
+                                  | ((unsigned long)(a >> 1) << KEY_RCV_SH);
+          }
+        }
+        PartHi[PartCnt] = GramCnt;
+        ++PartCnt;
+        if (Cfg->surface == 1)
+          break;
+      }
+    }
+
+    if (strategy) {
+      /* A hand-seeded strategy is the whole grammar and the one
+       * strategy, so the failure printer and the seeding read it the
+       * same way. */
+      const char *s;
+
+      s = strategy;
+      while (*s) {
+        if (GramCnt >= SEL_MAX)
+          goto usage;
+        Gram[GramCnt] = strtoul(s, 0, 16);
+        /* A hand key is the harness's own index space: a recipient
+         * outside the honest processes, or a sender that is not the
+         * adversary, is refused rather than indexed. */
+        if (KEY_FLD(Gram[GramCnt], KEY_TO_SH, 4) >= N
+         || KEY_FLD(Gram[GramCnt], KEY_TO_SH, 4) == Adv
+         || KEY_FLD(Gram[GramCnt], KEY_FROM_SH, 4) != Adv
+         || KEY_FLD(Gram[GramCnt], KEY_PROC_SH, 4) >= N
+         || KEY_FLD(Gram[GramCnt], KEY_INIT_SH, 4) >= N
+         || (KEY_FLD(Gram[GramCnt], KEY_CLS_SH, 1)
+             && KEY_FLD(Gram[GramCnt], KEY_ROUND_SH, 6)
+                >= 3u * Cfg->maxPhases)) {
+          fprintf(stderr, "test_schedules: -s key %lx names a process,"
+                  " sender or round outside this config\n", Gram[GramCnt]);
+          return (2);
+        }
+        Sel[GramCnt] = GramCnt;
+        ++GramCnt;
+        while (*s && *s != ',')
+          ++s;
+        if (*s == ',')
+          ++s;
+      }
+      PartLo[0] = 0;
+      PartHi[0] = GramCnt;
+      PartCnt = 1;
+    }
 
     /*----------------------------------------------------------------*/
-    /*  Announce the bounds, then run.                                 */
+    /*  Announce the bounds.                                           */
     /*----------------------------------------------------------------*/
 
     printf("\n--- config %s: %s ---\n", Cfg->name, Cfg->note);
@@ -2021,6 +2706,39 @@ main(
                " on the order it was reached in"
              : "Pareto dominance, so even a state's identity depends on"
                " the order it was reached in");
+    if (Adv != 0xFF) {
+      unsigned long count;
+
+      /* The strategy count: 1 (silent) + per part, sum over sizes
+       * 1..J of C(|part|, size). */
+      count = 1;
+      for (part = 0; part < PartCnt; ++part) {
+        unsigned long g;
+        unsigned long comb;
+        unsigned int k;
+
+        g = PartHi[part] - PartLo[part];
+        comb = 1;
+        for (k = 1; k <= Cfg->j && k <= g; ++k) {
+          comb = comb * (g - k + 1) / k;
+          count += comb;
+        }
+      }
+      printf("  adversary: process %u, %s; grammar |G|=%u contents over"
+             " %u instance%s (one identity, two symbols per instance, one"
+             " instance per strategy, one copy per content, and under the"
+             " ceiling ONE TIMING per content -- the key order's); J=%u"
+             " contents per strategy; %lu strategies, each its own"
+             " explorer run under the ceilings above -- every count below"
+             " is a SUM over them\n",
+             Adv,
+             Cfg->surface == 1
+               ? (Cfg->advInit ? "the initiator" : "not the initiator")
+               : (Cfg->advInst & (ADV_INST_OWN_ACAST | ADV_INST_OWN_BA))
+                 ? "its own broadcasts" : "the honest broadcasts",
+             GramCnt, PartCnt, PartCnt == 1 ? "" : "s",
+             (unsigned)Cfg->j, strategy ? 1UL : count);
+    }
 
     if (witness) {
       const char *s;
@@ -2048,6 +2766,99 @@ main(
         if (*s == ',')
           ++s;
       }
+    }
+
+    TotStates = TotEdges = 0;
+    TotQuiescent = TotExhausted = TotAllowance = TotCeiling = 0;
+    TotMaxDepth = 0;
+    StratCnt = StratQuiescent = StratComplete = 0;
+    StratSubFull = StratSubShort = StratExhausted = StratAdvIn = 0;
+    StratAllAccepted = 0;
+    silentStates = silentQuiescent = silentExhausted = silentAllowance = 0;
+    silentComplete = 0;
+    part = 0;
+    SelCnt = strategy ? GramCnt : 0;
+
+    /*----------------------------------------------------------------*/
+    /*  One explorer run per strategy.                                 */
+    /*----------------------------------------------------------------*/
+
+   nextStrategy:
+    for (i = 0; i < N; ++i) {
+      if (Cfg->surface == 1)
+        bracha87Fig1Init((struct bracha87Fig1 *)Img[i],
+                         (unsigned char)(N - 1), (unsigned char)T, 0);
+      else
+        bkr94acsInit((struct bkr94acs *)Img[i], (unsigned char)(N - 1),
+                     (unsigned char)T, 0, Cfg->maxPhases,
+                     (unsigned char)i, demoCoin, 0);
+      bracha87RetryInit(&Cursor[i]);
+      Allow[i] = (i == Adv) ? 0 : Cfg->k;
+    }
+
+    memset(Quiescent, 0, sizeof (Quiescent));
+    memset(Accepted, 0, sizeof (Accepted));
+    memset(AcceptVal, 0, sizeof (AcceptVal));
+    memset(Pending, 0, sizeof (Pending));
+    PoolLive = 0;
+    PoolTot = 0;
+
+    States = Edges = 0;
+    TermQuiescent = TermExhausted = TermAllowance = 0;
+    CeilingCuts = 0;
+    MaxDepthSeen = 0;
+    CeilingHit = TableFull = Failed = 0;
+    SawQuiescent = SawSubsetFull = SawSubsetShort = 0;
+    SawComplete = SawAdvIn = SawAllAccepted = 0;
+    FirstQuiescent = 0;
+    memset(Hash, 0, HashSz * sizeof (unsigned long));
+    memset(HashHead, 0, HashSz * sizeof (unsigned int));
+    HashCnt = 0;
+    FrCnt = 1;
+    KeyStkTop = NumStkTop = BytStkTop = 0;
+
+    /* The root state: the honest processes' broadcasts, then the
+     * strategy's contents. */
+    if (Cfg->surface == 1) {
+      if (!Cfg->advInit) {
+        bracha87Fig1Initiator((struct bracha87Fig1 *)Img[Initiator], &Val1);
+        for (i = 0; i < N; ++i) {
+          if (i == Adv)
+            continue;
+          poolPush(((unsigned long)BRACHA87_INITIAL << KEY_TYPE_SH)
+                   | ((unsigned long)Initiator << KEY_FROM_SH)
+                   | ((unsigned long)i << KEY_TO_SH));
+        }
+      }
+    } else
+      for (i = 0; i < N; ++i) {
+        struct bkr94acsAct act;
+        unsigned int j;
+
+        if (i == Adv)
+          continue;
+        if (Cfg->defer == i) {
+          /* A deferred submission is an EVENT, not a root fact --
+           * BKR94ACS.txt, and the example's -d is exactly this. */
+          Pending[i] = 1;
+          continue;
+        }
+        if (bkr94acsAcast((struct bkr94acs *)Img[i], &Aval[i], &act) != 1)
+          continue;
+        for (j = 0; j < N; ++j) {
+          if (j == Adv)
+            continue;
+          poolPush(((unsigned long)BRACHA87_INITIAL << KEY_TYPE_SH)
+                   | ((unsigned long)(act.accepted ? 1 : 0) << KEY_ACC_SH)
+                   | ((unsigned long)act.process << KEY_PROC_SH)
+                   | ((unsigned long)i << KEY_FROM_SH)
+                   | ((unsigned long)j << KEY_TO_SH));
+        }
+      }
+    for (i = 0; i < SelCnt; ++i)
+      poolPush(Gram[Sel[i]]);
+
+    if (witness) {
       WitMode = 1;
       WitStuck = 0;
       printf("  re-deriving %lu events from the root:\n", WitLen);
@@ -2061,68 +2872,177 @@ main(
     } else
       explore(0);
 
+    TotStates += States;
+    TotEdges += Edges;
+    TotQuiescent += TermQuiescent;
+    TotExhausted += TermExhausted;
+    TotAllowance += TermAllowance;
+    TotCeiling += CeilingCuts;
+    if (MaxDepthSeen > TotMaxDepth)
+      TotMaxDepth = MaxDepthSeen;
+    ++StratCnt;
+    StratQuiescent += SawQuiescent ? 1 : 0;
+    StratComplete += SawComplete ? 1 : 0;
+    StratSubFull += SawSubsetFull ? 1 : 0;
+    StratSubShort += SawSubsetShort ? 1 : 0;
+    StratExhausted += TermExhausted ? 1 : 0;
+    StratAdvIn += SawAdvIn ? 1 : 0;
+    StratAllAccepted += SawAllAccepted ? 1 : 0;
+    if (StratCnt == 1) {
+      silentStates = States;
+      silentQuiescent = TermQuiescent;
+      silentExhausted = TermExhausted;
+      silentAllowance = TermAllowance;
+      silentComplete = SawComplete;
+    }
+    if (Failed || TableFull)
+      exitCode = 1;
+
+    /* The next strategy: the subsets of one part in ascending size,
+     * each size in lexicographic order; then the next part. */
+    if (Adv != 0xFF && !strategy && !witness && !Failed && !TableFull) {
+      unsigned int lo;
+      unsigned int hi;
+      unsigned int k;
+
+      for (;;) {
+        lo = PartLo[part];
+        hi = PartHi[part];
+        if (SelCnt) {
+          k = SelCnt;
+          while (k > 0) {
+            --k;
+            if (Sel[k] + 1 < hi - (SelCnt - 1 - k)) {
+              ++Sel[k];
+              for (++k; k < SelCnt; ++k)
+                Sel[k] = Sel[k - 1] + 1;
+              goto nextStrategy;
+            }
+          }
+        }
+        if (SelCnt < Cfg->j && SelCnt < hi - lo) {
+          ++SelCnt;
+          for (k = 0; k < SelCnt; ++k)
+            Sel[k] = lo + k;
+          goto nextStrategy;
+        }
+        if (++part >= PartCnt)
+          break;
+        SelCnt = 0;
+      }
+    }
+
     /*----------------------------------------------------------------*/
     /*  Report, then the whole-config assertions.                      */
     /*----------------------------------------------------------------*/
 
+    if (Adv != 0xFF) {
+      printf("  strategies run: %lu\n", StratCnt);
+      printf("  %s: states=%lu QUIESCENT=%lu"
+             " EXHAUSTED=%lu ALLOWANCE-EXHAUSTED=%lu%s\n",
+             strategy ? "this strategy" : "the silent strategy alone",
+             silentStates, silentQuiescent, silentExhausted,
+             silentAllowance,
+             Cfg->surface == 2
+               ? (silentComplete ? " completion reached"
+                                 : " completion not reached")
+               : "");
+      printf("  strategies reaching: QUIESCENT %lu, EXHAUSTED %lu",
+             StratQuiescent, StratExhausted);
+      if (Cfg->surface == 1)
+        printf(", every honest process accepted %lu", StratAllAccepted);
+      else
+        printf(", completion %lu, |SubSet|=n %lu, |SubSet|<n %lu,"
+               " the adversary in SubSet %lu",
+               StratComplete, StratSubFull, StratSubShort, StratAdvIn);
+      printf("\n");
+    }
     printf("  states=%lu edges=%lu maxDepth=%lu\n",
-           States, Edges, MaxDepthSeen);
+           TotStates, TotEdges, TotMaxDepth);
     printf("  terminals: QUIESCENT=%lu EXHAUSTED=%lu"
            " ALLOWANCE-EXHAUSTED=%lu\n",
-           TermQuiescent, TermExhausted, TermAllowance);
-    if (TableFull) {
+           TotQuiescent, TotExhausted, TotAllowance);
+    if (TableFull)
       printf("  ** VISITED TABLE FULL at %lu entries -- the search is"
              " INCOMPLETE; raise -b **\n", HashCnt);
-      exitCode = 1;
-    }
-    if (SawQuiescent)
+    if (SawQuiescent && StratCnt == 1)
       printf("  first QUIESCENT terminal at state %lu -- the depth at"
              " which the reachability detector separates a stall from a"
              " ceiling\n", FirstQuiescent);
-    if (CeilingHit)
+    if (TotCeiling)
       printf("  ** CEILING HIT (%lu cuts) -- exhaustive-within-K is VOID"
              " for this config; the counts are a deterministic prefix"
              " of the search under the branch order above, not the whole"
-             " of it **\n", CeilingCuts);
+             " of it **\n", TotCeiling);
     else if (!witness && !TableFull)
       printf("  complete within the bounds: every schedule with at most"
              " %u ticks per process was covered\n", Cfg->k);
 
+    if (Cfg->surface == 2)
+      printf("  reachability: |SubSet|=n %s, |SubSet|<n %s\n",
+             StratSubFull ? "reached" : "not reached",
+             StratSubShort ? "reached" : "not reached");
+    else
+      printf("  reachability: every honest process accepted %s\n",
+             StratAllAccepted ? "reached" : "not reached");
+
+    /* The whole-config assertions hold only for the bounds they were
+     * measured under: a -k / -J / -c / -D override shrinks or grows
+     * the search, and the banner's own rule is that a reachability
+     * assertion at a config whose baseline does not reach the class
+     * is a false red on a correct library.  Under an override the
+     * run reports and asserts nothing. */
     if (Failed)
       exitCode = 1;
-    else if (!witness) {
-      if (Cfg->expectQuiescent && !SawQuiescent) {
+    else if (argK || argJ || argCeilStates || argCeilDepth)
+      printf("  assertions: none -- the bounds are overridden\n");
+    else if (!witness && !strategy) {
+      if (Cfg->expectQuiescent && !StratQuiescent) {
         printf("  FAILURE: no schedule reached a QUIESCENT terminal\n");
         exitCode = 1;
       }
-      if (Cfg->expectNoExhausted && TermExhausted) {
+      if (Cfg->expectNoExhausted && TotExhausted) {
         printf("  FAILURE: the EXHAUSTED class is non-empty at t=0\n");
         exitCode = 1;
       }
-      if (Cfg->expectSubsetFull && !SawSubsetFull) {
+      if (Cfg->expectSubsetFull && !StratSubFull) {
         printf("  FAILURE: no schedule reached |SubSet| = n\n");
         exitCode = 1;
       }
-      if (Cfg->expectSubsetShort && !SawSubsetShort) {
-        printf("  FAILURE: no schedule reached |SubSet| < n"
-               " (honest exclusion)\n");
+      if (Cfg->expectSubsetShort && !StratSubShort) {
+        printf("  FAILURE: no schedule reached |SubSet| < n (%s"
+               " exclusion)\n", Adv == 0xFF ? "honest" : "the adversary's");
         exitCode = 1;
       }
-      if (Cfg->surface == 2)
-        printf("  reachability: |SubSet|=n %s, |SubSet|<n %s\n",
-               SawSubsetFull ? "reached" : "not reached",
-               SawSubsetShort ? "reached" : "not reached");
-
+      /* The 2-coded witnesses are per-strategy: every strategy of the
+       * config reaches the outcome, which is what a baseline measured
+       * at every strategy licenses -- Lemma 4 under b2 (every honest
+       * process accepts whatever the adversary echoes or readies) and
+       * BKR94 Lemma 2 Part B under b3/b4 (completion). */
+      if (Cfg->expectAllAccepted
+       && StratAllAccepted < (Cfg->expectAllAccepted == 2 ? StratCnt : 1)) {
+        printf("  FAILURE: %s reached every honest process accepted\n",
+               Cfg->expectAllAccepted == 2 ? "not every strategy"
+                                          : "no schedule");
+        exitCode = 1;
+      }
+      if (Cfg->expectComplete
+       && StratComplete < (Cfg->expectComplete == 2 ? StratCnt : 1)) {
+        printf("  FAILURE: %s reached completion\n",
+               Cfg->expectComplete == 2 ? "not every strategy"
+                                       : "no schedule");
+        exitCode = 1;
+      }
       if (!Cfg->expStates)
         printf("  frozen counts: NOT SET -- measurement only, nothing"
                " asserted\n");
       else if (measure)
         printf("  frozen counts: not asserted (-m)\n");
-      else if (States != Cfg->expStates || Edges != Cfg->expEdges
-            || TermQuiescent != Cfg->expQuiescent
-            || TermExhausted != Cfg->expExhausted
-            || TermAllowance != Cfg->expAllowance
-            || CeilingCuts != Cfg->expCeiling) {
+      else if (TotStates != Cfg->expStates || TotEdges != Cfg->expEdges
+            || TotQuiescent != Cfg->expQuiescent
+            || TotExhausted != Cfg->expExhausted
+            || TotAllowance != Cfg->expAllowance
+            || TotCeiling != Cfg->expCeiling) {
         printf("  FAILURE: frozen counts differ.\n"
                "    expected states=%lu edges=%lu QUIESCENT=%lu"
                " EXHAUSTED=%lu ALLOWANCE=%lu ceilingCuts=%lu\n",
@@ -2174,14 +3094,19 @@ main(
 
  usage:
   fprintf(stderr,
-    "usage: test_schedules [-m] [-k ticks] [-c states] [-D depth]"
-    " [-b hashbits] [-w witness] config\n"
-    "  config      1 | 2 | 3a | 3b | 4 | smoke | all\n"
+    "usage: test_schedules [-m] [-k ticks] [-J contents] [-c states]"
+    " [-D depth] [-b hashbits] [-s strategy] [-w witness] config\n"
+    "  config      1 | 2 | 3a | 3b | 4 | b1 | b2 | b3 | b4 | smoke"
+    " | strategies | all\n"
     "  -m          report the frozen counts, do not assert them\n"
     "  -k ticks    tick allowance per process override\n"
-    "  -c states   state ceiling override\n"
+    "  -J contents contents per strategy override (adversary configs)\n"
+    "  -c states   state ceiling override\n");
+  fprintf(stderr,
     "  -D depth    depth ceiling override\n"
     "  -b hashbits visited table size, 1 << hashbits entries\n"
+    "  -s strategy run one hand-seeded strategy, comma-separated"
+    " content keys in the form a failure prints\n"
     "  -w witness  re-derive one event sequence from the root\n");
   return (2);
 }

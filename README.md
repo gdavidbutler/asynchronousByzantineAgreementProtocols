@@ -154,7 +154,7 @@ while (!terminate) {
 
 ```bash
 make            # build .o and examples
-make check      # build and run all six test binaries (see Test Coverage below)
+make check      # build and run all seven test binaries (see Test Coverage below)
 make clean      # remove build artifacts
 make clobber    # also remove dtc's leftover .psu intermediates
 ```
@@ -340,7 +340,7 @@ Every message's per-message discriminator -- the Bracha87 type, the class, and (
 
 ## Test Coverage
 
-`make check` runs six test binaries, each scoped to catch a different class of regression; together they form a defense in depth.
+`make check` runs seven test binaries, each scoped to catch a different class of regression; together they form a defense in depth.
 
 | Binary | Scope | What it catches |
 |---|---|---|
@@ -349,7 +349,8 @@ Every message's per-message discriminator -- the Bracha87 type, the class, and (
 | `test_bracha87_blackbox` | Protocol black-box (bracha87) | Header-contract drift: validity/agreement/totality, precise echo thresholds, the BPR retirement contract, array Retry, and the retry cursor's `sweeps` wrap count (including a witness that one call can complete two passes, which is why the contract says compare rather than increment) -- derived from `bracha87.h` and `Bracha87.txt` only. |
 | `test_bkr94acs` | Protocol white-box (bkr94acs) | All-to-all simulation, step-2 trigger and post-decide-continuation regressions, BPR drop-convergence and Byzantine-silent canaries, EXHAUSTED handling (decide/exhaust acts drained from the sweep-side turn, as deployed); reaches into internal layout. |
 | `test_bkr94acs_blackbox` | Protocol black-box (bkr94acs) | Header-contract drift: Lemma 2 Parts A-D, Input dedup (the invariant a progress counter rests on), Retry/quiescence under drop, EXHAUSTED, equivocating A-Cast initiator, step-2 pacing (the eager schedule excludes a delayed honest A-Cast, patience includes it, finite patience completes past a dead slot), turn pacing (deliveries alone decide nothing; TOLERANCE needs the elapsed signal, MET fires free; turns quiescent at completion), a BA's decision versus this process's own input to it, and annotation forgery (a forged accept announcement contained to its own sender with a correct laggard still carried; a forged missing RECEIVED whose egress is aimed at the forger alone, with the backlog it accumulates measured by stopping the forger and draining it at one and at four times the honest rate) -- no `.c` reads. |
-| `test_schedules` | Schedule explorer (instrument) | Bounded reachability over the two example loops' state graphs under adversarial delivery order and delay: a per-transition oracle plus a quiescent-terminal battery whose all-n ending-evidence check is the one detector separating the forbidden local-accept READY retire from the remote gate; frozen counts are regression constants. `make check` runs its subsecond smoke subset; `make schedules` is the deliberate full run. |
+| `test_schedules` | Schedule explorer (instrument) | Bounded reachability over the two example loops' state graphs under adversarial delivery order and delay: a per-transition oracle plus a quiescent-terminal battery whose all-n ending-evidence check is the one detector separating the forbidden local-accept READY retire from the remote gate; frozen counts are regression constants. Its adversary configs run the same explorer once per well-formed Byzantine strategy inside a printed bound -- the content axis, checked against the papers' properties. `make check` runs its subsecond smoke subset; `make schedules` is the deliberate full run, `make strategies` the adversary configs alone. |
+| `test_ingress` | Ingress contract (instrument) | Hostile bytes at every entry a message reaches, from an adversary who holds this library: each wire-derived argument swept over its whole field with the rest legal, plus the boundary as a cross product and all 256 packed discriminator bytes. Asserts that an argument the headers do not admit is REFUSED and leaves the receiver byte-identical -- the half a return-value check cannot carry -- and that any call at all emits only well-formed acts with borrowed pointers inside the image and leaves every documented domain intact. Scope is drawn by the obligations above: content and field values are the adversary's, payload length and sender identity are the transport's and are outside it. |
 
 The white-box / black-box pairing surfaces a different class of bug at each layer. White-box catches internal-invariant regressions (a state-machine flag set wrong, a count left unbumped). Black-box catches API contract drift -- header text and code behavior pulling apart over time. Recent contract-drift fix caught by the black-box suite: `bkr94acsAcastValue`'s ACCEPT-gate (header documented "0 if not yet accepted" but pre-fix returned ECHOED-stored bytes, exposing pre-Lemma-2 values to callers).
 

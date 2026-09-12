@@ -2,8 +2,9 @@
 #
 # mutants.sh -- does the standing battery have teeth?
 #
-# The five test suites and the schedule explorer are this repository's
-# whole review.  A suite that passes proves nothing by itself: it proves
+# The five test suites and the two instruments -- the schedule explorer
+# and the ingress contract -- are this repository's whole review.  A
+# suite that passes proves nothing by itself: it proves
 # something only if it would FAIL on a machine that is wrong.  This
 # walks a catalogue of single, anchored defects, applies each one to a
 # scratch copy of bracha87.c or bkr94acs.c, and asks whether a NAMED
@@ -38,11 +39,12 @@
 #     somewhere else or nowhere.
 #
 #   named-label credit.  Four of the five suites accumulate failures
-#     and print a stable label; the explorer stops at its first and
-#     prints one.  A kill is credited only when the DESIGNATED label
-#     appears.  A nonzero status is not a kill: a mutation can fault or
-#     run away before any check runs -- that is the mutation announcing
-#     itself, and it is graded CRASH.
+#     and print a stable label; the explorer stops a config's search at
+#     its first per-state red and prints one witness, and a config with
+#     none prints its whole-config labels.  A kill is credited only
+#     when the DESIGNATED label appears.  A nonzero status is not a
+#     kill: a mutation can fault or run away before any check runs --
+#     that is the mutation announcing itself, and it is graded CRASH.
 #
 #   suites run one at a time.  `make check` stops at the first failing
 #     suite, which would hide the designated one behind an earlier
@@ -72,9 +74,11 @@ SOURCES="bracha87.c bracha87.h bkr94acs.c bkr94acs.h \
 bracha87Fig1Rules.c bracha87Fig3Rules.c bracha87Fig4Rules.c \
 bkr94acsRules.c"
 SUITESRC="test_bracha87.c test_bkr94acs.c test_predicates.c \
-test_bracha87_blackbox.c test_bkr94acs_blackbox.c test_schedules.c"
+test_bracha87_blackbox.c test_bkr94acs_blackbox.c test_schedules.c \
+test_ingress.c"
 BINS="test_bracha87 test_bkr94acs test_predicates \
-test_bracha87_blackbox test_bkr94acs_blackbox test_schedules"
+test_bracha87_blackbox test_bkr94acs_blackbox test_schedules \
+test_ingress"
 
 if [ ! -f bracha87.c ] || [ ! -f test/test_schedules.c ]; then
   echo "mutants: run from the repository root" >&2
@@ -733,6 +737,12 @@ oracle writes a decided-1 outcome and requires the retry sweep to still
 visit that process.  Under the mutation the walk skips it and the check
 goes red.  The oracle drives the decision by direct write rather than
 through the gate, so it is independent of the mutated line.
+Corroborated by the explorer at config 3a, outside the smoke run: its
+quiescent-terminal ending claim reds on a sent A-Cast whose RECEIVED
+mask is short of all n -- the decided-1 instance the inverted gate
+stopped serving while its READY was still owed.  The surface-2 smoke
+config (n = 2, t = 0) is insensitive to this defect: its counts do not
+move, nor do config 4's, the same shape at a 1,000,000-state ceiling.
 #ANCHOR
   return (dec != 0);  /* 0xFF and 1 -> retry; 0 -> skip */
 #WITH
@@ -756,7 +766,7 @@ tail this breaks runs after it.  The explorer's terminal class is
 quiescence -- every process quiescent and the pool empty -- and its
 whole-config assertion is that some schedule reaches one.  Under the
 mutation no schedule does, and the explorer says so on the surface-2
-config.  The surface-1 config does not touch this file and stays green,
+config.  The surface-1 configs do not touch this file and stay green,
 so the attribution is clean.
 #ANCHOR
     out[nact].value = cv;
@@ -1069,8 +1079,8 @@ the mutation is invisible; at t = 0 the two thresholds are one integer
 and the accept rides the same message as the ready.  The oracle's
 first ready at a t = 0 process must produce three actions; under the
 mutation the accept is withheld and two arrive.  The explorer also
-goes red: both smoke configs run at n = 2, t = 0, which is exactly
-where this defect bites, so its frozen counts move.  That is
+goes red: the two honest smoke configs run at n = 2, t = 0, which is
+exactly where this defect bites, so their frozen counts move.  That is
 SENSITIVITY to the behavioral change and not a second detection.
 #ANCHOR
   if (acceptV) {
@@ -1385,6 +1395,154 @@ grade is not read for more than it carries.
         out[nout++] = BRACHA87_READY_ALL;
 #END
 
+#MUTANT M48
+#FAMILY ingress range -- the A-Cast process index unchecked
+#FILE bkr94acs.c
+#ORACLE test_ingress
+#LABEL a refused call changed the receiver's image
+#EXPECT KILLED
+#WHY
+n ENCODES the process count (actual = n + 1), so the admissible
+indices are 0..n and everything above is a field value an adversary
+chose.  Dropping the check does not merely admit it: acastF1 then
+computes an instance address past the A-Cast array, and
+bracha87Fig1Input writes its per-sender echo record there before any
+rule can fire -- so the entry returns 0 acts, looking exactly like an
+ordinary dedup, while a Fig 1 belonging to some BA pipeline has been
+written through.  That is the shape this oracle exists for: the
+return value is the same as a correct machine's and only the image
+tells them apart.  No honest generator produces an out-of-range index,
+so no other suite sends one; the ingress instrument sweeps the whole
+0..255 field at every milestone and restores the receiver between
+calls, so the byte comparison against the milestone is what reds.
+
+WHAT THIS ENTRY IS AND IS NOT.  It is NOT the first detector, and the
+run says so: test_bkr94acs_blackbox's H2 arm ("out-of-range process
+refused") reds too, from the header alone.  What that arm reads is the
+RETURN -- no acts -- which a machine that validated after writing would
+also produce.  This entry's designated label is the other half, that
+the receiver is byte-identical afterward, and no arm in the contract
+suites checks it.  Credit the entry for the identity, not the refusal.
+#ANCHOR
+  if (!a || process > a->n || from > a->n || !value || !out)
+#WITH
+  if (!a || from > a->n || !value || !out)
+#END
+
+#MUTANT M49
+#FAMILY ingress range -- the BA round unchecked
+#FILE bkr94acs.c
+#ORACLE test_ingress
+#LABEL a refused call changed the receiver's image
+#EXPECT KILLED
+#WHY
+A BA's Fig 1 instances are keyed by round over the space Fig 4
+instantiates, maxPhases * 3, and the round arrives on the wire.
+Without the bound the pipeline offset is computed from a round outside
+that space and the write lands past the BA's own region -- again
+returning 0 acts, because the Fig 1 it reached is not one this
+schedule has driven.  The honest cohort never emits a round it has not
+reached, so the round field is another one no other suite varies.  The
+instrument sweeps it 0..255 with every other field legal, so the
+attribution is to the round alone.
+
+WHAT THIS ENTRY IS AND IS NOT, the same shape as M48's: the contract
+suite's H2 arm ("BA out-of-range round refused") is the first detector
+and reads the return; this entry's designated label is the identity
+half that arm does not read.
+#ANCHOR
+  if (round >= maxRounds(a))
+    return (0);
+#WITH
+#END
+
+#MUTANT M50
+#FAMILY ingress order -- the announcement recorded before its guard
+#FILE bracha87.c
+#ORACLE test_ingress
+#LABEL an out-of-range announcement was recorded
+#EXPECT KILLED
+#WHY
+bracha87Fig1ProcessAccepted returns void, so its whole contract is
+"out-of-range 'from' and a null instance are ignored" -- there is no
+return value a caller could read and no value a test could assert.
+Moving the RANGE half of the guard below the bit set keeps that
+contract's LETTER (the call still returns nothing) and breaks it
+entirely: an out-of-range announcement sets a bit outside the acFrom
+bitmap.  This is the entry that proves why the identity oracle is not
+a convenience -- for a void entry it is the ONLY oracle there can be.
+The instrument sweeps 'from' over the whole field at each Fig 1
+milestone and compares the instance against the milestone image.
+The null half of the guard is deliberately LEFT IN PLACE: moving it
+too would fault several suites before any check ran, and a mutation
+that announces itself with a signal is graded CRASH here and credits
+nothing.  One anchored defect means one, and the one this entry is
+about is the range.
+
+This is one of the two entries whose designated oracle is the ONLY
+suite that reds -- measured in the run, not assumed.  Nothing else in
+the battery calls a void entry with an argument outside its range.
+#ANCHOR
+  if (!b || from > b->n)
+    return;
+  BIT_SET(F1_ACFROM(b), from);
+#WITH
+  if (!b)
+    return;
+  BIT_SET(F1_ACFROM(b), from);
+  if (from > b->n)
+    return;
+#END
+
+#MUTANT M51
+#FAMILY annotation ingress -- a bit the header calls ignored is read
+#FILE bkr94acs.c
+#ORACLE test_ingress
+#LABEL a bit the header calls ignored is being read
+#EXPECT KILLED
+#WHY
+bkr94acsAcastInput's contract is that only BKR94ACS_ACCEPTED and
+BKR94ACS_RECEIVED are read off annot, and only on a READY, "so a
+caller may pass the whole packed discriminator byte unmasked and every
+other bit is ignored" (bkr94acs.h).  Every framer in this repository
+does pass the raw byte, and bit 6 of the canonical layout is reserved
+for the APPLICATION's own message classes -- so a machine that read it
+would take an application's private bit as a protocol annotation, and
+an adversary setting it would retire a retry that is still owed.  The
+defect is invisible to any suite that masks before calling, which is
+every other one.  The instrument holds one call fixed and runs all 256
+annot values, requiring the outcome to be constant within each
+(bit 4, bit 5) class; widening the mask splits a class and reds.
+Scope, stated because the grade does not carry it: this oracle is
+ONE-DIRECTIONAL.  It catches a bit being read that should not be; it
+cannot catch either documented bit going unread, and no entry here
+claims otherwise.
+#ANCHOR
+    if (annot & BKR94ACS_ACCEPTED)
+      bracha87Fig1ProcessAccepted(f1, from);
+    if (!(annot & BKR94ACS_RECEIVED))
+      bracha87Fig1ProcessResend(f1, from);
+  }
+
+  return (nact);
+}
+
+unsigned int
+bkr94acsBaInput(
+#WITH
+    if (annot & (BKR94ACS_ACCEPTED | 0x40))
+      bracha87Fig1ProcessAccepted(f1, from);
+    if (!(annot & BKR94ACS_RECEIVED))
+      bracha87Fig1ProcessResend(f1, from);
+  }
+
+  return (nact);
+}
+
+unsigned int
+bkr94acsBaInput(
+#END
+
 CATALOGUE_END
 
 # ---------------------------------------------------------------------
@@ -1419,6 +1577,8 @@ buildTree() {
     $CC $CFLAGS -o test_bkr94acs_blackbox test/test_bkr94acs_blackbox.c \
         bkr94acs.o bracha87.o || exit 1
     $CC $CFLAGS -o test_schedules test/test_schedules.c bkr94acs.o \
+        bracha87.o || exit 1
+    $CC $CFLAGS -o test_ingress test/test_ingress.c bkr94acs.o \
         bracha87.o || exit 1
   ) > "$WORK/build.log" 2>&1
 }
@@ -1457,7 +1617,10 @@ sums | sed 's/^/  /'
 sums > "$WORK/sums.before"
 echo
 
-rm -rf "$WORK/pristine" "$WORK/clean" "$WORK/build"
+# The per-entry outputs too: a withdrawn entry's output would otherwise
+# outlive the catalogue that no longer names it.
+rm -rf "$WORK/pristine" "$WORK/clean" "$WORK/build" "$WORK"/out.* \
+       "$WORK"/clean.out.*
 mkdir -p "$WORK/pristine/test" || exit 2
 for f in $SOURCES; do
   cp "$f" "$WORK/pristine/$f" || exit 2
@@ -1615,7 +1778,8 @@ for id in $ids; do
   if [ "$mFile" = bracha87.c ]; then
     shadowBins=$BINS
   else
-    shadowBins="test_bkr94acs test_bkr94acs_blackbox test_schedules"
+    shadowBins="test_bkr94acs test_bkr94acs_blackbox test_schedules \
+test_ingress"
   fi
   shadowBad=""
   for b in $shadowBins; do
