@@ -600,8 +600,9 @@ bracha87Fig1Received(
  * Figure 2 output action.  It reports that the round's threshold is
  * CROSSED, which enables the round; it is not an instruction to compute
  * it now.  The received set keeps growing past n-t, and any sample of
- * at least n-t is proof-covered -- see WHEN TO CALL IT at
- * bracha87Fig4Round.  Reported once, on the crossing arrival only.
+ * at least n-t is read as proof-covered (BPR.md, The Sweep-Side
+ * Decisions; WHEN TO CALL IT at bracha87Fig4Round).  Reported once, on
+ * the crossing arrival only.
  */
 #define BRACHA87_ROUND_COMPLETE 2  /* n-t messages received for round k */
 
@@ -1171,20 +1172,21 @@ bracha87Fig4Init(
  * WHEN TO CALL IT is the caller's, and n-t is a floor, not a moment.
  * Fig 3's "Wait till a set S of n - t k-messages have been validated"
  * names the evidence that ENABLES the round; the asynchronous model has
- * no moments to fire at.
- * The validated set keeps growing past n-t -- to n, via cascades and
- * late arrivals -- and the proofs hold for ANY sample of at least n-t,
- * so the sample this call consumes is purely a function of when the
- * caller makes it.  Calling on the n-t'th validation takes the smallest
- * legal sample; waiting takes a superset.  At sub 2 the gain is
- * one-directional (decide and adopt are monotone thresholds, so a
- * fuller sample can only turn coin phases into deterministic decides);
- * at sub 1 the majority is a comparison a fuller sample can flip, and
- * both outcomes are proof-covered, so the flip trades between sound
- * broadcasts and never against safety.  Deferring an enabled round
+ * no moments to fire at.  The validated set keeps growing past n-t --
+ * to n, via cascades and late arrivals -- and the proofs are read as
+ * holding for ANY sample of at least n-t (BPR.md, The Sweep-Side
+ * Decisions), so the sample this call consumes is purely a function
+ * of when the caller makes it.  Calling on the n-t'th validation
+ * takes the smallest legal sample; waiting takes a superset.  At sub
+ * 2 the gain is one-directional (decide and adopt are monotone
+ * thresholds, so a fuller sample can only turn coin phases into
+ * deterministic decides); at sub 0 the majority is a comparison a
+ * fuller sample can flip, and both outcomes are read as
+ * proof-covered, so the flip trades between sound broadcasts and
+ * never against safety.  Deferring an enabled round
  * therefore costs liveness only.  bkr94acs.h's bkr94acsTurnDuty /
  * bkr94acsTurn make this pacing an explicit caller decision; a
- * bare-layer caller that wants the eager schedule simply calls here on
+ * bare-layer caller firing at enabling simply calls here on
  * the n-t'th validation, which is sound and is the smallest sample.
  */
 unsigned int

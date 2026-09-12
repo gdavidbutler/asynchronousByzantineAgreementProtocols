@@ -27,8 +27,9 @@
  *      post-EXHAUSTED.
  *   E. Byzantine -- equivocating A-Caster (Bracha Lemma 2 inheritance).
  *   F. Step 2 pacing -- the same delayed-A-Cast schedule under two
- *      patience values: eager excludes the delayed honest process (F1),
- *      patience includes it (F2); a dead slot holds TOLERANCE forever
+ *      patience values: the fanout at enabling excludes the delayed
+ *      honest process (F1), patience includes it (F2); a dead slot
+ *      holds TOLERANCE forever
  *      and finite patience completes past it (F3).  Duty
  *      trichotomy monotone (MET absorbing, TOLERANCE never back to
  *      HELD) at every fDrive sweep.
@@ -79,9 +80,13 @@
  *
  * Caller discipline (bkr94acs.h): the arrival path only banks
  * evidence.  BKR94 step 2 (bkr94acsFanout) and the BA round turn
- * (bkr94acsTurn) fire from the caller's sweep, so every driver here
- * bridges at ZERO patience -- the eager schedule -- except
- * where a section makes one of the two the isolated variable.
+ * (bkr94acsTurn) fire from the caller's sweep, so no driver here
+ * pays a patience: the per-input drivers (deliverWire, runWithRetry,
+ * and main's inline drive loops) turn and fan out after every input
+ * -- a firing at enabling; feedBAAccept turns only where its caller
+ * asks and never fans out; the scenario drivers turn once per tick
+ * from the sweep.  A section that isolates the fanout or the turn
+ * paces that one seam instead.
  *
  * Header encoding convention (CRITICAL):
  *   n parameter is encoded; actual process count = n + 1
@@ -402,14 +407,14 @@ observeAndOutput(
   }
 }
 
-/* BA round turns at ZERO patience -- the bridge bkr94acs.h
- * prescribes for a caller that wants the eager schedule: after any
- * delivery or retry that may have banked evidence, turn every BA that
- * became turnable.  The while() is required (cascaded validation can
- * unlock several successive rounds), and the sweep runs over ALL BAs
- * of the instance because an A-Cast accept enters round 0 of a BA the
- * arrival did not name.  BA_SENDs go to the wire; BA_DECIDED /
- * COMPLETE / BA_EXHAUSTED are observation-only. */
+/* BA round turns at enabling -- the drain bkr94acs.h prescribes at
+ * bkr94acsTurn: after any delivery or retry that may have banked
+ * evidence, turn every BA that became turnable.  The while() is
+ * required (cascaded validation can unlock several successive
+ * rounds), and the sweep runs over ALL BAs of the instance because
+ * an A-Cast accept enters round 0 of a BA the arrival did not name.
+ * BA_SENDs go to the wire; BA_DECIDED / COMPLETE / BA_EXHAUSTED are
+ * observation-only. */
 static void
 drainTurns(
   struct bkr94acs *process
@@ -456,7 +461,7 @@ deliverWire(
   }
   observeAndOutput(obs, w->to, nAct, out, n, vBytes, 0, -1);
 
-  /* Sweep-side decisions at zero patience, turns first
+  /* Sweep-side decisions at enabling, turns first
    * (only a turn produces the decisions the fanout counts; a fanout
    * cannot make a round turnable -- it writes only entered[] and
    * round-0 initiator state, which no turn duty reads). */
@@ -735,7 +740,7 @@ runWithRetry(
       }
       observeAndOutput(&obs[w.to], w.to, nAct, out, n, vLen,
                      dropPercent, silentProcess);
-      /* Sweep-side decisions at zero patience, turns first (see
+      /* Sweep-side decisions at enabling, turns first (see
        * deliverWire).  The wires ride the same lossy output path; a
        * dropped INITIAL is BPR-retried like any other, so firing
        * here stays loss-safe. */
@@ -809,8 +814,8 @@ runWithRetry(
 /*  The inputs only BANK evidence -- per bkr94acs.h an accept can      */
 /*  produce nothing but echo/ready acts.  BA_EXHAUSTED (like DECIDED   */
 /*  and COMPLETE) emerges from bkr94acsTurn, so 'turned' selects the   */
-/*  caller's schedule: nonzero drains turns at zero patience after     */
-/*  every input (the eager schedule D1/D2 want, counting EXHAUSTED     */
+/*  caller's schedule: nonzero drains turns after every input, at      */
+/*  enabling (the schedule D1/D2 want, counting EXHAUSTED              */
 /*  from the turn's acts), zero banks without turning (Section G,      */
 /*  which must read a duty class over a round the caller has not yet   */
 /*  consumed).                                                        */
@@ -1019,7 +1024,8 @@ fDrive(
 /*                                                                    */
 /*  BARREN = a completed sweep that observed no progress.  The policy  */
 /*  fires after S consecutive barren sweeps; budget compares use >=,   */
-/*  so a zero budget would be eager.                                   */
+/*  so a zero budget fires on the first evaluation, before any sweep   */
+/*  completes.                                                         */
 /*                                                                    */
 /*  The counter is per process and is harness policy, never library    */
 /*  state.                                                            */
@@ -3992,18 +3998,18 @@ main(
   /* ---------------------------------------------------------------- */
   /*  Section F -- Step 2 pacing (bkr94acsFanoutDuty / bkr94acsFanout)*/
   /*                                                                  */
-  /*  The same delayed-A-Cast schedule under two patience values: the eager   */
-  /*  schedule (F1) excludes the delayed honest process and           */
-  /*  patience (F2) includes it -- the pair is the WAN                */
+  /*  The same delayed-A-Cast schedule under two patience values:     */
+  /*  the fanout at enabling (F1) excludes the delayed honest process */
+  /*  and patience (F2) includes it -- the pair is the WAN            */
   /*  exclusion seed and its remedy.  F3 is the liveness half: a      */
-  /*  dead slot holds TOLERANCE forever, patience bounds the tax,   */
-  /*  and firing after it completes the instance.  F4 adds the       */
-  /*  second sweep clock beside the first: the barren count an       */
-  /*  abandonment policy reads, and the sizing that orders the two.  */
+  /*  dead slot holds TOLERANCE forever, patience bounds the tax,     */
+  /*  and firing after it completes the instance.  F4 adds the        */
+  /*  second sweep clock beside the first: the barren count an        */
+  /*  abandonment policy reads, and the sizing that orders the two.   */
   /* ---------------------------------------------------------------- */
 
   /* ---------------------------------------------------------------- */
-  BANNER("F1: eager schedule excludes a delayed honest A-Cast");
+  BANNER("F1: fanout at enabling excludes a delayed honest A-Cast");
   /* ---------------------------------------------------------------- */
   {
     struct bracha87Retry cursors[4];

@@ -68,14 +68,14 @@
  *               records an accept before announcing its own suppresses
  *               the very (ready, v) the announcement rides on, and the
  *               other end waits forever.
- *   ABANDONED   the policy backstop (README.md "Abandonment").  The
- *               honest runs never take it.  The `-b split` runs do:
- *               a Byzantine initiator holds no Fig 1 state, so it
- *               never announces an accept, the gate can never
- *               close, and the correct processes retry a READY no
- *               correct process consumes -- README.md's
- *               Byzantine-silent scenario.  The sweep cap stands in
- *               for the policy here.
+ *   ABANDONED   the policy backstop (README.md "Abandonment").  No
+ *               run here takes it -- this demo implements no gate.
+ *               What the `-b split` runs reach is the sweep cap
+ *               below: a Byzantine initiator holds no Fig 1 state,
+ *               so it never announces an accept and the all-n gate
+ *               can never close.  That residue is what a
+ *               deployment's policy would end; the cap only stands
+ *               where the policy would be.
  *   sweep cap   a harness guard, not protocol: a bound on the
  *               rotation, carrying no evidence of anything.
  *
@@ -103,10 +103,11 @@
 
 /*
  * Harness guard on the sweep rotation.  A run whose instances can
- * quiesce needs a handful of sweeps; this only bounds one that
- * cannot (a `-b split` that leaves the echo count below threshold,
- * so no correct process ever accepts).  It is not a protocol
- * quantity.
+ * quiesce needs a handful of sweeps; this bounds one that cannot.
+ * EVERY `-b split` run is such a run, the splits where all correct
+ * processes accept included: what holds the gate open is the
+ * Byzantine initiator announcing no accept, not the echo count.
+ * It is not a protocol quantity.
  */
 #define SWEEP_CAP 1000
 

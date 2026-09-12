@@ -37,15 +37,16 @@
 # asynchronous model: unbounded (finite) message delay, no clocks
 # (BKR94ACS.txt, Model and tools).  Each rule's "upon" names the
 # evidence that enables an action; the model has no notion of the
-# moment the action is taken, and Lemma 2 Part B consumes only that
-# the 0-inputs are eventually entered once the n-t count holds.
+# moment the action is taken, and the Lemma 2 proof is read as asking
+# of the fanout only that the 0-inputs are eventually entered once
+# the count holds (BPR.md, The Sweep-Side Decisions).
 # Encoding Step 2 on the arrival path, firing at the instant the
 # local count crosses n-t, reads a moment into a rule that names
 # only evidence, and drops the unbounded-latency notion the model
 # rests on.  The Step 2 section below records the rule; its firing
 # is paced by the caller from the BPR sweep tick, the same tick
-# bracha87.[hc] drives BPR from.  Zero patience recovers the eager
-# schedule.
+# bracha87.[hc] drives BPR from.  Zero patience is not a firing at
+# enabling (BPR.md, The Sweep-Side Decisions).
 #
 # Inputs (the situation when an ACS-layer event is processed;
 # j is the process to which the event refers):
@@ -98,7 +99,7 @@ no,"BA_j outputs 1",
 # Enabling evidence, not a moment (header note above).  Fired at
 # the instant the count crosses, the fastest n-t processes close
 # SubSet against every honest process whose A-Cast is still in
-# flight.  Nothing in the model compels that eagerness; the
+# flight.  Nothing in the model compels firing at enabling; the
 # deployment's remedy for unbounded latency is the BPR sweep, so
 # the firing lives there, beside the retry/retire decisions that
 # already do.
@@ -115,8 +116,8 @@ no,"BA_j outputs 1",
 #               passes the verdict to bkr94acsFanout, which fires
 #               only on TOLERANCE with the verdict set -- the same
 #               shape bkr94acsTurn takes, so an unconditional call
-#               per sweep is safe; a zero patience (a literal 1) is
-#               the eager schedule.  While TOLERANCE
+#               per sweep is safe; a literal-1 verdict is zero
+#               patience, not a firing at enabling.  While TOLERANCE
 #               holds, the same sweep keeps retrying the delayed
 #               processes' A-Casts (BPR gate below: undecided ->
 #               retry), so patience is spent on exactly the
@@ -148,17 +149,18 @@ no,"BA_j outputs 1",
 # validate n - t (3i+1)-messages", and its 3i+2 and 3i+3
 # counterparts) and then compute over that set (the majority at
 # 3i+1, the decide/adopt thresholds at 3i+3).  The set keeps
-# growing past n-t and Bracha's proofs hold for ANY >= n-t sample
-# -- so the sample a turn consumes is purely a function of WHEN the
-# turn fires.  Turning a round inside the arrival path, on the
-# delivery that completes it, consumes the first n-t -- the same
-# eager-schedule reading Step 2 carries, with a different cost: not
+# growing past n-t and Bracha's proofs are read as holding for ANY
+# >= n-t sample (BPR.md, The Sweep-Side Decisions) -- so the sample
+# a turn consumes is purely a function of WHEN the turn fires.
+# Turning a round inside the arrival path, on the delivery that
+# completes it, is firing at enabling and consumes the first n-t --
+# the same reading Step 2 carries, with a different cost: not
 # exclusion (a late round-k message still validates and still
 # serves round-k+1 validation) but coin luck.  At 3i+3 the
 # decide/adopt counts are monotone thresholds (per-sender dedup:
 # counts only grow), so a fuller sample can only convert coin
 # phases into deterministic decides; at 3i+1 the majority is a
-# comparison a fuller sample can flip -- both outcomes
+# comparison a fuller sample can flip -- both outcomes read as
 # proof-covered, the flip trading between sound broadcasts, never
 # against safety.
 #

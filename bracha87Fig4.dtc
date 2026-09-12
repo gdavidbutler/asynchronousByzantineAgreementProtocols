@@ -13,9 +13,10 @@
 # Each step's "Wait until validate n - t (3i+1)-messages" -- and its
 # 3i+2 and 3i+3 counterparts -- is enabling evidence in the paper's
 # asynchronous model (unbounded finite delay, no clocks),
-# not a moment: the proofs hold for ANY >= n-t validated sample,
-# and the validated set keeps growing past n-t.  This layer
-# therefore exposes the round turn as a caller-shaped seam --
+# not a moment: the proofs are read as holding for ANY >= n-t
+# validated sample (BPR.md, The Sweep-Side Decisions), and the
+# validated set keeps growing past n-t.  This layer therefore
+# exposes the round turn as a caller-shaped seam --
 # bracha87Fig3RoundComplete (the enabling predicate),
 # bracha87Fig3GetValid (the current sample), bracha87Fig4Round (the
 # computation) -- and takes no position on WHEN a completed round

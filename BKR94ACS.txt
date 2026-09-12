@@ -128,23 +128,49 @@ O(log n) factor saving over naive independent execution; it does not
 change the protocol's external behavior.
 
 
-Lemma 2 (paper's statement, paraphrased)
-----------------------------------------
+Lemma 2 (paper's statement; the scan reads "(Figure 9)", "szze" for
+size, and "Q(i)" for Q(j) -- corrected here)
+--------------------------------------------------------------------
 
 Using the protocol Agreement (Figure 3), the players agree on a
 common subset of size at least 2t + 1 of players Pj for whom
-Q(j) = 1.  (Not verbatim: the scan reads "(Figure 9)", "szze" for
-size, and "Q(i)" for Q(j).  The proof below is stated over the
-honest players.)
+Q(j) = 1.  (The proof below is stated over the honest players.)
+
+
+Proof (the paper's three paragraphs, p. 188, verbatim; the scan
+reads "O value" for 0 value and "BAk" / "BA~" for BAh -- corrected
+here)
+--------------------------------------------------------------------
+
+  First we shall prove that at least 2t + 1 BAs terminate with
+  output 1: Suppose that some honest player Pi has entered a 0 value
+  into some BAj in Step 2. This means that at least 2t + 1 BAs
+  terminated with output 1, which is what we want to prove. So
+  assume that no honest player has entered a 0 value to any BA
+  protocol. As for each honest player Ph we have Q(h) = 1, the inputs
+  of all the honest players to BAh will be 1. By the correctness
+  property of the BA protocol, the output of BAh will be 1. As this
+  is true for every honest player, at least 2t + 1 BAs will terminate
+  with output 1.
+  Next we will show that all n BAs will terminate: As 2t + 1 BAs will
+  terminate with output 1, all the honest players will enter an input
+  to the remaining BAs, and thus they will terminate.
+  It is clear from the protocol that once an honest player
+  terminates, he has a SubSet of size at least 2t + 1, and from the
+  properties of the Byzantine Agreement protocol it follows that all
+  the honest players agree on the same set. It remains to be shown
+  that for each j in SubSet, Q(j) = 1. This is true because if BAj
+  terminated with output 1, it must be that at least one honest
+  player entered 1 as his input to BAj.
 
 
 Proof structure
 ---------------
 
-The paper's proof is one paragraph.  The [Part A]..[Part D] labels
-and the case (i)/(ii) split below are THIS FILE'S structuring of it,
-not the paper's numbering -- the repo cites them, so they are kept
-stable.  The proof consumes "the correctness property of the BA
+The paper's proof is the three paragraphs above.  The [Part A]..[Part D]
+labels and the case (i)/(ii) split below are THIS FILE'S structuring
+of it, not the paper's numbering -- the repo cites them, so they are
+kept stable.  The proof consumes "the correctness property of the BA
 protocol" (the paper's term), BA termination, the agreement it means
 by "the properties of the Byzantine Agreement protocol" at Part C,
 and the two assumptions about Q.  Nothing else.

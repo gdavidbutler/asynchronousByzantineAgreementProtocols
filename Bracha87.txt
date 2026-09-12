@@ -243,8 +243,83 @@ Key properties from the paper:
            constant that does not depend on n (although it is exponential
            in c).  Proof: "The proof can be found in (Ben-Or, 1983)."
 
-  Termination: probability of not terminating is
-  lim_{r->inf} (1 - p)^r = 0, where p > 2^{-(n-1)}.
+  Termination: proved in the Theorem 2 termination paragraph quoted
+  below.
+
+Section 5 proofs -- Lemma 9, Lemma 10, and the agreement and
+termination paragraphs of Theorem 2 (pp. 138-140, verbatim, checked
+against the page images.  The scan confuses u and v throughout, and
+reads "Zf" for If, "decide D" for decide v, "(n - r)/2" for
+(n - t)/2, "3r -t- 3" for 3r + 3, "Considei" for Consider, "u," for
+v_q, "(4 u)" for (d, v), the probability figure three ways ("2 ~ In
+~ I)", "p>2-'"-"", "22("-'I") for rho >= 2^{-(n-t)}, and "lim,, m
+(1 -p)'=O" for the limit -- all corrected here.
+Small-caps headings are set in plain case, line-end hyphenation is
+closed, and the end-of-proof marks are dropped.  "greater then" and
+the repeated "message" in the Lemma 10 statement are the paper's):
+
+  Lemma 9. If at the beginning of round 3r + 1 all correct processes
+  have the same value v, then they all decide v at round 3r + 3.
+  Proof. All n - t correct processes have v as their value at the
+  beginning of round 3r + 1. Therefore, every correct process will
+  validate at least n - 2t messages with value v at round 3r + 1.
+  Since n - 2t > (n - t)/2 for t < n/3, each correct process retains
+  v as its value at round 3r + 1. By Lemma 8 all correct processes
+  will proceed to rounds 3r + 2 and 3r + 3. At round 3r + 2, in order
+  to validate a message with value u != v, a correct process must
+  also validate at least (n - t)/2 messages with value u from round
+  3r + 1. Since (n - t)/2 > t, this is clearly impossible. Therefore,
+  the only possible value validated in round 3r + 2 is v, and all
+  correct processes change their value to (d, v). At round 3r + 3,
+  all correct processes validate at least 2t + 1 messages with value
+  (d, v), and they decide v.
+
+  Lemma 10. Let p and q be correct processes. If at phase r, p
+  validates a message with value (d, v), and q validates a message
+  with value (d, u) message, then u = v.
+  Proof. Suppose not; then some correct processes p and q have
+  validated messages in round 3r + 3 with values (d, v) and (d, u),
+  respectively. If p validates a message with value (d, v) it must
+  also validate more than n/2 messages with value v that were
+  broadcast at round 3r + 2. Similarly, q must have validated more
+  than n/2 messages with value u that were broadcast at round 3r + 2.
+  Thus, for some process s, p validated an (s, 3r + 2, v) message
+  while q validated an (s, 3r + 2, u) message. By Lemma 5, u = v.
+
+
+Theorem 2's proof, the agreement and termination paragraphs; its
+statement, the proof's opener and the validity paragraph are omitted:
+
+  Agreement. Suppose, without loss of generality, that a correct
+  process p decides 1 at round 3r + 3. Process p must have validated
+  at least 2t + 1 messages with value (d, 1). By Lemma 6, every other
+  correct process validates at least t + 1 such messages. Thus at
+  step (ii) of round 3r + 3, every correct process q sets v_q = 1.
+  At the beginning of phase r + 1 every correct process has value 1.
+  By Lemma 9, at the end of phase r + 1, every correct process
+  decides 1.
+  Termination. Consider phase r of the protocol. Some processes are
+  forced to set their value at round 3r + 3 at step (ii), while the
+  remainder choose their values at step (iii) by a coin toss.
+  Consider p, the first correct process that has completed the
+  validation in round 3r + 3. There are two cases:
+  1. Process p has validated a message with value (d, v). With
+  probability rho >= 2^{-(n-t)}, all the correct processes that toss a
+  coin at phase r will toss v. By Lemma 10, the rest of the correct
+  processes are forced (case (ii) of round 3r + 3 in Fig. 4) to set
+  their value to v.
+  2. Process p has not validated a message with value (d, v). If some
+  other correct process q validates more than t messages with value
+  (d, v), then one of these messages would have been among the n - t
+  messages that p validated, and hence a contradiction. Therefore, no
+  correct process validates more than t messages with value (d, v)
+  for any value v, no process has its value forced, and all correct
+  processes toss coins. Again, with probability rho >= 2^{-(n-t)},
+  all correct processes will set their values to 1.
+  In either case, with probability greater then 2^{-(n-t)}, all the
+  processes have the same value at the beginning of phase r + 1, and
+  by Lemma 9 they all decide in phase r + 1. The probability of not
+  terminating is lim_{r->inf} (1 - rho)^r = 0.
 
 Why the paper sets Rabin's model aside (Section 1, p. 132):
 

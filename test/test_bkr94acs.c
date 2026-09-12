@@ -134,10 +134,11 @@ qShuffle(
 }
 
 /*
- * BKR94 Step 2 at zero patience: fire the enter-0 fanout
- * the moment it is enabled -- the eager schedule bkr94acsBaInput
- * hardwired before the firing moved to the BPR sweep -- and
- * broadcast its BA_SEND acts from 'self' to all n processes.
+ * BKR94 Step 2 at enabling: after every input, fire the enter-0
+ * fanout the moment it is enabled -- the fanout at enabling that
+ * bkr94acsBaInput hardwired before the firing moved to the BPR
+ * sweep -- and broadcast its BA_SEND acts from 'self' to all n
+ * processes.
  */
 static unsigned int
 qFanout(
@@ -201,12 +202,12 @@ vacProbe(
 }
 
 /*
- * Bracha Fig4's round turn at zero patience: turn every
- * turnable round of every BA of one instance -- the eager schedule
- * bkr94acsBaInput hardwired before the turn moved to the BPR sweep --
- * and broadcast the next-round INITIALs from 'self' to all n
- * processes.  BA_DECIDED / COMPLETE / BA_EXHAUSTED carry no wire
- * traffic, so only BA_SEND is pushed.
+ * Bracha Fig4's round turn at enabling: after every input, turn
+ * every turnable round of every BA of one instance -- the turn at
+ * enabling that bkr94acsBaInput hardwired before the turn moved to
+ * the BPR sweep -- and broadcast the next-round INITIALs from 'self'
+ * to all n processes.  BA_DECIDED / COMPLETE / BA_EXHAUSTED carry no
+ * wire traffic, so only BA_SEND is pushed.
  */
 static void
 qTurns(

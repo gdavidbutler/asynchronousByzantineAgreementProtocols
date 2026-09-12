@@ -104,8 +104,8 @@
  * in COMPLETED BPR SWEEPS -- full passes of the Retry cursor, the
  * unit bkr94acs.h ratifies):
  *   ./example_bkr94acs -d 3 4 1 joe sam sally tim
- *     the eager schedule (patience 0) excludes the delayed honest
- *     process: SubSet = 3 of 4, its value accepted everywhere but
+ *     zero patience excludes the delayed honest process:
+ *     SubSet = 3 of 4, its value accepted everywhere but
  *     excluded -- participation loss, not value loss
  *   ./example_bkr94acs -d 3 -g 1 4 1 joe sam sally tim
  *     the identical schedule under ONE sweep of patience includes it:
@@ -115,7 +115,7 @@
  *     released INITIAL and its cascade accept everywhere inside the
  *     pass and step 1 enters the laggard's BA before the fanout's
  *     patience elapses.
- * What the pair deliberately shows the eager run giving up is the
+ * What the pair deliberately shows the zero-patience run giving up is the
  * whole demonstration; a run without -d never even enables step 2
  * (every A-Cast enters 1 before three BAs decide).
  */
@@ -130,7 +130,24 @@
 /*--------------------------------------------------------------------------*/
 
 #define MAX_PROCESSES  16
-#define MAX_PHASES 10
+/*
+ * The phase budget (README.md "The phase budget").  NOTHING HERE
+ * SIZES IT.  Every arm decides in phase 0 and demoCoin is never
+ * called: a lossless run among honest processes does not reach Fig 4
+ * step 3 case (iii), so the coin's convergence -- and with it the
+ * budget a real coin would need -- is not something this demo
+ * measures.  The highest round these arms reach, 5, is post-decide
+ * continuation, and it is the same at every budget above one.
+ *
+ * So this number is slack for paths the demo does not exercise, kept
+ * small rather than round because slack is paid at Init: bkr94acsSz
+ * is O(N^2 * maxPhases * 3), allocated whether or not a phase is ever
+ * entered.  A deployment sizes this against the coin it supplies, and
+ * demoCoin is precisely the coin no budget is right for -- agreed, so
+ * it ends a phase, but predictable, so an adversary scheduling on it
+ * can deny that ending.  There is no such adversary here.
+ */
+#define MAX_PHASES 3
 #define MAX_VLEN   256  /* max A-Cast bytes (including \0); bracha87 vLen encoding 255 */
 
 /*
@@ -435,7 +452,7 @@ main(
   unsigned int origSeed;
   unsigned int vLen;
   int dproc;                /* -d: the delayed (WAN laggard) process, -1 none */
-  unsigned int patience;    /* -g: patience in sweeps, 0 = eager */
+  unsigned int patience;    /* -g: patience in sweeps, 0 = no deliberate wait */
   unsigned int patienceGiven; /* -g appeared on the command line */
   unsigned int byzMode;     /* -b: BYZ_NONE / SILENT / EQUIV / POKE */
   unsigned int byzSplit;    /* -b equiv<S>: recipients [0..S) get the value */
@@ -448,7 +465,7 @@ main(
   /* Sweep-side pacing state (the header's caller discipline: count
    * COMPLETED SWEEPS while a decision's duty holds TOLERANCE, fire
    * when the count reaches the budget, evaluating the verdict on
-   * every tick so a zero budget stays eager; reset whenever duty
+   * every tick so a zero budget spends no wait; reset whenever duty
    * leaves TOLERANCE.  THE UNIT IS THE FULL SWEEP -- one complete
    * pass of the Retry cursor over every sent Fig 1 instance, read
    * off the cursor's own `sweeps` wrap count, per bkr94acs.h.  One
@@ -718,11 +735,11 @@ main(
     qShuffle(&shuffleSeed);
 
   /*----------------------------------------------------------------------*/
-  /*  Drive to completion: drain ingress, tick, repeat -- the            */
+  /*  Drive to completion: drain ingress, tick, repeat -- the             */
   /*  bkr94acs.h application loop.  A tick is one Retry call per          */
   /*  process plus the two sweep-side protocol decisions, each paced      */
-  /*  by -g's patience in COMPLETED SWEEPS (0 = fire whenever             */
-  /*  enabled, the eager schedule).                                       */
+  /*  by -g's patience in COMPLETED SWEEPS (0 = no deliberate wait;       */
+  /*  BPR.md, The Sweep-Side Decisions).                                  */
   /*----------------------------------------------------------------------*/
 
   released = (dproc < 0) ? 1 : 0;
@@ -1020,14 +1037,18 @@ main(
        * BA round turns, paced per (ACS state, BA): count COMPLETED
        * SWEEPS while bkr94acsTurnDuty holds TOLERANCE, pass the
        * elapsed signal once the count reaches -g -- evaluated on
-       * every tick, so zero patience recovers the eager schedule
-       * exactly (bkr94acs.h: a clock that only advances at a sweep
-       * boundary fires one boundary late even at zero).  MET fires
-       * free -- the full sample is in hand and waiting buys
-       * nothing.  Patience is
-       * scoped to UNDECIDED BAs: once bkr94acsBaDecision reports a
-       * decision, post-decide continuation rounds carry the pinned
-       * value and their sample no longer chooses anything, so
+       * every tick, so zero patience spends no deliberate wait
+       * (bkr94acs.h: a clock that only advances at a sweep boundary
+       * fires one boundary late even at zero).  Zero patience is
+       * still not a firing at enabling (BPR.md, The Sweep-Side
+       * Decisions): turns fire from the sweep here, so a
+       * zero-patience round consumes whatever had validated by the
+       * tick, a superset of what a turn taken as evidence is banked
+       * consumes (bkr94acs.h, at bkr94acsTurn).  MET fires free --
+       * the full sample is in hand and waiting buys nothing.
+       * Patience is scoped to UNDECIDED BAs: once bkr94acsBaDecision
+       * reports a decision, post-decide continuation rounds carry the
+       * pinned value and their sample no longer chooses anything, so
        * holding them to the patience would only convoy the cohort
        * (each process's round-k INITIAL waits on its own turn of
        * k-1, and one process's stall holds everyone at n-t).  One
@@ -1341,8 +1362,8 @@ main(
   }
 
   /*----------------------------------------------------------------------*/
-  /*  The -d demonstration's verdict: included under patience, excluded      */
-  /*  under the eager schedule -- and in the eager case the value still   */
+  /*  The -d demonstration's verdict: included under patience, excluded   */
+  /*  at zero patience -- and in the zero-patience case the value still   */
   /*  arrived everywhere, pinning that exclusion is participation loss,   */
   /*  never value loss.                                                   */
   /*----------------------------------------------------------------------*/
@@ -1366,7 +1387,7 @@ main(
            dproc, patience, tickCount,
            inSubset
              ? "INCLUDED -- patience let step 1 win"
-             : "EXCLUDED -- the eager schedule shut the door");
+             : "EXCLUDED -- zero patience shut the door");
     printf("step 2 fired %u enter-0 act(s); the delayed value was %s"
            "accepted at every process%s\n",
            fanoutFires,
@@ -1400,8 +1421,9 @@ usage:
     "               enables (the WAN laggard; needs t >= 1)\n"
     "  -g patience  patience for the sweep-side decisions,\n"
     "               in completed BPR sweeps -- full Retry-cursor\n"
-    "               passes (0 = eager; with -d, -g 1 includes the\n"
-    "               laggard in SubSet)\n");
+    "               passes (0 = no deliberate wait, not a firing at\n"
+    "               enabling; with -d, -g 1 includes the laggard in\n"
+    "               SubSet)\n");
   fprintf(stderr,
     "  -b mode      process %d is Byzantine (needs t >= 1; does not\n"
     "               compose with -d / -g).  The tick cap is then the\n"

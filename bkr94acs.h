@@ -64,9 +64,9 @@
  * model (unbounded finite delay, no clocks), not a moment: the
  * count makes the fanout SOUND; the caller decides WHEN, pacing it
  * from the BPR sweep (bkr94acsFanoutDuty / bkr94acsFanout).
- * Firing at the instant the count holds -- zero patience
- * -- closes SubSet against every honest process whose A-Cast is
- * still in flight.
+ * Firing at enabling -- the instant the count holds -- closes
+ * SubSet against every honest process whose A-Cast is still in
+ * flight.
  *
  * The same reading governs the BA round turn.  Each Fig4 step's wait
  * on n-t validations of its own round is enabling evidence too, and the
@@ -680,10 +680,25 @@ bkr94acsRetryStep(
  *
  * Caller discipline: per decision, count completed sweeps while
  * duty is TOLERANCE; fire when the count exceeds the deployment's
- * patience.  Zero patience recovers the eager schedule -- provided the
- * caller evaluates the verdict on EVERY attempt, since a clock that
- * only advances at a sweep boundary fires one boundary late even at
- * zero.
+ * patience.  Zero patience is not a firing at enabling (BPR.md, The
+ * Sweep-Side Decisions): it spends no deliberate wait -- provided
+ * the caller evaluates the verdict on EVERY attempt, since a clock
+ * that only advances at a sweep boundary fires one boundary late
+ * even at zero -- and it does not by itself name a sample: WHERE the
+ * call is made does.  A turn taken as evidence is banked consumes
+ * the n-t'th validation, the smallest legal sample (bracha87.h, at
+ * bracha87Fig4Round); one taken from the sweep consumes whatever had
+ * validated by then, a superset.  Both are read as proof-covered,
+ * and the difference is coin luck, never safety -- BPR.md (The
+ * Sweep-Side Decisions) argues why.
+ *
+ * WHAT THE VERDICT CANNOT COST.  Deferring an enabled firing costs
+ * liveness only, never safety, at both seams, so patienceElapsed is
+ * a participation and liveness decision and a caller cannot break
+ * the protocol with it in either direction.  The license is
+ * one-sided and covers exactly these two seams -- step 1's enter-1
+ * fires on arrival, and no pacing claim attaches to it.  The
+ * grounds, one per seam, are BPR.md's (The Sweep-Side Decisions).
  *
  * THE UNIT IS THE FULL SWEEP -- one complete pass of the Retry
  * cursor over every sent Fig 1 instance, read off the cursor's own
@@ -812,19 +827,19 @@ bkr94acsFanout(
  * ("Wait until validate n - t (3i+1)-messages", and its 3i+2 and 3i+3
  * counterparts) and then compute over that set -- the majority at
  * (3i+1), the decide/adopt thresholds at (3i+3).  The set keeps
- * growing past n-t (cascades, late arrivals) and the proofs hold
- * for ANY >= n-t sample -- so the sample a turn consumes is purely
- * a function of WHEN the turn fires.  The old arrival-path turn
- * took the first n-t; a paced turn harvests more validated
- * messages.  At (3i+3) the gain is one-directional: the decide/
+ * growing past n-t (cascades, late arrivals) and the proofs are
+ * read as holding for ANY >= n-t sample (BPR.md, The Sweep-Side
+ * Decisions) -- so the sample a turn consumes is purely a function
+ * of WHEN the turn fires.  The old arrival-path turn took the first
+ * n-t; a paced turn harvests more validated messages.  At (3i+3)
+ * the gain is one-directional: the decide/
  * adopt counts are monotone thresholds (per-sender dedup: counts
  * only grow), so a fuller sample can only convert coin phases into
  * deterministic decides, never the reverse.  At (3i+1) the
  * majority is a comparison, not a threshold -- a fuller sample can
- * flip it -- but every >= n-t sample is proof-covered either way
- * (when all correct processes enter a phase agreed, correct-value
- * copies outnumber Byzantine ones in every such sample), so the
- * flip trades between sound broadcasts, never against safety.
+ * flip it -- but every >= n-t sample is read as proof-covered
+ * either way (BPR.md, The Sweep-Side Decisions), so the flip trades
+ * between sound broadcasts, never against safety.
  *
  * bkr94acsTurnDuty(a, process):
  *   HELD       the BA's next round is not complete (below n-t
@@ -843,20 +858,21 @@ bkr94acsFanout(
  * and BKR94ACS_ACT_COMPLETE -- at most 3; these acts emerge ONLY
  * here, never from bkr94acsBaInput.  Post-decide continuation:
  * turns continue past DECIDE until the round space is exhausted.
- * A zero-patience caller drains: while (bkr94acsTurn(a, p, 1, out))
- * per process after banking new evidence.  Cascaded validation can
- * make several successive rounds turnable at once; each turn is
- * its own call, and nothing here re-arms the caller's clock when
- * one fires, so a paced caller spends ONE patience crossing a whole
- * cascade rather than one per round.  Re-arming per round is the
- * caller's to add and is not advised: it prices a catch-up the
- * cohort has already earned.
+ * A caller firing at enabling drains: while (bkr94acsTurn(a, p, 1,
+ * out)) per process after each Input that banks evidence.  Cascaded
+ * validation can make several successive rounds turnable at once;
+ * each turn is its own call, and nothing here re-arms the caller's
+ * clock when one fires, so a paced caller spends ONE patience
+ * crossing a whole cascade rather than one per round.  Re-arming per
+ * round is the caller's to add and is not advised: it prices a
+ * catch-up the cohort has already earned.
  * Scope patience to UNDECIDED BAs (bkr94acsBaDecision == 0xFF):
  * post-decide continuation rounds carry the pinned value and their
  * sample no longer chooses anything, while their turn feeds the
  * NEXT process's round -- holding them to the patience convoys the
  * cohort, since one process's stall holds everyone else at n-t.
- * The bundled example's sweep loop is the reference discipline.
+ * The bundled example's sweep loop is the reference discipline for
+ * a paced caller.
  */
 unsigned char
 bkr94acsTurnDuty(

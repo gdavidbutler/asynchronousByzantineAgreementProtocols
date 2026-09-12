@@ -984,7 +984,8 @@ bkr94acsRetryStep(
 /*  a moment; both decisions consume evidence that is still growing when    */
 /*  it first suffices, so the caller paces each from its sweep tick,        */
 /*  counting sweeps against its patience while TOLERANCE holds.             */
-/*  Zero patience (fire whenever enabled) is the eager schedule.            */
+/*  Zero patience is not a firing at enabling (BPR.md, The Sweep-Side       */
+/*  Decisions).                                                             */
 /*--------------------------------------------------------------------------*/
 
 /*
