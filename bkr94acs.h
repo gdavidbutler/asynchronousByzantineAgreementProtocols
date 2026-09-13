@@ -679,26 +679,35 @@ bkr94acsRetryStep(
  *                            for; firing is free.
  *
  * Caller discipline: per decision, count completed sweeps while
- * duty is TOLERANCE; fire when the count exceeds the deployment's
- * patience.  Zero patience is not a firing at enabling (BPR.md, The
+ * duty is TOLERANCE; call the firing when the count reaches the
+ * deployment's patience (count >= patience; at zero, the first
+ * attempt at TOLERANCE).  The library holds only the safety half of
+ * the decision -- a firing called at HELD returns 0 having changed
+ * nothing -- and the liveness half, WHETHER to call while the duty
+ * is TOLERANCE, is the caller's alone: it reads the duty and either
+ * calls or does not, and nothing is passed in for the library to
+ * re-derive.  Zero patience is not a firing at enabling (BPR.md, The
  * Sweep-Side Decisions): it spends no deliberate wait -- provided
- * the caller evaluates the verdict on EVERY attempt, since a clock
- * that only advances at a sweep boundary fires one boundary late
- * even at zero -- and it does not by itself name a sample: WHERE the
- * call is made does.  A turn taken as evidence is banked consumes
- * the n-t'th validation, the smallest legal sample (bracha87.h, at
- * bracha87Fig4Round); one taken from the sweep consumes whatever had
- * validated by then, a superset.  Both are read as proof-covered,
+ * the caller tests its count against the patience on EVERY attempt,
+ * since a clock that only advances at a sweep boundary fires one
+ * boundary late even at zero -- and it does not by itself name a
+ * sample: WHERE the call is made does.  A turn taken at the
+ * delivery that completes the round consumes the sample that
+ * delivery leaves: n-t, the smallest legal sample (bracha87.h, at
+ * bracha87Fig4Round), or more when a cascade banked beside it; one
+ * taken from the sweep consumes whatever had validated by then, a
+ * superset.  Both are read as proof-covered,
  * and the difference is coin luck, never safety -- BPR.md (The
  * Sweep-Side Decisions) argues why.
  *
- * WHAT THE VERDICT CANNOT COST.  Deferring an enabled firing costs
- * liveness only, never safety, at both seams, so patienceElapsed is
- * a participation and liveness decision and a caller cannot break
- * the protocol with it in either direction.  The license is
- * one-sided and covers exactly these two seams -- step 1's enter-1
- * fires on arrival, and no pacing claim attaches to it.  The
- * grounds, one per seam, are BPR.md's (The Sweep-Side Decisions).
+ * WHAT THE DEFERRAL CANNOT COST.  Deferring an enabled firing costs
+ * liveness only, never safety, at both seams, so whether and when
+ * the caller calls is a participation and liveness decision and a
+ * caller cannot break the protocol with it in either direction.
+ * The license is one-sided and covers exactly these two seams --
+ * step 1's enter-1 fires on arrival, and no pacing claim attaches
+ * to it.  The grounds, one per seam, are BPR.md's (The Sweep-Side
+ * Decisions).
  *
  * THE UNIT IS THE FULL SWEEP -- one complete pass of the Retry
  * cursor over every sent Fig 1 instance, read off the cursor's own
@@ -786,27 +795,33 @@ bkr94acsRetryStep(
  *
  * bkr94acsFanoutDuty (derived by scanning baDecision[] and the
  * entered set; nothing stored):
- *   HELD       BA-output-1 count < n-t: entering 0 is unsound
- *              below the floor (Lemma 2 Part A's floor is 2t+1,
- *              this library's n-t -- Implementation Note 15).
+ *   HELD       unentered BAs remain and BA-output-1 count < n-t:
+ *              entering 0 is unsound below the floor (Lemma 2 Part
+ *              A's floor is 2t+1, this library's n-t --
+ *              Implementation Note 15).
  *   TOLERANCE  count holds and unentered BAs remain: each delayed
  *              A-Cast that completes inside the patience window
  *              enters 1 by Step 1 and leaves the unentered set.
- *   MET        nothing unentered: moot.
+ *   MET        nothing unentered, tested before the count: moot.
+ *              A run whose every A-Cast enters 1 by Step 1 before
+ *              n-t BAs decide goes from HELD to MET without ever
+ *              reaching TOLERANCE.
  *
- * bkr94acsFanout(a, patienceElapsed, out) enters 0 into every BA
- * still unentered at the call, outputting one BKR94ACS_ACT_BA_SEND
- * per entry.  It fires iff duty is TOLERANCE and patienceElapsed is
- * nonzero, and returns 0 having changed nothing otherwise -- so an
- * unconditional call per sweep is safe, and passing a literal 1 is
- * the simplest zero-patience caller.  Firing empties the unentered
- * set, so once-per-instance is structural.
+ * bkr94acsFanout(a, out) enters 0 into every BA still unentered at
+ * the call, outputting one BKR94ACS_ACT_BA_SEND per entry.  It fires
+ * iff duty is TOLERANCE, and returns 0 having changed nothing
+ * otherwise -- so an unconditional call is safe, and one on every
+ * tick is the simplest zero-patience caller.  A paced caller reads
+ * bkr94acsFanoutDuty and calls only when its patience has elapsed.
+ * Firing empties the unentered set, so once-per-instance is
+ * structural.
  *
- * Same shape as bkr94acsTurn, deliberately: both seams take the
- * caller's verdict and gate on it internally.  They differ only in
- * what MET means -- Turn's MET is a full sample and fires free, this
- * one's is an empty unentered set and is moot, so MET here needs no
- * elapsed signal because there is nothing left to enter.
+ * Same shape as bkr94acsTurn, deliberately: both seams hold the
+ * safety gate and leave the pacing to the caller.  They differ only
+ * in what MET means -- Turn's MET is a full sample and fires free,
+ * this one's is an empty unentered set and is moot, so an
+ * unconditional call at MET returns 0 because there is nothing left
+ * to enter.
  */
 unsigned char
 bkr94acsFanoutDuty(
@@ -816,7 +831,6 @@ bkr94acsFanoutDuty(
 unsigned int
 bkr94acsFanout(
   struct bkr94acs *
- ,unsigned char            /* patienceElapsed: caller's patience verdict */
  ,struct bkr94acsAct *     /* out: room for n + 1 entries (BKR94ACS_MAX_ACTS covers it) */
 );
 
@@ -830,8 +844,9 @@ bkr94acsFanout(
  * growing past n-t (cascades, late arrivals) and the proofs are
  * read as holding for ANY >= n-t sample (BPR.md, The Sweep-Side
  * Decisions) -- so the sample a turn consumes is purely a function
- * of WHEN the turn fires.  The old arrival-path turn took the first
- * n-t; a paced turn harvests more validated messages.  At (3i+3)
+ * of WHEN the turn fires.  A turn fired at enabling takes what the
+ * completing delivery leaves, n-t absent a cascade; a paced turn
+ * harvests more validated messages.  At (3i+3)
  * the gain is one-directional: the decide/
  * adopt counts are monotone thresholds (per-sender dedup: counts
  * only grow), so a fuller sample can only convert coin phases into
@@ -849,16 +864,21 @@ bkr94acsFanout(
  *   MET        complete with all n validated: the full sample is
  *              in hand, waiting buys nothing.
  *
- * bkr94acsTurn(a, process, patienceElapsed, out) performs at most
- * ONE round turn: fires iff duty is MET, or duty is TOLERANCE and
- * patienceElapsed is nonzero (MET needs no elapsed signal --
- * firing is free).  Returns acts written, 0 when it did not fire.
+ * bkr94acsTurn(a, process, out) performs at most ONE round turn:
+ * fires iff duty is not HELD.  Returns acts written: 0 when it did
+ * not fire, and 0 from the one fired turn that writes no act -- the
+ * last round of a decided BA (bracha87.h, at bracha87Fig4Round),
+ * which also exhausts the round space, so the duty reads HELD from
+ * then on and a drain on > 0 leaves nothing owed.  A paced caller
+ * reads bkr94acsTurnDuty and calls at MET (firing is free) or when
+ * its patience has elapsed at TOLERANCE.
  * Acts: BKR94ACS_ACT_BA_SEND (the next round's INITIAL, self as
  * initiator), BKR94ACS_ACT_BA_DECIDED or BKR94ACS_ACT_BA_EXHAUSTED,
  * and BKR94ACS_ACT_COMPLETE -- at most 3; these acts emerge ONLY
- * here, never from bkr94acsBaInput.  Post-decide continuation:
+ * here, never from bkr94acsBaInput, whose BA_SENDs are ECHO and
+ * READY only.  Post-decide continuation:
  * turns continue past DECIDE until the round space is exhausted.
- * A caller firing at enabling drains: while (bkr94acsTurn(a, p, 1,
+ * A caller firing at enabling drains: while (bkr94acsTurn(a, p,
  * out)) per process after each Input that banks evidence.  Cascaded
  * validation can make several successive rounds turnable at once;
  * each turn is its own call, and nothing here re-arms the caller's
@@ -884,7 +904,6 @@ unsigned int
 bkr94acsTurn(
   struct bkr94acs *
  ,unsigned char            /* process: which process's BA */
- ,unsigned char            /* patienceElapsed: caller's patience verdict */
  ,struct bkr94acsAct *     /* out: room for 3 entries (BKR94ACS_MAX_ACTS covers it) */
 );
 

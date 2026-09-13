@@ -316,7 +316,7 @@ main(
       }
       if (p == N_ACT - 1 && r == 2)
         check("ACS: not complete at 255 decided", !a->complete);
-      while ((nact = bkr94acsTurn(a, p, 0, tout)) > 0)
+      while ((nact = bkr94acsTurn(a, p, tout)) > 0)
         for (j = 0; j < nact; ++j) {
           if (tout[j].act == BKR94ACS_ACT_BA_DECIDED && tout[j].baValue == 1)
             ++decided;
@@ -334,7 +334,7 @@ main(
   check("ACS: subset of 256", bkr94acsSubset(a, subset) == N_ACT);
   check("ACS: fanout TOLERANCE on 256 BA outputs of 1",
         bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_TOLERANCE);
-  check("ACS: fanout enters all 256", bkr94acsFanout(a, 1, out) == N_ACT);
+  check("ACS: fanout enters all 256", bkr94acsFanout(a, out) == N_ACT);
   check("ACS: fanout MET with none unentered",
         bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_MET);
   printf("  ACS: rounds TOLERANCE at 255 %u; turns MET %u TOLERANCE %u"

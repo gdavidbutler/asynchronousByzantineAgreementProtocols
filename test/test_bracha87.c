@@ -1527,8 +1527,8 @@ testFig3Reeval(
  * full-set composition gives N result B.  The stored round-k B
  * message must be re-evaluated and validated.
  *
- * Catches the pre-fix bug where the forward cascade fired only on the
- * first crossing of n-t.
+ * Catches a forward cascade that fires only on the first crossing
+ * of n-t.
  */
 static void
 testFig3RecascadeOnGrowth(

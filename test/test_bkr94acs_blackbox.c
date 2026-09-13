@@ -34,8 +34,8 @@
  *      trichotomy monotone (MET absorbing, TOLERANCE never back to
  *      HELD) at every fDrive sweep.
  *   G. Round-turn pacing -- deliveries bank and decide nothing (G1),
- *      TOLERANCE needs the caller's elapsed signal (G2), MET fires
- *      without it (G3), a drained instance is turn-quiescent (G4).
+ *      TOLERANCE waits until the caller calls, then fires (G2), MET
+ *      fires free (G3), a drained instance is turn-quiescent (G4).
  *   H. Quiescence is REACHABLE at the ACS surface (H1), and the Resend
  *      ingress entries' contracts (H2).
  *   I. Partition heal -- READY re-sends alone carry a returner that
@@ -429,7 +429,7 @@ drainTurns(
   unsigned int b, n;
 
   for (b = 0; b < nAct; ++b)
-    while ((n = bkr94acsTurn(process, (unsigned char)b, 1, out)) > 0) {
+    while ((n = bkr94acsTurn(process, (unsigned char)b, out)) > 0) {
       CHECK(n <= 3, "turn outputs at most 3 acts");
       observeAndOutput(obs, self, nAct, out, n, vBytes, dropPercent,
                      silentProcess);
@@ -466,7 +466,7 @@ deliverWire(
    * cannot make a round turnable -- it writes only entered[] and
    * round-0 initiator state, which no turn duty reads). */
   drainTurns(process, obs, w->to, nAct, vBytes, out, 0, -1);
-  n = bkr94acsFanout(process, 1, out);
+  n = bkr94acsFanout(process, out);
   CHECK(n <= outCap, "fanout act count within MAX_ACTS bound");
   observeAndOutput(obs, w->to, nAct, out, n, vBytes, 0, -1);
 }
@@ -746,7 +746,7 @@ runWithRetry(
        * here stays loss-safe. */
       drainTurns(processes[w.to], &obs[w.to], w.to, nAct, vLen, out,
                  dropPercent, silentProcess);
-      n = bkr94acsFanout(processes[w.to], 1, out);
+      n = bkr94acsFanout(processes[w.to], out);
       observeAndOutput(&obs[w.to], w.to, nAct, out, n, vLen,
                      dropPercent, silentProcess);
     }
@@ -766,7 +766,7 @@ runWithRetry(
                      dropPercent, silentProcess);
       drainTurns(processes[i], &obs[i], (unsigned char)i, nAct, vLen, out,
                  dropPercent, silentProcess);
-      n = bkr94acsFanout(processes[i], 1, out);
+      n = bkr94acsFanout(processes[i], out);
       observeAndOutput(&obs[i], (unsigned char)i, nAct, out, n, vLen,
                      dropPercent, silentProcess);
     }
@@ -849,7 +849,7 @@ feedBAAccept(
   FeedLastActs = n;
   total += n;
   if (turned)
-    while ((n = bkr94acsTurn(a, process, 1, out)) > 0) {
+    while ((n = bkr94acsTurn(a, process, out)) > 0) {
       for (k = 0; k < n; ++k)
         if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED
          && out[k].process == process)
@@ -867,7 +867,7 @@ feedBAAccept(
     FeedLastActs = n;
     total += n;
     if (turned)
-      while ((n = bkr94acsTurn(a, process, 1, out)) > 0) {
+      while ((n = bkr94acsTurn(a, process, out)) > 0) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED
            && out[k].process == process)
@@ -971,7 +971,7 @@ fDrive(
         if (sweeps[p] > *toleranceSweepsMax)
           *toleranceSweepsMax = sweeps[p];
         if (patience >= 0 && sweeps[p] > (unsigned int)patience) {
-          n = bkr94acsFanout(processes[p], 1, out);
+          n = bkr94acsFanout(processes[p], out);
           *fanoutActsTotal += n;
           observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0,
                          silent);
@@ -1179,7 +1179,7 @@ fbDrive(
 
       decidedTick = 0;
       for (b = 0; b < 4; ++b)
-        while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out))
+        while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out))
                > 0) {
           for (j = 0; j < n; ++j)
             if (out[j].act == BKR94ACS_ACT_BA_DECIDED) {
@@ -1229,7 +1229,7 @@ fbDrive(
                 " sweep boundary");
         }
         if (spent[p] > patience) {
-          n = bkr94acsFanout(processes[p], 1, out);
+          n = bkr94acsFanout(processes[p], out);
           *fanoutActsOut += n;
           observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
         }
@@ -1342,7 +1342,7 @@ jDrive(
       prevBarren[p] = pol[p].barren;
 
       for (b = 0; b < 4; ++b)
-        while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1,
+        while ((n = bkr94acsTurn(processes[p], (unsigned char)b,
                                  out)) > 0) {
           for (k = 0; k < n; ++k)
             if (out[k].act == BKR94ACS_ACT_BA_DECIDED
@@ -1350,7 +1350,7 @@ jDrive(
               ++pol[p].progress;  /* PROGRESS: a decision act from a turn */
           observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
         }
-      n = bkr94acsFanout(processes[p], 1, out);
+      n = bkr94acsFanout(processes[p], out);
       observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
     }
 
@@ -1444,14 +1444,14 @@ iTick(
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
+      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_DECIDED
            || out[k].act == BKR94ACS_ACT_COMPLETE)
             ++pol[p].progress;
         observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
       }
-    n = bkr94acsFanout(processes[p], 1, out);
+    n = bkr94acsFanout(processes[p], out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
   }
 }
@@ -1518,9 +1518,9 @@ oTick(
     observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < nAct; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0)
+      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0)
         observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
-    n = bkr94acsFanout(processes[p], 1, out);
+    n = bkr94acsFanout(processes[p], out);
     observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
   }
 }
@@ -1676,14 +1676,14 @@ kTick(
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, vBytes, 0, -1);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
+      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_DECIDED
            || out[k].act == BKR94ACS_ACT_COMPLETE)
             ++pol[p].progress;
         observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, vBytes, 0, -1);
       }
-    n = bkr94acsFanout(processes[p], 1, out);
+    n = bkr94acsFanout(processes[p], out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, vBytes, 0, -1);
   }
 }
@@ -1768,14 +1768,14 @@ lTick(
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, silent);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
+      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_DECIDED
            || out[k].act == BKR94ACS_ACT_COMPLETE)
             ++pol[p].progress;
         observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, silent);
       }
-    n = bkr94acsFanout(processes[p], 1, out);
+    n = bkr94acsFanout(processes[p], out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, silent);
   }
 }
@@ -1852,14 +1852,14 @@ mTick(
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
+      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_DECIDED
            || out[k].act == BKR94ACS_ACT_COMPLETE)
             ++pol[p].progress;
         observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
       }
-    n = bkr94acsFanout(processes[p], 1, out);
+    n = bkr94acsFanout(processes[p], out);
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
   }
 }
@@ -1964,7 +1964,7 @@ nDrive(
       sweepDone = spTick(&pol[p], cursors[p].sweeps, 0);
 
       for (b = 0; b < 4; ++b)
-        while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
+        while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0) {
           for (j = 0; j < n; ++j)
             if (out[j].act == BKR94ACS_ACT_BA_DECIDED
              || out[j].act == BKR94ACS_ACT_COMPLETE)
@@ -1978,7 +1978,7 @@ nDrive(
       } else
         spent[p] = 0;
       if (spent[p] >= patience) {
-        n = bkr94acsFanout(processes[p], 1, out);
+        n = bkr94acsFanout(processes[p], out);
         *fanoutActsOut += n;
         observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
       }
@@ -2339,14 +2339,14 @@ pTick(
     observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < nAct; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1, out)) > 0) {
+      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_DECIDED
            || out[k].act == BKR94ACS_ACT_COMPLETE)
             ++pol[p].progress;
         observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
       }
-    n = bkr94acsFanout(processes[p], 1, out);
+    n = bkr94acsFanout(processes[p], out);
     observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
   }
 }
@@ -2406,15 +2406,12 @@ main(
             "fresh: AcastValue == 0");
 
     /* No evidence banked, so no BA has a complete round: every duty
-     * reads HELD and an unconditional turn -- with or without the
-     * elapsed signal -- outputs nothing. */
+     * reads HELD and an unconditional turn outputs nothing. */
     for (j = 0; j < 4; ++j) {
       CHECK(bkr94acsTurnDuty(a, (unsigned char)j) == BKR94ACS_DUTY_HELD,
             "fresh: TurnDuty == HELD");
-      CHECK(bkr94acsTurn(a, (unsigned char)j, 0, out) == 0,
-            "fresh: Turn without the elapsed signal outputs nothing");
-      CHECK(bkr94acsTurn(a, (unsigned char)j, 1, out) == 0,
-            "fresh: Turn with the elapsed signal outputs nothing");
+      CHECK(bkr94acsTurn(a, (unsigned char)j, out) == 0,
+            "fresh: Turn at HELD outputs nothing");
     }
     CHECK(bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_HELD,
           "fresh: FanoutDuty == HELD");
@@ -2561,7 +2558,7 @@ main(
      * and Turn is safe to call unconditionally. */
     CHECK(bkr94acsTurnDuty(0, 0) == BKR94ACS_DUTY_HELD,
           "TurnDuty(NULL): HELD");
-    CHECK(bkr94acsTurn(0, 0, 1, dout) == 0, "Turn(NULL a): 0");
+    CHECK(bkr94acsTurn(0, 0, dout) == 0, "Turn(NULL a): 0");
 
     sz = bkr94acsSz(3, 0, 10);
     a = calloc(1, sz);
@@ -2576,8 +2573,8 @@ main(
           "TurnDuty(process == n): HELD");
     CHECK(bkr94acsTurnDuty(a, 255) == BKR94ACS_DUTY_HELD,
           "TurnDuty(process 255): HELD");
-    CHECK(bkr94acsTurn(a, 4, 1, dout) == 0, "Turn(process == n): 0");
-    CHECK(bkr94acsTurn(a, 255, 1, dout) == 0, "Turn(process 255): 0");
+    CHECK(bkr94acsTurn(a, 4, dout) == 0, "Turn(process == n): 0");
+    CHECK(bkr94acsTurn(a, 255, dout) == 0, "Turn(process 255): 0");
 
     CHECK(bkr94acsSubset(0, procs) == 0, "Subset(NULL): 0");
     CHECK(bkr94acsAcastValue(0, 0) == 0, "AcastValue(NULL): null");
@@ -2585,8 +2582,8 @@ main(
           "AcastValue(process out of range): null");
     CHECK(bkr94acsRetryStep(0, &cur, rout) == 0, "RetryStep(NULL a): 0");
     CHECK(bkr94acsFanoutDuty(0) == BKR94ACS_DUTY_HELD, "FanoutDuty(NULL): HELD");
-    CHECK(bkr94acsFanout(0, 1, fout) == 0, "Fanout(NULL a): 0");
-    CHECK(bkr94acsFanout(a, 1, 0) == 0, "Fanout(NULL out): 0");
+    CHECK(bkr94acsFanout(0, fout) == 0, "Fanout(NULL a): 0");
+    CHECK(bkr94acsFanout(a, 0) == 0, "Fanout(NULL out): 0");
     CHECK(bkr94acsBaFig1(a, 4, 0, 0) == 0 && bkr94acsBaFig1(a, 0, 255, 0) == 0
        && bkr94acsBaFig1(a, 0, 0, 4) == 0,
           "BaFig1(process, round or initiator out of range): null");
@@ -3644,7 +3641,7 @@ main(
             }
             observeAndOutput(&obs[w.to], w.to, n, out, nDeliv, vLen, 0, -1);
             drainTurns(processes[w.to], &obs[w.to], w.to, n, vLen, out, 0, -1);
-            nDeliv = bkr94acsFanout(processes[w.to], 1, out);
+            nDeliv = bkr94acsFanout(processes[w.to], out);
             observeAndOutput(&obs[w.to], w.to, n, out, nDeliv, vLen, 0, -1);
           }
           for (i = 0; i < n; ++i) {
@@ -3653,7 +3650,7 @@ main(
                            vLen, 0, -1);
             drainTurns(processes[i], &obs[i], (unsigned char)i, n, vLen, out,
                        0, -1);
-            nDeliv = bkr94acsFanout(processes[i], 1, out);
+            nDeliv = bkr94acsFanout(processes[i], out);
             observeAndOutput(&obs[i], (unsigned char)i, n, out, nDeliv,
                            vLen, 0, -1);
           }
@@ -3753,7 +3750,7 @@ main(
     for (k = 0; k < n; ++k)
       if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
         ++exhaustedSeen;
-    while ((n = bkr94acsTurn(a, 0, 1, out)) > 0)
+    while ((n = bkr94acsTurn(a, 0, out)) > 0)
       for (k = 0; k < n; ++k)
         if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
           ++exhaustedSeen;
@@ -3906,7 +3903,7 @@ main(
                                           w.baValue, out);
           observeAndOutput(&obs[w.to], w.to, n, out, nact, vLen, 0, -1);
           drainTurns(processes[w.to], &obs[w.to], w.to, n, vLen, out, 0, -1);
-          nact = bkr94acsFanout(processes[w.to], 1, out);
+          nact = bkr94acsFanout(processes[w.to], out);
           observeAndOutput(&obs[w.to], w.to, n, out, nact, vLen, 0, -1);
         }
         for (p = 1; p < n; ++p) {
@@ -3915,7 +3912,7 @@ main(
                          0, -1);
           drainTurns(processes[p], &obs[p], (unsigned char)p, n, vLen, out,
                      0, -1);
-          nact = bkr94acsFanout(processes[p], 1, out);
+          nact = bkr94acsFanout(processes[p], out);
           observeAndOutput(&obs[p], (unsigned char)p, n, out, nact, vLen,
                          0, -1);
         }
@@ -4163,7 +4160,7 @@ main(
             observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
           }
           for (b = 0; b < 4; ++b)
-            while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1,
+            while ((n = bkr94acsTurn(processes[p], (unsigned char)b,
                                      out)) > 0) {
               if (quiesced[p]) {
                 quiesced[p] = 0;
@@ -4171,7 +4168,7 @@ main(
               }
               observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
             }
-          n = bkr94acsFanout(processes[p], 1, out);
+          n = bkr94acsFanout(processes[p], out);
           if (n) {
             if (quiesced[p]) {
               quiesced[p] = 0;
@@ -4309,7 +4306,7 @@ main(
               "F2: delayed process's BA decided 1");
         CHECK(bkr94acsFanoutDuty(processes[p]) == BKR94ACS_DUTY_MET,
               "F2: duty MET with nothing given up");
-        CHECK(bkr94acsFanout(processes[p], 1, fout) == 0,
+        CHECK(bkr94acsFanout(processes[p], fout) == 0,
               "F2: fanout at MET outputs nothing");
       }
       freeCluster(processes, 4);
@@ -4430,11 +4427,11 @@ main(
   /*                                                                  */
   /*  Section F isolates the fanout's pacing; this isolates the BA    */
   /*  round turn's.  The arrival path banks evidence and decides      */
-  /*  nothing (G1); a round complete at n-t validated waits for the   */
-  /*  caller's elapsed signal (G2); a round complete at all n --      */
-  /*  the full sample, nothing left to wait for -- fires without it   */
-  /*  (G3); and a zero-patience drained instance is turn-quiescent      */
-  /*  (G4).                                                           */
+  /*  nothing (G1); a round complete at n-t validated moves nothing  */
+  /*  until the caller calls, then fires (G2); a round complete at   */
+  /*  all n -- the full sample, nothing left to wait for -- fires    */
+  /*  free (G3); and a zero-patience drained instance is             */
+  /*  turn-quiescent (G4).                                           */
   /* ---------------------------------------------------------------- */
 
   /* ---------------------------------------------------------------- */
@@ -4504,14 +4501,14 @@ main(
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("G2: TOLERANCE requires the elapsed signal");
+  BANNER("G2: TOLERANCE is enabled -- the turn fires when called");
   /* ---------------------------------------------------------------- */
   {
     /* Three of BA_0's four round-0 Fig1s accept, all carrying the same
      * value: the round is complete at n-t = 3 validated but the sample
      * can still grow to n, so the turn is enabled and waiting is still
-     * worth something -- TOLERANCE.  It fires only on the caller's
-     * patience verdict. */
+     * worth something -- TOLERANCE.  Whether to wait is the caller's;
+     * until it calls, nothing moves. */
     unsigned long sz;
     struct bkr94acs *a;
     struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
@@ -4531,18 +4528,17 @@ main(
     CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_TOLERANCE,
           "G2: duty TOLERANCE at n-t of n validated");
 
+    /* The duty query is read-only: asking moves nothing. */
     sentBefore = bkr94acsFig1SentCount(a);
-    CHECK(bkr94acsTurn(a, 0, 0, out) == 0,
-          "G2: turn without the elapsed signal does not fire");
     CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_TOLERANCE,
-          "G2: the refused turn left the duty unchanged");
+          "G2: the query left the duty unchanged");
     CHECK(bkr94acsFig1SentCount(a) == sentBefore,
-          "G2: the refused turn started no round");
+          "G2: the query started no round");
     CHECK(bkr94acsBaDecision(a, 0) == 0xFF, "G2: BA_0 still undecided");
     CHECK(a->complete == 0, "G2: not complete");
 
-    n = bkr94acsTurn(a, 0, 1, out);
-    CHECK(n > 0, "G2: turn fires once the caller's patience elapses");
+    n = bkr94acsTurn(a, 0, out);
+    CHECK(n > 0, "G2: turn fires at TOLERANCE when called");
     CHECK(n <= 3, "G2: turn outputs at most 3 acts");
     for (k = 0; k < n; ++k)
       if (out[k].act == BKR94ACS_ACT_BA_SEND
@@ -4563,7 +4559,7 @@ main(
   {
     /* Same construction with the fourth Fig1 accepted too: the round is
      * complete with ALL n validated, so waiting buys nothing and the
-     * turn is free -- it fires with patienceElapsed == 0. */
+     * turn is free -- a caller needs no patience to call it. */
     unsigned long sz;
     struct bkr94acs *a;
     struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
@@ -4580,16 +4576,16 @@ main(
 
     CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_MET,
           "G3: duty MET with all n validated");
-    n = bkr94acsTurn(a, 0, 0, out);
-    CHECK(n > 0, "G3: MET turn fires without the elapsed signal");
+    n = bkr94acsTurn(a, 0, out);
+    CHECK(n > 0, "G3: MET turn fires");
     CHECK(n <= 3, "G3: turn outputs at most 3 acts");
 
     /* One turn per call: round 1 has no messages, so the duty drops
      * back to HELD and a second call outputs nothing. */
     CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_HELD,
           "G3: next round incomplete -- duty back to HELD");
-    CHECK(bkr94acsTurn(a, 0, 1, out) == 0,
-          "G3: nothing left to turn even with the elapsed signal");
+    CHECK(bkr94acsTurn(a, 0, out) == 0,
+          "G3: nothing left to turn");
 
     free(a);
   }
@@ -4628,7 +4624,7 @@ main(
           CHECK(bkr94acsTurnDuty(processes[p], (unsigned char)b)
                 == BKR94ACS_DUTY_HELD,
                 "G4: every TurnDuty HELD at quiescence");
-          CHECK(bkr94acsTurn(processes[p], (unsigned char)b, 1, out) == 0,
+          CHECK(bkr94acsTurn(processes[p], (unsigned char)b, out) == 0,
                 "G4: re-calling Turn outputs nothing");
         }
       }
@@ -4738,7 +4734,7 @@ main(
             observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, drop, -1);
           }
           for (b = 0; b < 4; ++b)
-            while ((n = bkr94acsTurn(processes[p], (unsigned char)b, 1,
+            while ((n = bkr94acsTurn(processes[p], (unsigned char)b,
                                      out)) > 0) {
               if (quiesced[p]) {
                 quiesced[p] = 0;
@@ -4746,7 +4742,7 @@ main(
               }
               observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, drop, -1);
             }
-          n = bkr94acsFanout(processes[p], 1, out);
+          n = bkr94acsFanout(processes[p], out);
           if (n) {
             if (quiesced[p]) {
               quiesced[p] = 0;

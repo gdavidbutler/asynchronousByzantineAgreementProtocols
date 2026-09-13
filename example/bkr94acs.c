@@ -116,8 +116,9 @@
  *     pass and step 1 enters the laggard's BA before the fanout's
  *     patience elapses.
  * What the pair deliberately shows the zero-patience run giving up is the
- * whole demonstration; a run without -d never even enables step 2
- * (every A-Cast enters 1 before three BAs decide).
+ * whole demonstration; a run without -d never reaches TOLERANCE at
+ * step 2 (every A-Cast enters 1 before three BAs decide, so the
+ * duty goes from HELD to MET).
  */
 
 #include <stdio.h>
@@ -464,7 +465,7 @@ main(
 
   /* Sweep-side pacing state (the header's caller discipline: count
    * COMPLETED SWEEPS while a decision's duty holds TOLERANCE, fire
-   * when the count reaches the budget, evaluating the verdict on
+   * when the count reaches the budget, evaluating the count on
    * every tick so a zero budget spends no wait; reset whenever duty
    * leaves TOLERANCE.  THE UNIT IS THE FULL SWEEP -- one complete
    * pass of the Retry cursor over every sent Fig 1 instance, read
@@ -945,7 +946,7 @@ main(
     /*  observes step 2 leave HELD: the WAN knife edge.  Under patience   */
     /*  at TOLERANCE -- the patience clock is counting completed          */
     /*  sweeps and the next drain delivers the INITIAL, so step 1 wins.   */
-    /*  At -g 0 the verdict elapses within the same tick that decides     */
+    /*  At -g 0 the patience elapses within the same tick that decides    */
     /*  the n-t'th BA (it is evaluated on every tick), so the first       */
     /*  observable state is MET: the door shut before the laggard's       */
     /*  INITIAL could leave, and the release demonstrates the arrival     */
@@ -1035,11 +1036,11 @@ main(
 
       /*
        * BA round turns, paced per (ACS state, BA): count COMPLETED
-       * SWEEPS while bkr94acsTurnDuty holds TOLERANCE, pass the
-       * elapsed signal once the count reaches -g -- evaluated on
-       * every tick, so zero patience spends no deliberate wait
-       * (bkr94acs.h: a clock that only advances at a sweep boundary
-       * fires one boundary late even at zero).  Zero patience is
+       * SWEEPS while bkr94acsTurnDuty holds TOLERANCE, and call the
+       * turn once the count reaches -g -- evaluated on every tick,
+       * so zero patience spends no deliberate wait (bkr94acs.h: a
+       * clock that only advances at a sweep boundary fires one
+       * boundary late even at zero).  Zero patience is
        * still not a firing at enabling (BPR.md, The Sweep-Side
        * Decisions): turns fire from the sweep here, so a
        * zero-patience round consumes whatever had validated by the
@@ -1065,10 +1066,12 @@ main(
             ++turnSweeps[i][p];
         } else
           turnSweeps[i][p] = 0;
-        nacts = bkr94acsTurn(processes[i], (unsigned char)p,
-                             turnSweeps[i][p] >= patience
-                             || bkr94acsBaDecision(processes[i],
-                                  (unsigned char)p) != 0xFF, acts);
+        if (duty == BKR94ACS_DUTY_MET
+         || turnSweeps[i][p] >= patience
+         || bkr94acsBaDecision(processes[i], (unsigned char)p) != 0xFF)
+          nacts = bkr94acsTurn(processes[i], (unsigned char)p, acts);
+        else
+          nacts = 0;
         if (nacts) {
           if (quiescent[i]) {
             quiescent[i] = 0;
@@ -1092,7 +1095,7 @@ main(
       } else
         fanoutSweeps[i] = 0;
       if (fanoutSweeps[i] >= patience) {
-        nacts = bkr94acsFanout(processes[i], 1, acts);
+        nacts = bkr94acsFanout(processes[i], acts);
         if (nacts) {
           fanoutFires += nacts;
           if (quiescent[i]) {

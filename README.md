@@ -216,22 +216,24 @@ while (!terminate) {
     sweepDone = 1;
   }
 
-  /* BA round turns, zero patience shown: the literal 1 passes the verdict on every
-   * attempt.  A deployment counts sweeps per undecided BA while bkr94acsTurnDuty
-   * reads TOLERANCE and passes 1 only when its patience lapses.  Drain, so a
-   * cascade's rounds are not metered out one per tick. */
+  /* BA round turns, zero patience shown: the turn is called on every attempt
+   * and fires unless its duty is HELD.  A deployment counts sweeps per undecided
+   * BA while bkr94acsTurnDuty reads TOLERANCE and calls only at MET or when its
+   * patience lapses.  Drain, so a cascade's rounds are not metered out one per
+   * tick. */
   for (p = 0; p < N; ++p)
-    while ((n = bkr94acsTurn(a, p, 1, acts)) > 0)
+    while ((n = bkr94acsTurn(a, p, acts)) > 0)
       for (k = 0; k < n; ++k) broadcast_action(acts[k]);
 
-  /* Step-2 fanout: count sweeps while enabled; the count re-arms whenever the
-   * duty leaves TOLERANCE.  bkr94acsFanout is guarded, so the call is safe. */
+  /* Step-2 fanout: count sweeps while TOLERANCE; the count re-arms whenever the
+   * duty leaves it.  bkr94acsFanout fires only at TOLERANCE, so the call
+   * is safe. */
   if (bkr94acsFanoutDuty(a) != BKR94ACS_DUTY_TOLERANCE)
     patienceSpent = 0;
   else if (sweepDone)
     ++patienceSpent;
-  if (patienceSpent > PATIENCE) {
-    n = bkr94acsFanout(a, 1, acts);
+  if (patienceSpent >= PATIENCE) {
+    n = bkr94acsFanout(a, acts);
     for (k = 0; k < n; ++k) broadcast_action(acts[k]);
   }
 

@@ -107,21 +107,24 @@ no,"BA_j outputs 1",
 # bkr94acsFanoutDuty classifies the decision, derived by scanning
 # baDecision[] and entered[] (never stored):
 #
-#   HELD      - BA-output-1 count < n-t.  The floor (the paper's is
+#   HELD      - unentered BAs remain and BA-output-1 count < n-t
+#               (MET is tested first).  The floor (the paper's is
 #               2t+1 -- Implementation Note 15): enter 0 below it
 #               and a mass of 0-inputs could force SubSet empty.
-#               Elapsed patience is irrelevant.
+#               bkr94acsFanout refuses here whenever called.
 #   TOLERANCE - count >= n-t and unentered BAs remain.  Enabled.
 #               The caller counts sweeps against its patience and
-#               passes the verdict to bkr94acsFanout, which fires
-#               only on TOLERANCE with the verdict set -- the same
-#               shape bkr94acsTurn takes, so an unconditional call
-#               per sweep is safe; a literal-1 verdict is zero
-#               patience, not a firing at enabling.  While TOLERANCE
-#               holds, the same sweep keeps retrying the delayed
-#               processes' A-Casts (BPR gate below: undecided ->
-#               retry), so patience is spent on exactly the
-#               recovery work that can make the firing unnecessary.
+#               calls bkr94acsFanout when it elapses; the fanout
+#               fires only on TOLERANCE and refuses elsewhere --
+#               the library holds the safety gate and the caller
+#               the pacing, the same shape bkr94acsTurn takes, so
+#               an unconditional call is safe, and one on every
+#               tick is zero patience, not a firing at enabling.
+#               While TOLERANCE holds, the same sweep keeps retrying
+#               the delayed processes' A-Casts (BPR gate below:
+#               undecided -> retry), so patience is spent on exactly
+#               the recovery work that can make the firing
+#               unnecessary.
 #   MET       - no unentered BAs remain; nothing to give up on.
 #               Absorbing: the fanout empties the unentered set, so
 #               once-per-instance is structural, carried by the set
@@ -133,7 +136,7 @@ no,"BA_j outputs 1",
 # tuning).
 #
 # Out of the merged dispatch because its inputs (the n-t count,
-# the unentered set, elapsed patience) appear in no other rule --
+# the unentered set) appear in no other rule --
 # merging would duplicate its DAG at every leaf -- and patience
 # is deployment vocabulary, not paper vocabulary.  The enabling
 # predicate and the fanout loop (enter 0 where input is none) are
@@ -164,8 +167,8 @@ no,"BA_j outputs 1",
 # proof-covered, the flip trading between sound broadcasts, never
 # against safety.
 #
-# The arrival path now only BANKS evidence (Fig1 input, Fig3
-# store/validate/cascade -- Fig3 itself was always deferral-shaped:
+# The arrival path only BANKS evidence (Fig1 input, Fig3
+# store/validate/cascade -- Fig3 itself is deferral-shaped:
 # every message is stored and validity re-derived as prior rounds
 # grow).  bkr94acsTurnDuty classifies a BA's next round with the
 # shared trichotomy (HELD below n-t validated or round space

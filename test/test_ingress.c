@@ -547,7 +547,7 @@ driveCohort(
       nacts = bkr94acsRetryStep(a, &Cursor[p], Acts);
       qActs(Acts, nacts, (unsigned char)p);
       for (q = 0; q < CFG_N; ++q)
-        while ((nacts = bkr94acsTurn(a, (unsigned char)q, 1, Acts))) {
+        while ((nacts = bkr94acsTurn(a, (unsigned char)q, Acts))) {
           qActs(Acts, nacts, (unsigned char)p);
           /*
            * Between two turns some BAs hold a decision and others do
@@ -569,7 +569,7 @@ driveCohort(
             }
           }
         }
-      nacts = bkr94acsFanout(a, 1, Acts);
+      nacts = bkr94acsFanout(a, Acts);
       qActs(Acts, nacts, (unsigned char)p);
     }
 
@@ -966,7 +966,7 @@ sweepAcs(
     memcpy(Img[SELF], Mile[Cur], ImgSz);
     memset(Acts, POISON, sizeof (Acts));
     ++Calls;
-    Snacts = bkr94acsTurn(a, (unsigned char)i, 1, Acts);
+    Snacts = bkr94acsTurn(a, (unsigned char)i, Acts);
     if (i >= CFG_N) {
       ++Refusals;
       if (Snacts) {
@@ -1523,8 +1523,8 @@ sweepBare(
    || bkr94acsAcastValue(0, 0)
    || bkr94acsAcast(0, Vbuf, Acts)
    || bkr94acsRetryStep(0, &Cursor[0], Acts)
-   || bkr94acsFanout(0, 1, Acts)
-   || bkr94acsTurn(0, 0, 1, Acts))
+   || bkr94acsFanout(0, Acts)
+   || bkr94acsTurn(0, 0, Acts))
     fail("a null argument was not refused", "bkr94acs entries");
   if (bkr94acsFanoutDuty(0) != BKR94ACS_DUTY_HELD
    || bkr94acsTurnDuty(0, 0) != BKR94ACS_DUTY_HELD

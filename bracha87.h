@@ -1186,8 +1186,9 @@ bracha87Fig4Init(
  * never against safety.  Deferring an enabled round
  * therefore costs liveness only.  bkr94acs.h's bkr94acsTurnDuty /
  * bkr94acsTurn make this pacing an explicit caller decision; a
- * bare-layer caller firing at enabling simply calls here on
- * the n-t'th validation, which is sound and is the smallest sample.
+ * bare-layer caller firing at enabling simply calls here as the
+ * round completes -- on the n-t'th validation, the smallest sample,
+ * unless a cascade completed it with more -- which is sound.
  */
 unsigned int
 bracha87Fig4Round(

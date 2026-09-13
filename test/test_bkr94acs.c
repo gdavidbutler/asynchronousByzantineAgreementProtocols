@@ -151,7 +151,7 @@ qFanout(
   unsigned int k;
   unsigned int p;
 
-  nacts = bkr94acsFanout(st, 1, acts);
+  nacts = bkr94acsFanout(st, acts);
   for (k = 0; k < nacts; ++k)
     for (p = 0; p < n; ++p)
       qPush(BKR94ACS_CLS_BA, acts[k].process, acts[k].round,
@@ -222,7 +222,7 @@ qTurns(
   unsigned int q;
 
   for (p = 0; p < n; ++p)
-    while ((nacts = bkr94acsTurn(st, (unsigned char)p, 1, acts)) > 0)
+    while ((nacts = bkr94acsTurn(st, (unsigned char)p, acts)) > 0)
       for (k = 0; k < nacts; ++k) {
         if (acts[k].act != BKR94ACS_ACT_BA_SEND)
           continue;
@@ -913,8 +913,8 @@ testPostDecideContinuation(
 
   /*
    * Feed a round-0 BA INITIAL for process 0 from process 1.
-   * Fig1 Rule 1 must fire and output an ECHO action.  Pre-fix this
-   * returned zero because of the "already decided" short-circuit.
+   * Fig1 Rule 1 must fire and output an ECHO action; a machine that
+   * short-circuited on "already decided" would return zero here.
    */
   value = 1;
   nacts = bkr94acsBaInput(a, 0, 0, 1, BRACHA87_INITIAL, ANNOT_NO_ARM, 1, value, acts);
@@ -955,7 +955,7 @@ testPostDecideContinuation(
 
           (void)bkr94acsBaInput(a, 0, 0, initiator,
                                        type, ANNOT_NO_ARM, from, value, acts);
-          while ((nturn = bkr94acsTurn(a, 0, 1, tacts)) > 0)
+          while ((nturn = bkr94acsTurn(a, 0, tacts)) > 0)
             for (kk = 0; kk < nturn; ++kk) {
               /*
                * A post-decide BA_SEND with round > 0 proves the turn
@@ -984,25 +984,25 @@ testPostDecideContinuation(
 /*--------------------------------------------------------------------------*/
 /*  BKR94 Step 2 trigger regression test                                    */
 /*                                                                          */
-/*  Pre-fix, bkr94acsAcastInput counted Fig1 ACCEPTs and fired the          */
-/*  enter-0 fanout when nAccepted reached n-t.  BKR94 Lemma 2 Part A        */
-/*  case (i) requires the step-2 enabling count to be "2t+1 BAs             */
+/*  A machine that counted Fig1 ACCEPTs and fired the enter-0 fanout        */
+/*  when that count reached n-t would misread BKR94 Lemma 2 Part A          */
+/*  case (i), which requires the step-2 enabling count to be "2t+1 BAs      */
 /*  terminated with output 1", not "2t+1 Fig1 ACCEPTs" -- these coincide    */
 /*  only in benign runs and diverge under asynchrony or Byzantine           */
 /*  scheduling.                                                             */
 /*                                                                          */
-/*  This test pins the corrected semantics by driving all N Fig1            */
+/*  This test pins the paper's semantics by driving all N Fig1              */
 /*  instances to ACCEPT on a single process via bkr94acsAcastInput and      */
 /*  asserting:                                                              */
-/*    - bkr94acsFanoutDuty stays HELD after each accept (accepts never      */
-/*      enable step 2; zero BAs have decided) and a bkr94acsFanout call     */
-/*      outputs nothing,                                                    */
+/*    - bkr94acsFanoutDuty never reads TOLERANCE (HELD while entries        */
+/*      remain, MET once all N are entered; zero BAs have decided) and a    */
+/*      bkr94acsFanout call outputs nothing,                                */
 /*    - no BKR94ACS_ACT_BA_SEND with baValue=0 comes out of the             */
 /*      A-Cast path (no enter-0 fanout),                                    */
 /*    - entered[j] == BKR94ACS_ENTER_ONE for every j (step 1 fired per      */
 /*      accept).                                                            */
 /*                                                                          */
-/*  With the pre-fix code the (n-t)th accept would fire the fanout and      */
+/*  A machine counting accepts would fire the fanout on the (n-t)th and     */
 /*  output a burst of enter-0 BA_SEND actions.                              */
 /*--------------------------------------------------------------------------*/
 
@@ -1083,16 +1083,16 @@ testStepTwoTrigger(
     }
 
     /*
-     * Pre-fix, the fanout fired on the (n-t)th accept (process == 2
-     * here) for the one still-un-entered process.  Accepts feed
-     * step 1 only; with zero BA decides the fanout must never
-     * classify TOLERANCE (HELD while entries remain, MET once step
-     * 1 has entered all N) and firing it must output nothing.
+     * A machine counting accepts would fire the fanout on the (n-t)th
+     * (process == 2 here) for the one still-un-entered process.
+     * Accepts feed step 1 only; with zero BA decides the fanout must
+     * never classify TOLERANCE (HELD while entries remain, MET once
+     * step 1 has entered all N) and firing it must output nothing.
      */
-    check("A-Cast accepts don't enable step 2",
+    check("A-Cast accepts never reach step 2's TOLERANCE",
           bkr94acsFanoutDuty(a) != BKR94ACS_DUTY_TOLERANCE);
     check("fanout call outside TOLERANCE outputs nothing",
-          bkr94acsFanout(a, 1, acts) == 0);
+          bkr94acsFanout(a, acts) == 0);
   }
 
   check("no enter-0 output from A-Cast path", enterZeroSeen == 0);
@@ -1841,7 +1841,7 @@ testBaEnteredGetValid(
   testWriteDecision(a, 2, 1);
   check("BaEntered: fanout duty TOLERANCE with entries outstanding",
         bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_TOLERANCE);
-  nact = bkr94acsFanout(a, 1, out);
+  nact = bkr94acsFanout(a, out);
   check("BaEntered: fanout enters the three un-entered BAs", nact == 3);
   for (b = 0; b < 4; ++b)
     check("BaEntered: 1 for every BA once the fanout has fired",
@@ -1936,7 +1936,7 @@ testBaEnteredGetValid(
   /* Across a turn the answer is the NEXT round's set, so the count
    * is not monotone: 4 before, 0 after (round 1 has nothing yet). */
   before = bkr94acsBaGetValid(a, 0, senders, values);
-  nact = bkr94acsTurn(a, 0, 1, out);
+  nact = bkr94acsTurn(a, 0, out);
   check("BaGetValid: the MET turn fired", nact > 0);
   after = bkr94acsBaGetValid(a, 0, senders, values);
   check("BaGetValid: full round-0 sample before the turn", before == 4);
@@ -1993,7 +1993,7 @@ testBaEnteredGetValid(
             bkr94acsBaInput(a, 0, round, b, BRACHA87_READY, ANNOT_NO_ARM, sender, v, out);
           else
             bkr94acsBaInput(a, 0, round, b, BRACHA87_INITIAL, ANNOT_NO_ARM, b, v, out);
-          while ((nact = bkr94acsTurn(a, 0, 1, tout)) > 0)
+          while ((nact = bkr94acsTurn(a, 0, tout)) > 0)
             for (k = 0; k < nact; ++k)
               if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
                 ++exhaustedSeen;
@@ -2504,7 +2504,7 @@ feedFig1Accept(
   /* INITIAL from initiator: process 0 echoes (Rule 1) */
   total += bkr94acsBaInput(a, process, round, initiator,
                                   BRACHA87_INITIAL, ANNOT_NO_ARM, initiator, value, out);
-  while ((n = bkr94acsTurn(a, process, 1, tout)) > 0)
+  while ((n = bkr94acsTurn(a, process, tout)) > 0)
     for (k = 0; k < n; ++k)
       if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED
        && tout[k].process == process)
@@ -2519,7 +2519,7 @@ feedFig1Accept(
   for (sender = 1; sender <= 3; ++sender) {
     total += bkr94acsBaInput(a, process, round, initiator,
                                     BRACHA87_READY, ANNOT_NO_ARM, sender, value, out);
-    while ((n = bkr94acsTurn(a, process, 1, tout)) > 0)
+    while ((n = bkr94acsTurn(a, process, tout)) > 0)
       for (k = 0; k < n; ++k)
         if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED
          && tout[k].process == process)
@@ -2572,7 +2572,7 @@ testExhausted(
    * structural.  Drive any further input and check.
    */
   (void)bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
-  while ((n = bkr94acsTurn(a, 0, 1, out)) > 0)
+  while ((n = bkr94acsTurn(a, 0, out)) > 0)
     for (k = 0; k < n; ++k)
       if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
         ++exhaustedSeen;
@@ -2683,7 +2683,7 @@ testExhaustedAmongDecided(
                  ANNOT_NO_ARM,
                  (unsigned char)(sender ? sender : b), value, out);
           for (q = 0; q < 4; ++q)
-            while ((n = bkr94acsTurn(a, (unsigned char)q, 1, tout)) > 0)
+            while ((n = bkr94acsTurn(a, (unsigned char)q, tout)) > 0)
               for (k = 0; k < n; ++k) {
                 if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
                   ++exhaustedSeen;
@@ -2716,7 +2716,7 @@ testExhaustedAmongDecided(
       for (q = 0; q < 4; ++q) {
         (void)bkr94acsBaInput(a, (unsigned char)q, (unsigned char)round,
                (unsigned char)b, BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
-        while ((n = bkr94acsTurn(a, (unsigned char)q, 1, tout)) > 0)
+        while ((n = bkr94acsTurn(a, (unsigned char)q, tout)) > 0)
           for (k = 0; k < n; ++k)
             if (tout[k].act == BKR94ACS_ACT_COMPLETE)
               ++completeSeen;
@@ -2850,12 +2850,12 @@ testExhaustedAdoptBranch(
   for (b = 0; b < 4; ++b)
     feedFig1AcceptNoTurn(a, 0, 0, (unsigned char)b, Round0[b], out, 1);
   check("AdoptBranch: round 0 turns on its own sample",
-        bkr94acsTurn(a, 0, 1, tout) > 0);
+        bkr94acsTurn(a, 0, tout) > 0);
 
   for (b = 0; b < 4; ++b)
     feedFig1AcceptNoTurn(a, 0, 1, (unsigned char)b, Round1[b], out, 1);
   check("AdoptBranch: round 1 turns on its own sample",
-        bkr94acsTurn(a, 0, 1, tout) > 0);
+        bkr94acsTurn(a, 0, tout) > 0);
 
   for (b = 0; b < 4; ++b)
     feedFig1AcceptNoTurn(a, 0, 2, (unsigned char)b, round2[b], out, 1);
@@ -2874,7 +2874,7 @@ testExhaustedAdoptBranch(
         dcnt > 1 && dcnt <= 2);
 
   exhaustedSeen = 0;
-  n = bkr94acsTurn(a, 0, 1, tout);
+  n = bkr94acsTurn(a, 0, tout);
   for (k = 0; k < n; ++k)
     if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED && tout[k].process == 0)
       ++exhaustedSeen;
@@ -2889,7 +2889,7 @@ testExhaustedAdoptBranch(
 
   /* Further arrivals cannot make an outputless BA output again. */
   (void)bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
-  while ((n = bkr94acsTurn(a, 0, 1, tout)) > 0)
+  while ((n = bkr94acsTurn(a, 0, tout)) > 0)
     for (k = 0; k < n; ++k)
       if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
         ++exhaustedSeen;
@@ -3004,7 +3004,7 @@ testQuiescenceAfterExhausted(
         }
       /* One turn per BA now that its round's sample is complete at all n. */
       for (j = 0; j < 4; ++j) {
-        n = bkr94acsTurn(processes[p], (unsigned char)j, 1, tout);
+        n = bkr94acsTurn(processes[p], (unsigned char)j, tout);
         for (k = 0; k < n; ++k)
           if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
             ++exhausted[p];
@@ -3024,7 +3024,7 @@ testQuiescenceAfterExhausted(
     for (j = 0; j < 4; ++j) {
       (void)bkr94acsBaInput(processes[p], (unsigned char)j, 0, 0,
                             BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)j, 1, tout)) > 0)
+      while ((n = bkr94acsTurn(processes[p], (unsigned char)j, tout)) > 0)
         for (k = 0; k < n; ++k)
           if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
             ++exhausted[p];

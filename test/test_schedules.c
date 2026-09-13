@@ -48,8 +48,8 @@
  * header, the header stands and the demonstration is the defect.
  * The patience clock's unit is the FULL SWEEP -- one complete pass
  * of the Retry cursor (bkr94acs.h) -- and at the zero patience this
- * instrument runs, the clock is inert either way: the elapsed
- * predicate does not read the counter's history (see THE ELIMINATED
+ * instrument runs, the clock is inert either way: the call gate
+ * does not read the counter's history (see THE ELIMINATED
  * COUNTERS below).
  *
  * THE TWO SURFACES ARE ASYMMETRIC, deliberately, because the loops
@@ -254,15 +254,16 @@
  *
  *   if (duty == TOLERANCE) { if (sweepDone) ++turnSweeps; }
  *   else turnSweeps = 0;
- *   elapsed = (turnSweeps >= patience) || (BaDecision != 0xFF);
+ *   if (duty == MET || turnSweeps >= patience || BaDecision != 0xFF)
+ *     call the turn;
  *
  * At patience 0 the compare is >= 0, constant-true for an unsigned
- * count: the elapsed signal is 1 on every attempt no matter what the
+ * count: the turn is called on every attempt no matter what the
  * counter holds, so neither the update order nor the duty can route
- * through it.  Turn firing then depends on duty alone -- MET fires
- * free, TOLERANCE fires on the constant-true signal -- and the
- * fanout's own >= 0 gate likewise always passes into
- * bkr94acsFanout's internal duty guard.  At
+ * through it.  Turn firing then depends on duty alone -- the library
+ * fires whenever the duty is not HELD -- and the fanout's own >= 0
+ * gate likewise always calls into bkr94acsFanout's internal duty
+ * guard.  At
  * n = 4 the two counters would be n*n + n = 20 harness bits, a factor
  * of 2^20 on the state space of the config whose tractability is in
  * question.  THE ELIMINATION IS ZERO-PATIENCE-ONLY: patience above zero
@@ -1868,18 +1869,12 @@ explore(
     }
 
     for (q = 0; q < N; ++q) {
-      unsigned char duty;
-
-      duty = bkr94acsTurnDuty(Acsp, (unsigned char)q);
-      /* The zero-patience elapsed signal, with turnSweeps eliminated:
-       * the example's >= 0 compare is constant-true, so at TOLERANCE
-       * the signal is 1 on every attempt -- the predicate below is
-       * firing-identical -- and patience is scoped to undecided BAs. */
+      /* The zero-patience turn, with turnSweeps eliminated: the
+       * example's >= 0 compare is constant-true, so it calls the turn
+       * on every attempt and the turn fires whenever its duty is not
+       * HELD -- an unconditional call here is firing-identical. */
       PreDec = bkr94acsBaDecision(Acsp, (unsigned char)q);
-      NActs = bkr94acsTurn(Acsp, (unsigned char)q,
-                           (unsigned char)((duty == BKR94ACS_DUTY_TOLERANCE)
-                                           || (PreDec != 0xFF)),
-                           Acts);
+      NActs = bkr94acsTurn(Acsp, (unsigned char)q, Acts);
       if (NActs > 3) {
         FailMsg = "bkr94acsTurn output more than 3 acts";
         goto fail;
@@ -1897,10 +1892,10 @@ explore(
 
     /* Step 2, after the turns because only a turn produces the
      * decisions it counts.  The guard is duty == TOLERANCE, which is
-     * what the eliminated fanoutTicks reduced to and is doubly
-     * redundant with bkr94acsFanout's own guard. */
+     * what the eliminated fanoutTicks reduced to and is redundant
+     * with bkr94acsFanout's own guard. */
     if (bkr94acsFanoutDuty(Acsp) == BKR94ACS_DUTY_TOLERANCE) {
-      NActs = bkr94acsFanout(Acsp, 1, Acts);
+      NActs = bkr94acsFanout(Acsp, Acts);
       if (NActs > N) {
         FailMsg = "bkr94acsFanout output more than N acts";
         goto fail;

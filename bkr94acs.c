@@ -31,10 +31,10 @@
  * Step 1 lives in bkr94acsAcastInput (enter 1 on Fig1 ACCEPT).
  * Step 2 lives on the BPR sweep: bkr94acsFanoutDuty classifies
  *   (HELD / TOLERANCE / MET) and bkr94acsFanout enters 0 into every
- *   unentered BA once the 2t+1-BAs-with-output-1 count holds and
- *   the caller's patience elapses.  The paper's "upon" is
- *   enabling evidence, not a moment; see the bkr94acs.dtc Step 2
- *   section.
+ *   unentered BA once the n-t-BAs-with-output-1 count holds (the
+ *   paper's 2t+1 -- Implementation Note 15) and the caller, its
+ *   patience elapsed, calls it.  The paper's "upon" is enabling
+ *   evidence, not a moment; see the bkr94acs.dtc Step 2 section.
  * The BA round turn lives on the same sweep: bkr94acsBaInput only
  *   BANKS evidence (Fig1 traffic, Fig3 store/validate/cascade);
  *   bkr94acsTurnDuty classifies each BA's next round and
@@ -43,7 +43,8 @@
  *   reading, and the sample a turn consumes is still growing when
  *   it first suffices.
  * Step 3 lives in bkr94acsTurn (BKR94ACS_ACT_COMPLETE when the
- *   turn decides the last undecided BA) and bkr94acsSubset
+ *   turn's decision brings the decided count to n; an exhausted BA
+ *   never counts -- Implementation Note 12) and bkr94acsSubset
  *   (SubSet = { j : BA_j = 1 }).
  */
 
@@ -1030,7 +1031,6 @@ bkr94acsFanoutDuty(
 unsigned int
 bkr94acsFanout(
   struct bkr94acs *a
- ,unsigned char patienceElapsed
  ,struct bkr94acsAct *out
 ){
   unsigned int N;
@@ -1045,15 +1045,10 @@ bkr94acsFanout(
    * is unsound (a mass of 0-inputs could force SubSet empty).  At
    * MET nothing is unentered and the loop below would output
    * nothing; returning early keeps the call cheap for a caller that
-   * fires unconditionally each sweep.
-   *
-   * patienceElapsed carries the caller's verdict, the same shape
-   * bkr94acsTurn takes.  The two seams differ only in what MET means:
-   * Turn's is a full sample and fires free, this one is an empty
-   * unentered set and is moot, so here MET needs no elapsed signal
-   * because there is nothing left to do.
+   * calls unconditionally each sweep.  WHEN to call while the duty
+   * is TOLERANCE is the caller's, read off bkr94acsFanoutDuty.
    */
-  if (bkr94acsFanoutDuty(a) != BKR94ACS_DUTY_TOLERANCE || !patienceElapsed)
+  if (bkr94acsFanoutDuty(a) != BKR94ACS_DUTY_TOLERANCE)
     return (0);
   N = A_N(a);
   nact = 0;
@@ -1094,7 +1089,6 @@ unsigned int
 bkr94acsTurn(
   struct bkr94acs *a
  ,unsigned char process
- ,unsigned char patienceElapsed
  ,struct bkr94acsAct *out
 ){
   struct bracha87Fig4 *f4;
@@ -1105,7 +1099,6 @@ bkr94acsTurn(
   unsigned int act;
   unsigned int mr;
   unsigned int nact;
-  unsigned char duty;
   unsigned char acsEvent;
   unsigned char inputToBAj;
   unsigned char postCountAllN;
@@ -1114,10 +1107,7 @@ bkr94acsTurn(
 
   if (!a || process > a->n || !out)
     return (0);
-  duty = bkr94acsTurnDuty(a, process);
-  if (duty == BKR94ACS_DUTY_HELD)
-    return (0);
-  if (duty == BKR94ACS_DUTY_TOLERANCE && !patienceElapsed)
+  if (bkr94acsTurnDuty(a, process) == BKR94ACS_DUTY_HELD)
     return (0);
 
   mr = maxRounds(a);
