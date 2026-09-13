@@ -2,7 +2,7 @@
 #
 # mutants.sh -- does the standing battery have teeth?
 #
-# The five test suites and the two instruments -- the schedule explorer
+# The six test suites and the two instruments -- the schedule explorer
 # and the ingress contract -- are this repository's whole review.  A
 # suite that passes proves nothing by itself: it proves
 # something only if it would FAIL on a machine that is wrong.  This
@@ -38,8 +38,8 @@
 #     more than once, or none, stops the run instead of quietly landing
 #     somewhere else or nowhere.
 #
-#   named-label credit.  Four of the five suites accumulate failures
-#     and print a stable label; the explorer stops a config's search at
+#   named-label credit.  The six suites accumulate failures and print
+#     a stable label; the explorer stops a config's search at
 #     its first per-state red and prints one witness, and a config with
 #     none prints its whole-config labels.  A kill is credited only
 #     when the DESIGNATED label appears.  A nonzero status is not a
@@ -75,10 +75,10 @@ bracha87Fig1Rules.c bracha87Fig3Rules.c bracha87Fig4Rules.c \
 bkr94acsRules.c"
 SUITESRC="test_bracha87.c test_bkr94acs.c test_predicates.c \
 test_bracha87_blackbox.c test_bkr94acs_blackbox.c test_schedules.c \
-test_ingress.c"
+test_ingress.c test_ceiling.c"
 BINS="test_bracha87 test_bkr94acs test_predicates \
 test_bracha87_blackbox test_bkr94acs_blackbox test_schedules \
-test_ingress"
+test_ingress test_ceiling"
 
 if [ ! -f bracha87.c ] || [ ! -f test/test_schedules.c ]; then
   echo "mutants: run from the repository root" >&2
@@ -263,8 +263,11 @@ every correct process cross on the SAME value, so the accepted value
 agrees everywhere, Lemma 1 and Lemma 2 both hold, the agreed subset is
 unchanged in size and contents, and the balanced-split arms assert
 nothing beyond that.  A false accept of the right value is what an
-end-to-end arm cannot see; only a unit arm that presents exactly one
-short of the threshold can.
+end-to-end arm under honest delivery cannot see; an arm sees it by
+presenting exactly one short of the threshold -- the unit arms
+directly, and the contract suite's self-delivery pair end-to-end, with
+t silent and every process withholding its own hand-back, which reds
+here on the readys the lowered threshold lets out.
 #ANCHOR
   ecGtHalfNT    = ec >= (B_N(b) + b->t) / 2 + 1;
 #WITH
@@ -503,7 +506,7 @@ the sample while value 0 needs only half of it.  Writing the same
 strict test for both wrongly rejects a correct process whose sample
 ties.  The two formulas AGREE whenever the sample size is odd and
 differ only when it is even, so the oracle must be an arm at an EVEN
-n-t.  The paper-direct enumeration runs at n=4, t=1, where n-t is 3 and
+n-t.  The subset enumeration runs at n=4, t=1, where n-t is 3 and
 the two formulas are the same expression -- exhaustive there, and blind
 to this.  The designated arm sits at n=8, t=2, where n-t is 6: it
 presents a sample in which value 0 is reachable only through the
@@ -531,7 +534,7 @@ messages.  The oracle fills a round past n-t, stores a higher-round
 message that is invalid against the smaller set, grows the lower round
 further, and requires the stored message to become valid.  Under the
 mutation the later growth fires no re-check and it stays invalid -- red
-on that read.  The paper-direct cascade correspondence arm is the
+on that read.  The cascade correspondence arm is the
 second detector.
 #ANCHOR
   if (doCascade) {
@@ -834,22 +837,22 @@ red.  Reachability is the plainest schedule in the battery.
 #MUTANT M32
 #FAMILY counter width -- the derived decided count narrowed to a byte
 #FILE bkr94acs.c
-#ORACLE -
-#LABEL -
-#EXPECT INVISIBLE
+#ORACLE test_ceiling
+#LABEL ACS: COMPLETE on the 256th decision, once
+#EXPECT KILLED
 #WHY
 Counts compared against the ACTUAL process count must hold 256, one
 past what a byte can carry, so a byte counter wraps to 0 on the 256th
 increment and a comparison against 256 can never fire.  Narrowing the
 derived decided count reinstates exactly that: at 256 processes the
-completion condition becomes unreachable.  NO ORACLE IN THIS BATTERY
-REACHES IT.  The largest configuration anywhere is 37 processes, in the
-large-n reliable-broadcast arm; every other arm runs at 16 or fewer,
-and the explorer hosts at most 8.  Nor does any frozen count move: at
-these sizes the narrowed counter holds the same values, so the mutated
-machine is behaviorally identical within the battery's reach and even
-the sensitivity signal is silent.  Fielded to record the fact, not to
-be killed.
+completion condition becomes unreachable.  Only the ceiling suite
+reaches it: every other configuration in the battery is 37 processes
+or fewer, where the narrowed counter holds the same values and the
+mutated machine is behaviorally identical, so every other suite and
+the explorer's frozen counts stay green.  The oracle drives one ACS
+instance's 256 BAs to decision through bkr94acsBaInput and
+bkr94acsTurn and requires COMPLETE on the 256th; under the mutation
+the scan reads 0 on that turn and the action never comes.
 #ANCHOR
     unsigned int nDecided;
 #WITH
@@ -933,7 +936,7 @@ test/test_schedules.c).
 #EXPECT KILLED
 #WHY
 BKR94 Figure 3 step 2 fires at 2t+1 decided-1 outcomes; this library
-fires at n-t (Implementation Note 18).  The two are one integer at
+fires at n-t (Implementation Note 15).  The two are one integer at
 n = 3t+1, which is where every black-box arm runs, and in a lossless
 all-honest schedule every BA is entered by step 1 before any decides,
 so the duty answers MET and never reaches the comparison: the rest of
@@ -1542,6 +1545,265 @@ bkr94acsBaInput(
 unsigned int
 bkr94acsBaInput(
 #END
+#MUTANT M52
+#FAMILY figure 4 step 1 -- the round transition's tie broken to 1
+#FILE bracha87.c
+#ORACLE test_bracha87
+#LABEL Fig4Round sub 0: 2:2 tie breaks to 0
+#EXPECT KILLED
+#WHY
+Fig 4 step 1 sets value_p to the majority of the validated sample and
+names no tie.  A tie is reachable because the sample can be even, and
+the library breaks it to 0 at two sites that must agree: fig4Nfn on the
+validation side, and bracha87Fig4Round's sub-0 value update.  The
+fig4Nfn site has its subset-majority arms; this entry anchors the other
+site.  Every end-to-end run in the battery starts its BAs from a
+unanimous or odd sample, so a flipped tie there is a false majority of
+the right shape and nothing downstream reds; the oracle hands the
+round a 2:2 sample directly and requires 0.  Verified by hand before
+this entry was written: under the mutation exactly the two tie checks
+go red and nothing else in the suite does.
+#ANCHOR
+    b->value = (cnt[1] > cnt[0]) ? 1 : 0;
+#WITH
+    b->value = (cnt[1] >= cnt[0]) ? 1 : 0;
+#END
+#MUTANT M53
+#FAMILY figure 4 step 3 -- the adopt case read as free
+#FILE bracha87.c
+#ORACLE test_bracha87
+#LABEL Adopt window: with more than t (d,0) in every subset, the other value is rejected
+#EXPECT KILLED
+#WHY
+Fig 4 step 3 has two deterministic cases and one free one: (i) decides
+v on more than 2t (d,v), (ii) adopts v on more than t, and only (iii)
+tosses.  fig4Nfn answers Fig 3's existential over n-t subsets of the
+round-3i+2 set, so a phase-opening message carrying the other value
+validates only if some subset reaches (iii); when every subset holds
+more than t (d,dm) -- dc[dm] - excess > t -- only dm is producible and
+the answer is exact.  This mutation raises the exactness floor to the
+decide case's 2t, which admits the other value in the window
+t < dc[dm] - excess <= 2t, a value no n-t subset of this validator's
+current set produces (a correct sender whose own sample reached the
+coin may send it; it is then stored and re-evaluated as the set grows,
+so the rejection is a deferral).  The
+oracle builds that window at n=4 t=1 -- two (d,0) and one plain 0 in
+a complete round-2 set, every 3-subset the whole set -- and requires
+a round-3 value 1 to be rejected.  The predicate correspondence is a
+second detector: its reference enumerates the subsets and applies (ii)
+as the paper writes it, and disagrees on 42 of 960 inputs under this
+mutation.  No end-to-end arm sees it: every schedule in the battery
+opens its phases from a unanimous sample, and a wrongly admitted value
+that never arrives changes nothing.
+#ANCHOR
+        if (dc[dm] - excess > f4->t) {
+#WITH
+        if (dc[dm] - excess > 2u * f4->t) {
+#END
+
+#MUTANT M54
+#FAMILY counter width -- the Fig 1 sender coverage narrowed to a byte
+#FILE bracha87.c
+#ORACLE test_ceiling
+#LABEL Fig1: all echoed at 256
+#EXPECT KILLED
+#WHY
+Two Fig 1 retire gates compare a sender count against n: INITIAL
+retires when every process has echoed, READY when every process has
+accepted and none is owed an announcement.  Both counts come from one
+bitmap scan, and narrowing its accumulator to a byte makes each read
+0 at exactly the coverage that should retire -- so at 256 processes
+neither gate closes and bracha87Fig1AllEchoed never answers 1.  The
+oracle feeds an initiator 256 echo senders and then 256 accept
+announcements, requiring each gate open at 255 and closed at 256;
+under the mutation the 256th reads as 0 and all three closings go
+red.  Invisible below the ceiling: the scan holds every count up to
+255 exactly.
+#ANCHOR
+  unsigned int cnt;
+  unsigned int j;
+
+  cnt = 0;
+  for (j = 0; j < N; ++j)
+    if (BIT_TST(from, j))
+#WITH
+  unsigned char cnt;
+  unsigned int j;
+
+  cnt = 0;
+  for (j = 0; j < N; ++j)
+    if (BIT_TST(from, j))
+#END
+
+#MUTANT M55
+#FAMILY counter width -- the Fig 2 received count stored in a byte
+#FILE bracha87.c
+#ORACLE test_ceiling
+#LABEL Fig2: received count 256
+#EXPECT KILLED
+#WHY
+Fig 2's per-round received count is compared against n - t and read
+back through bracha87Fig2RecvCount.  Narrowed to a byte at its
+increment it wraps to 0 on the 256th sender of a full house; the
+threshold crossing at n - t is untouched, which is what makes this
+invisible at every battery size and at the ceiling everywhere but the
+count read back.  The oracle receives one round from all 256 senders
+and requires the count to read 256.
+#ANCHOR
+  ++F2_RCNT(b, k);
+#WITH
+  F2_RCNT(b, k) = (unsigned char)(F2_RCNT(b, k) + 1);
+#END
+
+#MUTANT M56
+#FAMILY counter width -- the Fig 3 VALID^k count stored in a byte
+#FILE bracha87.c
+#ORACLE test_ceiling
+#LABEL Fig3: valid count 256
+#EXPECT KILLED
+#WHY
+Fig 3's per-round VALID^k count is read by the next round's
+validation gate (VALID^{k+1} needs n - t validated at k) and by the
+composition's turn duty (MET at all n validated).  The count has two
+increments, the direct one here and the cascade's (M61).  Narrowed to
+a byte here it wraps to 0 when all 256 senders of a full house
+validate directly in one round, and every round after it stalls: the
+gate reads 0 < n - t forever.  The oracle validates round 0 from all
+256 senders and requires the count to read 256; the ACS half reds
+too, since no BA's round ever turns.  The threshold crossing at n - t
+fires before the wrap, which is why no smaller configuration sees
+it.
+#ANCHOR
+    ++*vcnt;
+#WITH
+    *vcnt = (unsigned char)(*vcnt + 1);
+#END
+
+#MUTANT M57
+#FAMILY counter width -- the Fig 4 per-value tallies narrowed to a byte
+#FILE bracha87.c
+#ORACLE test_ceiling
+#LABEL Fig4: step 1 majority over 256
+#EXPECT KILLED
+#WHY
+bracha87Fig4Round tallies the round's values and their (d, v) marks
+and compares the tallies against n / 2, 2t and t.  Over a unanimous
+full house of 256 a byte tally wraps to 0: step 1 sees a 0:0 tie and
+takes the tie-break value 0, step 2 finds no value above n / 2, step 3
+finds no (d, v) above 2t.  The oracle computes all three rounds over
+256 copies of value 1 and requires the majority, the (d, 1) and the
+decision; the ACS half reds too, no BA deciding: its step-3 tally
+finds no (d, 1) at all and the phase ends on the coin.  Below the
+ceiling the tallies fit a byte.  The N that validates the next round
+keeps tallies of its own; those are M60.
+#ANCHOR
+  unsigned int cnt[2];
+  unsigned int dc[2];
+  unsigned int sub;
+  unsigned int ph;
+#WITH
+  unsigned char cnt[2];
+  unsigned char dc[2];
+  unsigned int sub;
+  unsigned int ph;
+#END
+
+#MUTANT M58
+#FAMILY counter width -- the step-2 BA-output-1 count narrowed to a byte
+#FILE bkr94acs.c
+#ORACLE test_ceiling
+#LABEL ACS: fanout TOLERANCE on 256 BA outputs of 1
+#EXPECT KILLED
+#WHY
+bkr94acsFanoutDuty derives the BA-output-1 count by scan and compares
+it against n - t.  A byte accumulator wraps to 0 when all 256 BAs
+have output 1, so a full house of 1-outputs with anything left
+unentered reads HELD where it should read TOLERANCE.  The oracle
+drives all 256 BAs to 1 with no A-Cast entered and requires
+TOLERANCE.  The threshold at n - t fires before the wrap at every
+smaller size, and at 256 the same scan holds any count under 256, so
+only the full house sees it.
+#ANCHOR
+  unsigned int one;
+#WITH
+  unsigned char one;
+#END
+
+#MUTANT M59
+#FAMILY counter width -- the unentered count narrowed to a byte
+#FILE bkr94acs.c
+#ORACLE test_ceiling
+#LABEL ACS: fanout HELD with 256 unentered
+#EXPECT KILLED
+#WHY
+bkr94acsFanoutDuty's MET is an EMPTY unentered set, derived by scan.
+A byte accumulator wraps to 0 whenever all 256 BAs are unentered, so
+the duty reads MET -- nothing to enter -- on a fresh 256-process
+instance and again once every BA has output 1 with none entered,
+where bkr94acsFanout, which fires only on TOLERANCE, has 256 BAs to
+enter with 0 and cannot fire.  The oracle queries the duty of a
+fresh instance and requires HELD; the TOLERANCE check at the end of
+the drive reds as well.  Below the ceiling the unentered count fits
+a byte at every moment.
+#ANCHOR
+  unsigned int unentered;
+#WITH
+  unsigned char unentered;
+#END
+
+#MUTANT M60
+#FAMILY counter width -- the N function's tallies narrowed to a byte
+#FILE bracha87.c
+#ORACLE test_ceiling
+#LABEL ACS: every turn MET on 256 validated
+#EXPECT KILLED
+#WHY
+fig4Nfn is Fig 4's N, called by Fig 3 over the whole validated set of
+the previous round to decide what the next round's messages may
+carry.  Its tallies are its own, not bracha87Fig4Round's (M57), and
+over a unanimous full house of 256 a byte tally wraps to 0: the
+step-1 majority reads 0:0 and answers 0, so every round-1 message
+carrying the true majority 1 is rejected and no round after 0 ever
+completes.  The bare figures do not reach it -- the bare Fig 3 arm's
+N is the suite's own -- so the oracle is the ACS half: with no BA's
+round 1 turnable, the turn duty stays HELD from round 1 on and the
+MET count falls short.  Green everywhere else: the predicate suite's
+reference runs at n = 4, where the tallies fit a byte.
+#ANCHOR
+  unsigned int cnt[2];
+  unsigned int dc[2];
+  unsigned int i;
+  unsigned int sub;
+#WITH
+  unsigned char cnt[2];
+  unsigned char dc[2];
+  unsigned int i;
+  unsigned int sub;
+#END
+
+#MUTANT M61
+#FAMILY counter width -- the Fig 3 VALID^k count's cascade increment in a byte
+#FILE bracha87.c
+#ORACLE test_ceiling
+#LABEL Fig3: cascade valid count 256
+#EXPECT KILLED
+#WHY
+The VALID^k count's second increment: a message stored before its
+previous round was complete is validated later by the cascade, when
+that round crosses n - t, and counted here rather than at M56's site.
+Narrowed to a byte, a round validated entirely by cascade reads 0
+when all 256 senders of a full house were stored early, and the round
+after it never validates.  The oracle stores round 1 from all 256
+senders before round 0 has validated any, then completes round 0, and
+requires round 1's count to read 256, round 1 complete, and a round-2
+message to validate over it.  No other arm stores a full house ahead
+of its round: the ACS half feeds rounds in order, so the cascade
+there finds nothing to validate.
+#ANCHOR
+            ++F3_VCNT(b, r);
+#WITH
+            F3_VCNT(b, r) = (unsigned char)(F3_VCNT(b, r) + 1);
+#END
 
 CATALOGUE_END
 
@@ -1579,6 +1841,8 @@ buildTree() {
     $CC $CFLAGS -o test_schedules test/test_schedules.c bkr94acs.o \
         bracha87.o || exit 1
     $CC $CFLAGS -o test_ingress test/test_ingress.c bkr94acs.o \
+        bracha87.o || exit 1
+    $CC $CFLAGS -o test_ceiling test/test_ceiling.c bkr94acs.o \
         bracha87.o || exit 1
   ) > "$WORK/build.log" 2>&1
 }
@@ -1779,7 +2043,7 @@ for id in $ids; do
     shadowBins=$BINS
   else
     shadowBins="test_bkr94acs test_bkr94acs_blackbox test_schedules \
-test_ingress"
+test_ingress test_ceiling"
   fi
   shadowBad=""
   for b in $shadowBins; do

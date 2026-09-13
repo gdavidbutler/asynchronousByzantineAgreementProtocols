@@ -79,7 +79,10 @@ test_schedules: test/test_schedules.c bkr94acs.o bracha87.o bkr94acs.h bracha87.
 test_ingress: test/test_ingress.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) -I. -o $@ test/test_ingress.c bkr94acs.o bracha87.o
 
-check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules test_ingress
+test_ceiling: test/test_ceiling.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
+	$(CC) $(CFLAGS) -I. -o $@ test/test_ceiling.c bkr94acs.o bracha87.o
+
+check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules test_ingress test_ceiling
 	./test_bracha87
 	./test_bkr94acs
 	./test_predicates
@@ -87,6 +90,7 @@ check: test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_b
 	./test_bkr94acs_blackbox
 	./test_schedules smoke
 	./test_ingress
+	./test_ceiling
 
 # The schedule explorer is a DELIBERATE act, like `rules` above, and for
 # the same reason: cost.  `check` runs only its measured-subsecond smoke
@@ -118,7 +122,7 @@ mutants: test/mutants.sh
 clean:
 	rm -f bracha87.o bkr94acs.o
 	rm -f example_bracha87Fig1 example_bkr94acs
-	rm -f test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules test_ingress
+	rm -f test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules test_ingress test_ceiling
 	rm -rf mutantWork
 
 # the .psu are dtc's intermediate output, left behind by `make rules`;

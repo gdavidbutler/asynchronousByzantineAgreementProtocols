@@ -205,7 +205,7 @@ static int
 qAlloc(
   unsigned int cap
 ){
-  MsgQ = (struct msg *)calloc(cap, sizeof (struct msg));
+  MsgQ = calloc(cap, sizeof (struct msg));
   if (!MsgQ)
     return (-1);
   Qcap = cap;
@@ -640,7 +640,7 @@ main(
 
   memset(processes, 0, sizeof (processes));
   for (i = 0; i < n; ++i) {
-    processes[i] = (struct bkr94acs *)calloc(1, acsSize);
+    processes[i] = calloc(1, acsSize);
     if (!processes[i]) {
       fprintf(stderr, "allocation failed\n");
       exitCode = 1;
@@ -769,7 +769,7 @@ main(
     while (Qhead < Qtail) {
       struct msg *m;
       struct bkr94acs *st;
-      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)]; /* encoded n */
       unsigned int nacts;
       unsigned int oldTail;
       unsigned char cls;
@@ -975,7 +975,7 @@ main(
     /*--------------------------------------------------------------------*/
 
     for (i = 0; i < n; ++i) {
-      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)]; /* encoded n */
       unsigned int nacts;
       unsigned int p;
       unsigned int sweepDone;

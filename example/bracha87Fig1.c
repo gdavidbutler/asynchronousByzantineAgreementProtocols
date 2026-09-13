@@ -157,7 +157,7 @@ static int
 qAlloc(
   unsigned int cap
 ){
-  MsgQ = (struct msg *)calloc(cap, sizeof (struct msg));
+  MsgQ = calloc(cap, sizeof (struct msg));
   if (!MsgQ)
     return (-1);
   Qcap = cap;
@@ -391,7 +391,7 @@ main(
      * messages and never runs the protocol. */
     if (byzSplit && i == initiator)
       continue;
-    fig1[i] = (struct bracha87Fig1 *)calloc(1, f1sz);
+    fig1[i] = calloc(1, f1sz);
     if (!fig1[i]) {
       fprintf(stderr, "allocation failed\n");
       exitCode = 1;

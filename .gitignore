@@ -67,6 +67,7 @@ test_bkr94acs
 test_bkr94acs_blackbox
 test_schedules
 test_ingress
+test_ceiling
 
 # mutants.sh's scratch trees, builds, and logs; removed by `make clean`
 mutantWork/

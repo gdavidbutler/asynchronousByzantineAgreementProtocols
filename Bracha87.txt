@@ -113,6 +113,20 @@ the two properties Theorem 1 establishes for Fig 1:
   2. if p is faulty then, either all correct processes agree on the
   same value or none of them accepts any value from p.
 
+How the figure's steps sequence (Section 2.1, p. 134, verbatim; the
+print reads "succesful"):
+
+  The protocol is divided into steps corresponding to the message
+  types. In each step a process waits until it receives enough
+  messages that permit it to send the next message type (including
+  those received at previous steps), then it sends a message to all
+  the processes and moves to the next step. Thus, a correct process
+  sends one message of each type (one message each step) to any other
+  process. When process p wants to broadcast a value v, it calls
+  Broadcast(v). The broadcast is succesful if all the correct
+  processes Accept v. Thus, Broadcast and Accept provide us a pair of
+  communication primitives.
+
 Figure 1 -- The broadcast primitive. Pure mechanics.  The ">" on the
 echo rows is the proofs' relation, not the figure's (NOTE below).
 
@@ -246,8 +260,8 @@ Key properties from the paper:
   Termination: proved in the Theorem 2 termination paragraph quoted
   below.
 
-Section 5 proofs -- Lemma 9, Lemma 10, and the agreement and
-termination paragraphs of Theorem 2 (pp. 138-140, verbatim, checked
+Section 5 proofs -- Lemma 9, Lemma 10, and Theorem 2 with its
+statement and proof (pp. 138-140, verbatim, checked
 against the page images.  The scan confuses u and v throughout, and
 reads "Zf" for If, "decide D" for decide v, "(n - r)/2" for
 (n - t)/2, "3r -t- 3" for 3r + 3, "Considei" for Consider, "u," for
@@ -287,9 +301,14 @@ the repeated "message" in the Lemma 10 statement are the paper's):
   while q validated an (s, 3r + 2, u) message. By Lemma 5, u = v.
 
 
-Theorem 2's proof, the agreement and termination paragraphs; its
-statement, the proof's opener and the validity paragraph are omitted:
+Theorem 2, its statement and proof (pp. 139-140):
 
+  Theorem 2. The protocol described in Figure 4 is a t-resilient
+  consensus protocol, for t < n/3.
+  Proof. We show that the protocol satisfies the validity, agreement,
+  and termination properties:
+  Validity. If all the processes start with value v then, by Lemma 9,
+  they all decide v.
   Agreement. Suppose, without loss of generality, that a correct
   process p decides 1 at round 3r + 3. Process p must have validated
   at least 2t + 1 messages with value (d, 1). By Lemma 6, every other

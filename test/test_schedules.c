@@ -15,7 +15,7 @@
  * ADVERSARY below), a violation of the papers' properties by a
  * well-formed Byzantine content within the bounds it prints.  It does
  * NOT touch the Byzantine-safety arguments for the READY retire gates
- * (README Implementation Note 16) -- those are the annotation forgery
+ * (README Implementation Note 13) -- those are the annotation forgery
  * tests' work.  Deliberate non-goals: message loss, patience above
  * zero, and coin branching.  The coin here is the examples'
  * deterministic phase%2, so every process gets the same value in
@@ -431,7 +431,7 @@
  *     initiator's value -- AND the ending claim itself, that every
  *     process's READY suppress mask covers all n.  Lemma 4 alone does
  *     not separate a machine that retired READY on the forbidden LOCAL
- *     accept (Notes 10/16) from one that closed the remote
+ *     accept (Notes 10/13) from one that closed the remote
  *     all-accepted gate: both quiesce and both accept the one value,
  *     because there is only one value under honest-no-loss.  The mask
  *     is what says whose evidence closed it.  Lemma 4 is sound AT A
@@ -1307,7 +1307,7 @@ explore(
          * mask reaches all n, READY retires with it, and a full
          * bracha87Fig1RetryStep pass owes nothing".  The 0 return
          * alone is the weaker fact -- a machine that retired READY at
-         * LOCAL accept (Notes 10/16, the forbidden gate) would
+         * LOCAL accept (Notes 10/13, the forbidden gate) would
          * also return 0, quiesce sooner, and still satisfy Lemma 4,
          * because every honest process here accepts the one value
          * either way.  What separates the two is WHOSE evidence closed
@@ -1358,7 +1358,7 @@ explore(
           }
         /* THE ENDING CLAIM, per owned Fig 1 instance -- checked, not
          * inferred from the Retry 0 return, the same distinction the
-         * surface-1 arm turns on (Notes 10/16): at quiescence a
+         * surface-1 arm turns on (Notes 10/13): at quiescence a
          * SENT instance is ECHOED (a never-echoed initiator can
          * retire INITIAL neither way -- ACCEPTED needs readySent
          * needs echoed, and all-echoed counts the initiator's own
@@ -1683,7 +1683,7 @@ explore(
       F1p = (struct bracha87Fig1 *)Img[Self];
 
       /* The caller-side forged-INITIAL filter (README Implementation
-       * Note 17): the bare Fig 1 entry is not told its designated
+       * Note 14): the bare Fig 1 entry is not told its designated
        * initiator, so a bare-layer caller must drop a non-initiator
        * INITIAL before it reaches the echo cascade. */
       if (KEY_FLD(key, KEY_TYPE_SH, 2) == BRACHA87_INITIAL

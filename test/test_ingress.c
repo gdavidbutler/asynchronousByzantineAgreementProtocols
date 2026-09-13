@@ -82,7 +82,7 @@
  *                              initiator -- from == process for an
  *                              A-Cast, from == initiator for a BA
  *                              (bracha87.h bracha87Fig1Input's INITIAL
- *                              sender obligation; README Note 17)
+ *                              sender obligation; README Note 14)
  *   act (Fig1Skip)             INITIAL_ALL / ECHO_ALL / READY_ALL
  *   annot                      NO DOMAIN.  "Only those two bits are
  *                              read, and only when type is
@@ -693,6 +693,10 @@ sweepAcs(
 
   a = (struct bkr94acs *)Img[SELF];
   poison = (unsigned char *)Acts;
+  /* the region's gosub returns re-enter the loops below; the cursors
+   * are live at every label, so they start defined */
+  j = 0;
+  k = 0;
 
   /*----------------------------------------------------------------*/
   /*  Region A -- bkr94acsAcastInput.  Baseline is a legal ECHO from  */

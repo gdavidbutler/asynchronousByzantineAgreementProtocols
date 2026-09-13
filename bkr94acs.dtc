@@ -108,7 +108,7 @@ no,"BA_j outputs 1",
 # baDecision[] and entered[] (never stored):
 #
 #   HELD      - BA-output-1 count < n-t.  The floor (the paper's is
-#               2t+1 -- Implementation Note 18): enter 0 below it
+#               2t+1 -- Implementation Note 15): enter 0 below it
 #               and a mass of 0-inputs could force SubSet empty.
 #               Elapsed patience is irrelevant.
 #   TOLERANCE - count >= n-t and unentered BAs remain.  Enabled.
@@ -187,7 +187,7 @@ no,"BA_j outputs 1",
 # Rule 3.  Upon any BA_j outputting, if all n BAs have now
 # output a value, output SubSet := { j : BA_j had output 1 }.
 # BKR94 Lemma 2 Part A guarantees |SubSet| >= 2t+1, and n-t here
-# (the two coincide only at n = 3t+1; see Implementation Note 18);
+# (the two coincide only at n = 3t+1; see Implementation Note 15);
 # Part C guarantees cross-process agreement on SubSet; Part D
 # guarantees Q(j) = 1 for every j in SubSet.  The "all n BAs"
 # threshold can only be reached once per ACS instance (each BA

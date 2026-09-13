@@ -253,7 +253,7 @@ static int
 runAcs(
   unsigned int n
  ,unsigned int t
- ,const char acasts[][MAX_VLEN]
+ ,char acasts[][MAX_VLEN]
  ,unsigned int vLen
  ,unsigned int shuffleSeed
  ,struct acsResult results[]
@@ -266,7 +266,7 @@ runAcs(
   sz = bkr94acsSz(n - 1, vLen - 1, MAX_PHASES);
   memset(processes, 0, sizeof (processes));
   for (i = 0; i < n; ++i) {
-    processes[i] = (struct bkr94acs *)calloc(1, sz);
+    processes[i] = calloc(1, sz);
     if (!processes[i]) {
       for (j = 0; j < i; ++j)
         free(processes[j]);
@@ -293,7 +293,7 @@ runAcs(
   while (Qhead < Qtail) {
     struct msg *m;
     struct bkr94acs *st;
-    struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+    struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
     unsigned int nacts;
     unsigned int nfan;
     unsigned int k;
@@ -635,7 +635,7 @@ testValues(
 
   sz = bkr94acsSz(n - 1, vLen - 1, MAX_PHASES);
   for (i = 0; i < n; ++i) {
-    processes[i] = (struct bkr94acs *)calloc(1, sz);
+    processes[i] = calloc(1, sz);
     bkr94acsInit(processes[i], (unsigned char)(n - 1), (unsigned char)t,
                  (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i,
                  testCoin, 0);
@@ -651,7 +651,7 @@ testValues(
   while (Qhead < Qtail) {
     struct msg *m;
     struct bkr94acs *st;
-    struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+    struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
     unsigned int nacts;
     unsigned int k;
 
@@ -879,7 +879,7 @@ testPostDecideContinuation(
 ){
   struct bkr94acs *a;
   unsigned long sz;
-  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
   unsigned int nacts;
   unsigned int N;
   unsigned int k;
@@ -893,7 +893,7 @@ testPostDecideContinuation(
   encN = 3;  /* actual N = 4 */
   t = 1;
   sz = bkr94acsSz(encN, 0, MAX_PHASES);
-  a = (struct bkr94acs *)calloc(1, sz);
+  a = calloc(1, sz);
   if (!a) {
     check("alloc bkr94acs instance", 0);
     return;
@@ -1012,7 +1012,7 @@ testStepTwoTrigger(
 ){
   struct bkr94acs *a;
   unsigned long sz;
-  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
   unsigned int nacts;
   unsigned int k;
   unsigned int N;
@@ -1033,7 +1033,7 @@ testStepTwoTrigger(
   val = 'x';
 
   sz = bkr94acsSz(encN, 0, MAX_PHASES);
-  a = (struct bkr94acs *)calloc(1, sz);
+  a = calloc(1, sz);
   if (!a) {
     check("alloc bkr94acs instance", 0);
     return;
@@ -1150,7 +1150,7 @@ testBpr(
 
   /* n=4, t=1, vLen=1, maxPhases=4, self=0 */
   sz = bkr94acsSz(3, 0, 4);
-  a = (struct bkr94acs *)calloc(1, sz);
+  a = calloc(1, sz);
   bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
 
   /* Retry on a virgin instance: no sent state -> idle */
@@ -1192,7 +1192,7 @@ testBpr(
    * retiring at local ECHOED would strand a process that missed the
    * bootstrap (Note 11). */
   {
-    struct bkr94acsAct iout[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct iout[BKR94ACS_MAX_ACTS(3)];
     bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, ANNOT_NO_ARM, 0, val, iout);
   }
 
@@ -1273,7 +1273,7 @@ testBpr(
 
     sz = bkr94acsSz(3, 0, MAX_PHASES);
     for (p = 0; p < 4; ++p) {
-      processes[p] = (struct bkr94acs *)calloc(1, sz);
+      processes[p] = calloc(1, sz);
       bkr94acsInit(processes[p], 3, 1, 0, MAX_PHASES, (unsigned char)p,
                    testCoin, 0);
       bracha87RetryInit(&processRetry[p]);
@@ -1285,7 +1285,7 @@ testBpr(
     /* Bootstrap: each process A-Casts its value (binary 0 or 1
      * for this test; acasts[] strings reduce to first byte). */
     for (p = 0; p < 4; ++p) {
-      struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
+      struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(3)];
       unsigned int nAct;
       unsigned char acastVal;
 
@@ -1315,7 +1315,7 @@ testBpr(
       /* Drain network */
       while (Qhead < Qtail) {
         struct msg *m;
-        struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4)];
+        struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(3)];
         unsigned int nacts;
         unsigned int k;
 
@@ -1455,7 +1455,7 @@ testBprCursorCoverage(
 
   sz = bkr94acsSz(3, 0, 4);
   for (p = 0; p < 4; ++p) {
-    processes[p] = (struct bkr94acs *)calloc(1, sz);
+    processes[p] = calloc(1, sz);
     bkr94acsInit(processes[p], 3, 1, 0, 4, (unsigned char)p, testCoin, 0);
   }
 
@@ -1469,7 +1469,7 @@ testBprCursorCoverage(
    * A-Cast Fig1s on subsequent calls. */
   val[0] = 1;
   for (p = 0; p < 4; ++p) {
-    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(3)];
     bkr94acsAcast(processes[p], val, iact);
   }
 
@@ -1477,7 +1477,7 @@ testBprCursorCoverage(
    * acastF1(j) for j=1..3 fires Rule 1 (ECHOED).  Process 0's
    * acastF1(0) is already INITIATOR (via A-Cast). */
   for (p = 1; p < 4; ++p) {
-    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(3)];
     bkr94acsAcastInput(processes[0], (unsigned char)p, BRACHA87_INITIAL,
                           ANNOT_NO_ARM,
                           (unsigned char)p, val, iact);
@@ -1533,7 +1533,7 @@ testAcastAllEchoed(
   void
 ){
   struct bkr94acs *a;
-  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4)];
+  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(3)];
   unsigned char val[1];
   unsigned long sz;
   unsigned int from;
@@ -1541,7 +1541,7 @@ testAcastAllEchoed(
   printf("\n  bkr94acsAcastAllEchoed:\n");
 
   sz = bkr94acsSz(3, 0, 4);
-  a = (struct bkr94acs *)calloc(1, sz);
+  a = calloc(1, sz);
   if (!a) {
     check("alloc bkr94acs instance", 0);
     return;
@@ -1592,7 +1592,7 @@ testAcastAllEchoedLate(
   void
 ){
   struct bkr94acs *a;
-  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4)];
+  struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(3)];
   unsigned char val[1];
   unsigned long sz;
   unsigned int nact;
@@ -1694,7 +1694,7 @@ testBprProcessGate(
   printf("\n  BPR retry-process gate:\n");
 
   sz = bkr94acsSz(3, 0, 4);
-  a = (struct bkr94acs *)calloc(1, sz);
+  a = calloc(1, sz);
   bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
   bracha87RetryInit(&retry);
 
@@ -1703,7 +1703,7 @@ testBprProcessGate(
    * Process 1: feed INITIAL from process 1 (ECHOED via Rule 1). */
   val[0] = 1;
   {
-    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(3)];
     bkr94acsAcast(a, val, iact);
     bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, ANNOT_NO_ARM, 0, val, iact);
     bkr94acsAcastInput(a, 1, BRACHA87_INITIAL, ANNOT_NO_ARM, 1, val, iact);
@@ -1789,7 +1789,7 @@ testBaEnteredGetValid(
   void
 ){
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   unsigned char senders[4];
   unsigned char values[4];
   unsigned char val[1];
@@ -2028,7 +2028,7 @@ testBaEnteredGetValid(
 
 /*--------------------------------------------------------------------------*/
 /*  Step 2's floor is n-t decided-1 outcomes, where BKR94 Figure 3 writes   */
-/*  2t+1 (Implementation Note 18).  At n = 3t+1 the two are one integer,    */
+/*  2t+1 (Implementation Note 15).  At n = 3t+1 the two are one integer,    */
 /*  and in a lossless all-honest run every BA is entered by step 1 before   */
 /*  any decides, so bkr94acsFanoutDuty answers MET without reaching the     */
 /*  comparison.  This arm sits at n=5, t=1 (n-t = 4, 2t+1 = 3) with every   */
@@ -2060,6 +2060,27 @@ testFanoutFloorAboveEdge(
   check("fanout floor: four decided-1 at n=5 t=1 (n-t) reads TOLERANCE",
         bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_TOLERANCE);
   free(a);
+
+  /* n=8 t=2: the paper's 2t+1 is 5, n-t is 6 -- one above the edge
+   * at the next t. */
+  sz = bkr94acsSz(7, 0, 4);
+  a = calloc(1, sz);
+  if (!a) {
+    check("testFanoutFloorAboveEdge alloc (n=8)", 0);
+    return;
+  }
+  bkr94acsInit(a, 7, 2, 0, 4, 0, testCoin, 0);
+  testWriteDecision(a, 0, 1);
+  testWriteDecision(a, 1, 1);
+  testWriteDecision(a, 2, 1);
+  testWriteDecision(a, 3, 1);
+  testWriteDecision(a, 4, 1);
+  check("fanout floor: five decided-1 at n=8 t=2 (the paper's 2t+1) reads HELD",
+        bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_HELD);
+  testWriteDecision(a, 5, 1);
+  check("fanout floor: six decided-1 at n=8 t=2 (n-t) reads TOLERANCE",
+        bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_TOLERANCE);
+  free(a);
 }
 
 static void
@@ -2082,7 +2103,7 @@ testBprByzantineSilent(
   sz = bkr94acsSz(3, 0, MAX_PHASES);
   /* Allocate honest processes + a Byzantine slot for index symmetry */
   for (p = 0; p < 4; ++p) {
-    processes[p] = (struct bkr94acs *)calloc(1, sz);
+    processes[p] = calloc(1, sz);
     bkr94acsInit(processes[p], 3, 1, 0, MAX_PHASES, (unsigned char)p,
                  testCoin, 0);
     bracha87RetryInit(&processRetry[p]);
@@ -2095,7 +2116,7 @@ testBprByzantineSilent(
    * and never sends anything. */
   val = 1;
   for (p = 0; p < 3; ++p) {
-    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(3)];
     bkr94acsAcast(processes[p], &val, iact);
     for (q = 0; q < 4; ++q) {
       dropSeed = dropSeed * 1103515245u + 12345u;
@@ -2124,7 +2145,7 @@ testBprByzantineSilent(
     /* Drain network */
     while (Qhead < Qtail) {
       struct msg *m;
-      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4)];
+      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(3)];
       unsigned int nacts;
       unsigned int k;
 
@@ -2274,7 +2295,7 @@ runRetryOnlyE2e(
 
   sz = bkr94acsSz(3, 0, MAX_PHASES);
   for (p = 0; p < 4; ++p) {
-    processes[p] = (struct bkr94acs *)calloc(1, sz);
+    processes[p] = calloc(1, sz);
     bkr94acsInit(processes[p], 3, 1, 0, MAX_PHASES, (unsigned char)p,
                  testCoin, 0);
     bracha87RetryInit(&processRetry[p]);
@@ -2285,7 +2306,7 @@ runRetryOnlyE2e(
 
   val = 1;
   for (p = 0; p < 4; ++p) {
-    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(3)];
     bkr94acsAcast(processes[p], &val, iact);
     for (q = 0; q < 4; ++q) {
       dropSeed = dropSeed * 1103515245u + 12345u;
@@ -2304,7 +2325,7 @@ runRetryOnlyE2e(
 
     while (Qhead < Qtail) {
       struct msg *m;
-      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(4)];
+      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(3)];
       unsigned int nacts;
       unsigned int k;
 
@@ -2513,7 +2534,7 @@ testExhausted(
 ){
   unsigned long sz;
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
   unsigned int round;
   unsigned int b;
   unsigned int exhaustedSeen;
@@ -2523,7 +2544,7 @@ testExhausted(
   printf("\n  EXHAUSTED handling:\n");
 
   sz = bkr94acsSz(3, 0, 1);  /* n=4 (encoded 3), vLen=1 (encoded 0), maxPhases=1 */
-  a = (struct bkr94acs *)calloc(1, sz);
+  a = calloc(1, sz);
   if (!a) {
     check("testExhausted alloc", 0);
     return;
@@ -2614,7 +2635,7 @@ testExhaustedAmongDecided(
 ){
   unsigned long sz;
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
   struct bkr94acsAct tout[BKR94ACS_RETRY_MAX_ACTS];
   unsigned int process;
   unsigned int round;
@@ -2631,7 +2652,7 @@ testExhaustedAmongDecided(
   printf("\n  EXHAUSTED with every other BA decided:\n");
 
   sz = bkr94acsSz(3, 0, 1);  /* n=4 (encoded 3), vLen=1 (encoded 0), 1 phase */
-  a = (struct bkr94acs *)calloc(1, sz);
+  a = calloc(1, sz);
   if (!a) {
     check("testExhaustedAmongDecided alloc", 0);
     return;
@@ -2782,7 +2803,7 @@ feedFig1AcceptNoTurn(
 ){
   unsigned char sender;
 
-  /* from == initiator, the only INITIAL the ingress binds (Note 17). */
+  /* from == initiator, the only INITIAL the ingress binds (Note 14). */
   if (sendInitial)
     (void)bkr94acsBaInput(a, process, round, initiator,
                           BRACHA87_INITIAL, ANNOT_NO_ARM, initiator, value, out);
@@ -2800,7 +2821,7 @@ testExhaustedAdoptBranch(
   static const unsigned char Round1[4] = { 0, 0, 0, 1 };
   unsigned long sz;
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
   struct bkr94acsAct tout[3];   /* bkr94acsTurn bound */
   unsigned char round2[4];
   unsigned char senders[4];
@@ -2815,7 +2836,7 @@ testExhaustedAdoptBranch(
   printf("\n  EXHAUSTED through the step 3 adopt branch:\n");
 
   sz = bkr94acsSz(3, 0, 1);  /* n=4 (encoded 3), vLen=1 (encoded 0), 1 phase */
-  if (!(a = (struct bkr94acs *)calloc(1, sz))) {
+  if (!(a = calloc(1, sz))) {
     check("testExhaustedAdoptBranch alloc", 0);
     return;
   }
@@ -2927,9 +2948,9 @@ testQuiescenceAfterExhausted(
 ){
   struct bkr94acs *processes[4];
   struct bracha87Retry cursor[4];
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
   struct bkr94acsAct tout[3];   /* bkr94acsTurn bound */
-  struct bkr94acsAct dout[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+  struct bkr94acsAct dout[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
   unsigned long sz;
   unsigned int exhausted[4];
   unsigned int quiesced[4];
@@ -2954,7 +2975,7 @@ testQuiescenceAfterExhausted(
   sz = bkr94acsSz(3, 0, 1);  /* n=4 (encoded 3), vLen=1 (encoded 0), 1 phase */
   memset(processes, 0, sizeof (processes));
   for (p = 0; p < 4; ++p)
-    if (!(processes[p] = (struct bkr94acs *)calloc(1, sz))) {
+    if (!(processes[p] = calloc(1, sz))) {
       check("testQuiescenceAfterExhausted alloc", 0);
       for (q = 0; q < 4; ++q)
         free(processes[q]);
@@ -3144,7 +3165,7 @@ testTurnDutyVacuityT0(
 ){
   unsigned long sz;
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
   unsigned char senders[4];
   unsigned char values[4];
   unsigned int tolerance;
@@ -3154,7 +3175,7 @@ testTurnDutyVacuityT0(
   printf("\n  TurnDuty TOLERANCE is empty at t=0:\n");
 
   sz = bkr94acsSz(3, 0, 1);  /* n=4 (encoded 3), vLen=1 (encoded 0), 1 phase */
-  if (!(a = (struct bkr94acs *)calloc(1, sz))) {
+  if (!(a = calloc(1, sz))) {
     check("testTurnDutyVacuityT0 alloc", 0);
     return;
   }
@@ -3273,7 +3294,7 @@ testAcastValueGate(
 ){
   struct bkr94acs *a;
   unsigned long sz;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   unsigned char val;
   unsigned char sender;
 
@@ -3281,7 +3302,7 @@ testAcastValueGate(
 
   /* n=4, t=1, vLen=1, self=0 */
   sz = bkr94acsSz(3, 0, MAX_PHASES);
-  a = (struct bkr94acs *)calloc(1, sz);
+  a = calloc(1, sz);
   if (!a) {
     check("AcastValueGate alloc", 0);
     return;
@@ -3385,7 +3406,7 @@ testBprSkipAccept(
   void
 ){
   struct bkr94acs *a;
-  struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(4)];
+  struct bkr94acsAct iact[BKR94ACS_MAX_ACTS(3)];
   struct bracha87Retry retry;
   unsigned char val[1];
   unsigned long sz;
@@ -3397,7 +3418,7 @@ testBprSkipAccept(
   check("ACCEPTED wire bit value is 0x10", BKR94ACS_ACCEPTED == 0x10);
 
   sz = bkr94acsSz(3, 0, 4);
-  a = (struct bkr94acs *)calloc(1, sz);
+  a = calloc(1, sz);
   bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);   /* self = 0 */
   bracha87RetryInit(&retry);
 
@@ -3453,7 +3474,7 @@ testBprSkipAccept(
 
 
 /*
- * Implementation Note 17: an INITIAL must come from the
+ * Implementation Note 14: an INITIAL must come from the
  * instance's designated initiator (process for acasts, initiator
  * for BA).  A non-initiator INITIAL is a forged broadcast and
  * must be dropped -- otherwise Rule 1 echoes it and the (n+t)/2+1 echo
@@ -3467,16 +3488,16 @@ testForgedInitial(
   void
 ){
   struct bkr94acs *a;
-  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
   unsigned long sz;
   unsigned char v;
   unsigned int n;
   unsigned char from;
 
-  printf("\n  Forged INITIAL rejection (Note 17):\n");
+  printf("\n  Forged INITIAL rejection (Note 14):\n");
 
   sz = bkr94acsSz(3, 0, MAX_PHASES);
-  a = (struct bkr94acs *)calloc(1, sz);
+  a = calloc(1, sz);
   if (!a) {
     check("ForgedInitial alloc", 0);
     return;
@@ -3535,7 +3556,7 @@ main(
   printf("bkr94acs test suite\n");
   printf("===================\n\n");
 
-  MsgQ = (struct msg *)calloc(MAX_MSGS, sizeof (struct msg));
+  MsgQ = calloc(MAX_MSGS, sizeof (struct msg));
   if (!MsgQ) {
     fprintf(stderr, "message queue allocation failed\n");
     return (1);

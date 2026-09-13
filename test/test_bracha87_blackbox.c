@@ -678,6 +678,86 @@ main(int argc, char **argv)
   }
 
   /* ---------------------------------------------------------------- */
+  BANNER("Fig1 delivery to self (BRACHA87_SKIP_TST: self is in the loop)");
+  /* ---------------------------------------------------------------- */
+  /* bracha87.h at BRACHA87_SKIP_TST: a process's own echo and ready   */
+  /* count only when they arrive back through bracha87Fig1Input with   */
+  /* from == self; sending sets the sent flags and nothing else.  At   */
+  /* n = 3t+1 the echo threshold (n+t)/2 + 1 equals the count of       */
+  /* correct processes, so with t silent, processes that withhold      */
+  /* self-delivery as a unit -- INITIAL, echo and ready -- never       */
+  /* reach it: the initiator never echoes and the rest stay below the  */
+  /* threshold, so no ready is ever sent and nobody accepts.  The same */
+  /* run with self delivered accepts everywhere.                       */
+  {
+    static const unsigned char V[1] = { 0x5A };
+    unsigned int withSelf;
+    for (withSelf = 0; withSelf < 2; ++withSelf) {
+      struct wire w;
+      unsigned int safety = 0;
+      unsigned int readys = 0;
+      qReset();
+      /* process 3 is Byzantine-silent: no machine, no deliveries */
+      for (i = 0; i < N_ACT - 1; ++i) {
+        processes[i] = (struct bracha87Fig1 *) fig1Storage[i];
+        bracha87Fig1Init(processes[i], N_ENC, T_VAL, VLEN_BIN);
+        accepted[i] = 0;
+      }
+      bracha87Fig1Initiator(processes[0], V);
+      for (i = withSelf ? 0 : 1; i < N_ACT - 1; ++i) {
+        memset(&w, 0, sizeof (w));
+        w.type = BRACHA87_INITIAL;
+        w.from = 0;
+        w.to = i;
+        w.value[0] = V[0];
+        qPush(&w);
+      }
+      while (qPopRandom(&w) && safety++ < 200000) {
+        struct bracha87Fig1 *b = processes[w.to];
+        act_count = bracha87Fig1Input(b, w.type, w.from, w.value, actions);
+        for (i = 0; i < act_count; ++i) {
+          unsigned char a = actions[i];
+          const unsigned char *cv = bracha87Fig1Value(b);
+          if (a == BRACHA87_READY_ALL)
+            ++readys;
+          if ((a == BRACHA87_ECHO_ALL || a == BRACHA87_READY_ALL) && cv) {
+            struct wire o;
+            unsigned int j;
+            for (j = 0; j < N_ACT - 1; ++j) {
+              if (j == w.to && !withSelf)
+                continue;
+              memset(&o, 0, sizeof (o));
+              o.type = (a == BRACHA87_ECHO_ALL) ? BRACHA87_ECHO : BRACHA87_READY;
+              o.from = w.to;
+              o.to = j;
+              o.value[0] = cv[0];
+              qPush(&o);
+            }
+          } else if (a == BRACHA87_ACCEPT) {
+            accepted[w.to] = 1;
+          }
+        }
+      }
+      CHECK(safety < 200000, "Self-delivery: sim bounded");
+      if (withSelf) {
+        for (i = 0; i < N_ACT - 1; ++i)
+          CHECK(accepted[i], "Self-delivery honored: every correct process accepts");
+      } else {
+        CHECK(readys == 0, "Self-delivery withheld: no READY is ever sent");
+        for (i = 0; i < N_ACT - 1; ++i) {
+          /* the initiator withheld its own INITIAL too, so only the
+           * two that received one echoed (Rule 1) */
+          CHECK(i == 0 || (processes[i]->flags & BRACHA87_F1_ECHOED) != 0,
+                "Self-delivery withheld: every INITIAL recipient echoed");
+          CHECK((processes[i]->flags & BRACHA87_F1_RDSENT) == 0,
+                "Self-delivery withheld: no process sent ready");
+          CHECK(!accepted[i], "Self-delivery withheld: no process accepts");
+        }
+      }
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
   BANNER("Fig1 Lemma 2: Byzantine equivocation -> agreement holds");
   /* ---------------------------------------------------------------- */
   /* Byzantine process 0 initiates and equivocates: sends (initial,A)   */

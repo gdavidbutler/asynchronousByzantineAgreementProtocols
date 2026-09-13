@@ -1,5 +1,5 @@
 /*
- * test/test_predicates.c -- paper-direct correspondence tests for the
+ * test/test_predicates.c -- subset-enumeration correspondence tests for the
  * three algorithmic predicates that sit below the .dtc layer in
  * bracha87.c: fig4Nfn (the protocol function N), fig3IsValid (the
  * VALID^k predicate), and the cascade in bracha87Fig3Accept.
@@ -9,8 +9,9 @@
  *   .dtc              -> compiled dispatch      dtc, exhaustive/exclusive
  *   C wrapper boundary I/O                      human inspection
  *   fig3IsValid, fig4Nfn, cascade               THIS FILE -- exhaustive
- *                                               enumeration vs paper-direct
- *                                               reference at bounded inputs
+ *                                               enumeration vs a subset-
+ *                                               enumeration reference at
+ *                                               bounded inputs
  *
  * Scope: n=4, t=1 (smallest interesting Bracha config); duration ~1s.
  *
@@ -38,7 +39,10 @@ check(const char *what, int cond) {
 }
 
 /* ----------------------------------------------------------------
- * Paper-direct fig4N reference, by explicit n-t subset enumeration.
+ * fig4N reference, by explicit n-t subset enumeration.  It applies the
+ * paper's per-subset rule under the library's two conventions -- the
+ * step-1 tie broken to 0, and the D_FLAG permission encoding -- so it
+ * is a second derivation, not the paper itself.
  *
  * Sub-round s of round k = 3i + s (0-based here; the paper's step
  * s+1 at its 1-based round 3i+s+1) applies one of three rules to
@@ -48,12 +52,13 @@ check(const char *what, int cond) {
  *   s=1: result := v|D_FLAG iff strictly more than half of n
  *                  inputs carry the same v; else "unchanged"
  *                  (each process keeps its prior value).
- *   s=2: result := dm iff strictly more than 2t inputs carry
- *                  (d, dm) for the same dm; else "adopt" (>t)
- *                  or "coin" (otherwise).
+ *   s=2: result := dm iff strictly more than t inputs carry
+ *                  (d, dm) for the same dm -- step 3 (i) decides dm
+ *                  above 2t and (ii) adopts dm above t, and both
+ *                  broadcast dm; else "coin".
  *
- * "Unchanged"/"adopt"/"coin" are non-deterministic across processes
- * and are reported as a paper-direct "no exact result for this
+ * "Unchanged"/"coin" are non-deterministic across processes
+ * and are reported as a "no exact result for this
  * subset" via a sentinel (rc < 0 from refSubset).
  *
  * fig4Nfn's contract:
@@ -70,7 +75,7 @@ check(const char *what, int cond) {
 
 /* Apply the per-subset rule.  Returns 0 + *r when the subset has
  * a deterministic paper output, or -1 when the rule is "unchanged"
- * (sub=1 no-majority) / "adopt-or-coin" (sub=2 no >2t decide). */
+ * (sub=1 no-majority) / "coin" (sub=2, no more than t (d, dm)). */
 static int
 refSubset(
   unsigned int sub
@@ -106,8 +111,8 @@ refSubset(
     return (-1); /* "unchanged" -- non-deterministic */
   case 2:
     dm = (dc[1] > dc[0]) ? 1 : 0;
-    if (dc[dm] > 2u * t) { *r = (unsigned char)dm; return (0); }
-    return (-1); /* "adopt" or "coin" -- non-deterministic */
+    if (dc[dm] > t) { *r = (unsigned char)dm; return (0); }
+    return (-1); /* "coin" -- non-deterministic */
   }
   return (-1);
 }
@@ -266,7 +271,7 @@ testFig4NfnCorrespondence(void) {
   printf("\nfig4Nfn correspondence (n=%d, t=%d, all sub-rounds):\n", NN, TT);
 
   sz = bracha87Fig4Sz(NN - 1, 10);
-  b = (struct bracha87Fig4 *)calloc(1, sz);
+  b = calloc(1, sz);
   bracha87Fig4Init(b, NN - 1, TT, 10, 0, 0, predCoin, 0);
   for (i = 0; i < NN; ++i) senders[i] = (unsigned char)i;
 
@@ -341,7 +346,7 @@ testFig4NfnCorrespondence(void) {
   }
 
   printf("  enumerated %u inputs, agreed on %u\n", total, agreed);
-  check("fig4Nfn matches paper-direct reference at all bounded inputs",
+  check("fig4Nfn matches the subset-enumeration reference at all bounded inputs",
         agreed == total);
   free(b);
 }
@@ -357,7 +362,7 @@ testFig4NfnCorrespondence(void) {
  *
  * We pre-populate VALID^0 by accepting round-0 messages, then for
  * every (sender, value) candidate at round 1 compare the observable
- * outcome of bracha87Fig3Accept (validCount delta) to a paper-direct
+ * outcome of bracha87Fig3Accept (validCount delta) to a subset-enumeration
  * subset-enumeration reference.
  * ---------------------------------------------------------------- */
 
@@ -457,7 +462,7 @@ testFig3IsValidCorrespondence(void) {
   /* k=0: trivially v in {0,1}.  Three test points: v=0, v=1, v=2. */
   for (v = 0; v <= 2; ++v) {
     int actual, ref;
-    b = (struct bracha87Fig3 *)calloc(1, sz);
+    b = calloc(1, sz);
     bracha87Fig3Init(b, NN - 1, TT, 5, testN, 0);
     actual = fig3IsValid(b, 0, v);
     ref    = (v <= 1);
@@ -481,7 +486,7 @@ testFig3IsValidCorrespondence(void) {
     for (s = 0; s < NN; ++s) { r0_assign[s] = (unsigned char)(x % 3); x /= 3; }
 
     /* Build Fig3 state: accept all non-absent r0_assign values at round 0. */
-    b = (struct bracha87Fig3 *)calloc(1, sz);
+    b = calloc(1, sz);
     bracha87Fig3Init(b, NN - 1, TT, 5, testN, 0);
     valid0Cnt = 0;
     for (s = 0; s < NN; ++s) {
@@ -509,14 +514,14 @@ testFig3IsValidCorrespondence(void) {
 
   printf("  enumerated %u predicate evaluations, agreed on %u\n",
          total, agreed);
-  check("fig3IsValid matches paper-direct reference at k in {0, 1}",
+  check("fig3IsValid matches the subset-enumeration reference at k in {0, 1}",
         agreed == total);
 }
 
 /* ----------------------------------------------------------------
  * Cascade correspondence: drive bracha87Fig3Accept through bounded
  * sequences with varying delivery order; final per-round VALID
- * bitmaps must match a paper-direct reference that re-validates
+ * bitmaps must match a subset-enumeration reference that re-validates
  * from scratch on each step.
  * ---------------------------------------------------------------- */
 
@@ -632,7 +637,7 @@ testCascadeCorrespondence(void) {
             order[4]=2; order[5]=6; order[6]=3; order[7]=7; break;
     }
 
-    b = (struct bracha87Fig3 *)calloc(1, sz);
+    b = calloc(1, sz);
     bracha87Fig3Init(b, NN - 1, TT, 5, testN, 0);
     for (i = 0; i < nMsg; ++i) {
       unsigned int j = order[i];
@@ -664,14 +669,14 @@ testCascadeCorrespondence(void) {
   }
 
   printf("  %u delivery permutations, agreed on %u\n", total, agreed);
-  check("Cascade reaches paper-direct fixed point under shuffled delivery",
+  check("Cascade reaches the reference's fixed point under shuffled delivery",
         agreed == total);
 }
 
 int
 main(void) {
   printf("=================================================\n");
-  printf("test_predicates: paper-direct correspondence\n");
+  printf("test_predicates: subset-enumeration correspondence\n");
   printf("=================================================\n");
 
   testFig4NfnCorrespondence();

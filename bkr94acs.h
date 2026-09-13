@@ -58,7 +58,7 @@
  * of the paper's t < n/3 regime; above it the two part company and
  * n-t is the larger.  n-t is the implementation threshold for all
  * supported (n, t) -- a paper-vs-code divergence recorded as
- * Implementation Note 18 in README.md.
+ * Implementation Note 15 in README.md.
  *
  * Step 2's "upon" is enabling evidence in the paper's asynchronous
  * model (unbounded finite delay, no clocks), not a moment: the
@@ -788,7 +788,7 @@ bkr94acsRetryStep(
  * entered set; nothing stored):
  *   HELD       BA-output-1 count < n-t: entering 0 is unsound
  *              below the floor (Lemma 2 Part A's floor is 2t+1,
- *              this library's n-t -- Implementation Note 18).
+ *              this library's n-t -- Implementation Note 15).
  *   TOLERANCE  count holds and unentered BAs remain: each delayed
  *              A-Cast that completes inside the patience window
  *              enters 1 by Step 1 and leaves the unentered set.
@@ -1053,7 +1053,7 @@ bkr94acsAcastSkip(
  * evidence -- a sent Fig1 retires its READY only when its
  * accepted-process bitmap (bracha87Fig1Received) covers all n -- while
  * the retry's 0 return is the weaker derived fact: a machine that
- * retired READY on the forbidden LOCAL accept (Notes 10/16) also
+ * retired READY on the forbidden LOCAL accept (Notes 10/13) also
  * returns 0, sooner.  A caller or instrument that CHECKS the
  * claim rather than infers it reads the instance: bracha87Fig1Value
  * non-null is the sent test (both ready paths require ECHOED, so

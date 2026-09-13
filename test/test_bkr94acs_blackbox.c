@@ -497,7 +497,7 @@ runHonest(
   qReset();
 
   actsCap = BKR94ACS_MAX_ACTS(nAct - 1);
-  out = (struct bkr94acsAct *)malloc(actsCap * sizeof (*out));
+  out = malloc(actsCap * sizeof (*out));
   if (!out)
     return (-1);
 
@@ -629,7 +629,7 @@ allocCluster(
 
   sz = bkr94acsSz(nAct - 1, vLenEnc, maxPhases);
   for (i = 0; i < nAct; ++i) {
-    processes[i] = (struct bkr94acs *)calloc(1, sz);
+    processes[i] = calloc(1, sz);
     if (!processes[i])
       return (-1);
     bkr94acsInit(processes[i],
@@ -705,7 +705,7 @@ runWithRetry(
   }
 
   actsCap = BKR94ACS_MAX_ACTS(nAct - 1);
-  out = (struct bkr94acsAct *)malloc(actsCap * sizeof (*out));
+  out = malloc(actsCap * sizeof (*out));
   if (!out)
     return (-1);
 
@@ -2387,7 +2387,7 @@ main(
     sz = bkr94acsSz(3, 0, 10);
     CHECK(sz > 0, "Sz returns nonzero");
 
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     CHECK(a != 0, "alloc cluster");
     if (!a) goto a1_done;
 
@@ -2505,7 +2505,7 @@ main(
     unsigned int n;
 
     sz = bkr94acsSz(3, 0, 10);
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto a2_done;
     bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
 
@@ -2546,7 +2546,7 @@ main(
     struct bkr94acs *a;
     unsigned char dv[1];
     struct bkr94acsAct dout[3];  /* A-Cast wants 1, Turn wants 3 */
-    struct bkr94acsAct fout[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct fout[BKR94ACS_MAX_ACTS(3)];
     struct bkr94acsAct rout[BKR94ACS_RETRY_MAX_ACTS];
     struct bracha87Retry cur;
     unsigned char procs[4];
@@ -2564,7 +2564,7 @@ main(
     CHECK(bkr94acsTurn(0, 0, 1, dout) == 0, "Turn(NULL a): 0");
 
     sz = bkr94acsSz(3, 0, 10);
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto a4_done;
     bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
 
@@ -2596,12 +2596,12 @@ main(
   a4_done: ;
 
   /* ---------------------------------------------------------------- */
-  BANNER("A5: forged INITIAL rejection (Note 17)");
+  BANNER("A5: forged INITIAL rejection (Note 14)");
   /* ---------------------------------------------------------------- */
   {
     unsigned long sz;
     struct bkr94acs *a;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     unsigned char v[1];
     unsigned int n;
 
@@ -2613,7 +2613,7 @@ main(
      * from any sender remain valid.  n=4, t=1, self=0.
      */
     sz = bkr94acsSz(3, 0, 10);
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto a5_done;
     bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
 
@@ -2844,7 +2844,7 @@ main(
 
     (void)t;
     sz = bkr94acsSz(nAct - 1, vLen - 1, mp);
-    p0 = (struct bkr94acs *)calloc(1, sz);
+    p0 = calloc(1, sz);
     if (!p0) goto b6_done;
     bkr94acsInit(p0, (unsigned char)(nAct - 1), 1, (unsigned char)(vLen - 1),
                  (unsigned char)mp, 0, testCoin, 0);
@@ -3095,14 +3095,14 @@ main(
      */
     unsigned long sz;
     struct bkr94acs *a;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     unsigned char v[1];
     const unsigned char *m;
     unsigned int nact;
     unsigned int late;
 
     sz = bkr94acsSz(3, 0, 4);
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto b8_done;
     bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
     v[0] = 1;
@@ -3339,7 +3339,7 @@ main(
     unsigned int j, n;
 
     sz = bkr94acsSz(3, 0, 10);
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto c1_done;
     bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
 
@@ -3374,7 +3374,7 @@ main(
     int sawSelfInitial = 0;
 
     sz = bkr94acsSz(3, 0, 10);
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto c2_done;
     bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
 
@@ -3455,7 +3455,7 @@ main(
     unsigned int zeros = 0;
 
     sz = bkr94acsSz(3, 0, 10);
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto c5_done;
     bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
 
@@ -3606,7 +3606,7 @@ main(
         acasts[i * vLen] = (unsigned char)(0xA0 + i);
 
       actsCap = BKR94ACS_MAX_ACTS(n - 1);
-      out = (struct bkr94acsAct *)malloc(actsCap * sizeof (*out));
+      out = malloc(actsCap * sizeof (*out));
       if (out) {
         qReset();
         for (i = 0; i < n; ++i)
@@ -3721,12 +3721,12 @@ main(
      * forever -- the round space is consumed). */
     unsigned long sz;
     struct bkr94acs *a;
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
     unsigned int round, b, n, k;
     unsigned int exhaustedSeen = 0;
 
     sz = bkr94acsSz(3, 0, 1);   /* n=4, vLen=1, maxPhases=1 */
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto d1_done;
     bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
 
@@ -3776,13 +3776,13 @@ main(
     struct bkr94acs *a;
     struct bracha87Retry cursor;
     struct bkr94acsAct out[BKR94ACS_RETRY_MAX_ACTS];
-    struct bkr94acsAct synthOut[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+    struct bkr94acsAct synthOut[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
     unsigned int round, b, j, k, n;
     unsigned int exhaustedSeen = 0;
     unsigned int process0Retries = 0;
 
     sz = bkr94acsSz(3, 0, 1);
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto d2_done;
     bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
 
@@ -3859,7 +3859,7 @@ main(
       qReset();
 
       actsCap = BKR94ACS_MAX_ACTS(n - 1);
-      out = (struct bkr94acsAct *)malloc(actsCap * sizeof (*out));
+      out = malloc(actsCap * sizeof (*out));
       if (!out) { freeCluster(processes, n); goto e1_done; }
 
       for (i = 0; i < n; ++i)
@@ -4091,7 +4091,7 @@ main(
   /* ---------------------------------------------------------------- */
   {
     struct bracha87Retry cursors[4];
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     struct bkr94acsAct acastOut[1];
     struct wire w;
     unsigned int tolSweeps, fanActs;
@@ -4521,7 +4521,7 @@ main(
     unsigned int n, k;
 
     sz = bkr94acsSz(3, 0, 8);
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto g2_done;
     bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
 
@@ -4571,7 +4571,7 @@ main(
     unsigned int n, k;
 
     sz = bkr94acsSz(3, 0, 8);
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto g3_done;
     bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
 
@@ -4654,7 +4654,7 @@ main(
     struct bkr94acs *processes[MAX_PROCESSES];
     struct processObs obs[MAX_PROCESSES];
     struct bracha87Retry cursors[MAX_PROCESSES];
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(4)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
     struct bkr94acsAct acastOut[1];
     unsigned char acasts[4];
     struct wire w;
@@ -4771,7 +4771,7 @@ main(
   BANNER("H2: the annotation ingress contracts, now on the Input entries");
   {
     struct bkr94acs *processes[MAX_PROCESSES];
-    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES)];
+    struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
     unsigned char val[1];
 
     if (allocCluster(processes, 4, 1, 0, 4) == 0) {
@@ -6116,7 +6116,7 @@ main(
 
     /* -- TurnDuty, the state-transition form ------------------------ */
     sz = bkr94acsSz(3, 0, 8);
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto n2_done;
     bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
 
@@ -6143,7 +6143,7 @@ main(
     free(a);
 
     /* -- FanoutDuty, the same form ---------------------------------- */
-    a = (struct bkr94acs *)calloc(1, sz);
+    a = calloc(1, sz);
     if (!a) goto n2_done;
     bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
 
@@ -6169,7 +6169,7 @@ main(
      * results and the duty vector over all n BAs must be the same at
      * every cadence: nothing a query does can be state. */
     for (ki = 0; ki < sizeof (ks) / sizeof (ks[0]); ++ki) {
-      a = (struct bkr94acs *)calloc(1, sz);
+      a = calloc(1, sz);
       if (!a) goto n2_done;
       bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
 
@@ -6815,13 +6815,11 @@ main(
     unsigned int lane;
     unsigned int laneServed[2];
     unsigned int laneComplete[2];
-    unsigned int laneArms[2];
     unsigned int laneAimed[2];
 
     for (lane = 0; lane < 2; ++lane) {
     laneServed[lane] = 0;
     laneComplete[lane] = 0;
-    laneArms[lane] = 0;
     laneAimed[lane] = 0;
     if (allocCluster(processes, 4, 1, 0, 2) == 0) {
       pReset();
@@ -6935,7 +6933,6 @@ main(
               "P3: lane 0 announced accepts it did not hold");
       laneServed[lane] = served;
       laneComplete[lane] = complete;
-      laneArms[lane] = PArmsSent;
       laneAimed[lane] = PAimedAtForger;
 
       sz0 = bkr94acsSubset(processes[0], subset0);

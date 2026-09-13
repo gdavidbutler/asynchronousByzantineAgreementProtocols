@@ -1203,8 +1203,9 @@ bracha87Fig3RoundComplete(
  * Round 3i   (sub 0): v = majority of the n-t values (tie-breaks to 0,
  *                     matching Fig4Round's state transition)
  * Round 3i+1 (sub 1): v = (d, v') if >n/2 agree, else v unchanged
- * Round 3i+2 (sub 2): decide/adopt/coin (deterministic only when
- *                     >2t d-messages hold across every n-t subset)
+ * Round 3i+2 (sub 2): decide/adopt/coin (deterministic when >t
+ *                     d-messages hold across every n-t subset: step
+ *                     3 (i) and (ii) both yield dm; only (iii) is free)
  *
  * Permissive *result encoding: the D_FLAG bit conveys whether a
  * D-flagged incoming value can be legitimately produced by some
@@ -1317,11 +1318,17 @@ fig4Nfn(
      * case (ii), or coin from case (iii) -- none carry D_FLAG).
      *
      * Input S is the round 3i+2 messages (step-2 outputs, which may
-     * carry D_FLAG).  Exact result only when case (i) holds across
-     * every n-t subset: dc[dm] - excess > 2t.  Otherwise the output
-     * depends on the process's own (d,v) set and/or a coin, so permissive.
+     * carry D_FLAG).  Step 3 (i) decides dm on more than 2t (d,dm)
+     * and (ii) adopts dm on more than t; both broadcast dm, so the
+     * result is exact whenever every n-t subset holds more than t:
+     * dc[dm] - excess > t.  Otherwise some subset reaches (iii), the
+     * coin, and either value is producible, so permissive.  That
+     * reading rests on dc[1-dm] being 0: case 1 marks D_FLAG
+     * legitimate only for a base with more than n/2 of the round
+     * 3i+1 set, and counts only grow, so no second base can ever be
+     * marked and no (d, 1-dm) is ever validated.
      *
-     * Invariant: excess <= t and dc[dm] > 2t together imply
+     * Invariant: excess <= t and dc[dm] > t together imply
      * dc[dm] > excess, so the unsigned subtraction below does not
      * wrap.  Removing the outer guard would break that invariant.
      */
@@ -1331,12 +1338,12 @@ fig4Nfn(
 
       dm = (dc[1] > dc[0]) ? 1 : 0;
       excess = (n_msgs > nt) ? n_msgs - nt : 0;
-      if (dc[dm] > 2u * f4->t) {
+      if (dc[dm] > f4->t) {
         /*
-         * dc[dm] > 2t and excess <= t together guarantee
+         * dc[dm] > t and excess <= t together guarantee
          * dc[dm] > excess, so the subtraction cannot wrap.
          */
-        if (dc[dm] - excess > 2u * f4->t) {
+        if (dc[dm] - excess > f4->t) {
           *result = dm;
           return (0);
         }

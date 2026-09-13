@@ -696,7 +696,7 @@ bkr94acsSubset(
   /*
    * BKR94 Step 3 read: SubSet_i = { j : BA_j had output 1 }.
    * Lemma 2 Part A gives |SubSet| >= 2t+1, and >= n-t here (they
-   * coincide only at n = 3t+1; Implementation Note 18); Part C gives
+   * coincide only at n = 3t+1; Implementation Note 15); Part C gives
    * cross-process agreement on SubSet; Part D gives Q(j)=1 for every
    * j in SubSet.  Caller must gate this on a->complete to
    * observe the final subset; a mid-run read reports the partial
@@ -1041,7 +1041,7 @@ bkr94acsFanout(
     return (0);
   /*
    * The TOLERANCE guard is the floor: below the n-t BA-output-1
-   * count (the paper's is 2t+1, Implementation Note 18), entering 0
+   * count (the paper's is 2t+1, Implementation Note 15), entering 0
    * is unsound (a mass of 0-inputs could force SubSet empty).  At
    * MET nothing is unentered and the loop below would output
    * nothing; returning early keeps the call cheap for a caller that

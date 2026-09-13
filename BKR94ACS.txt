@@ -17,6 +17,19 @@ n players (processors), fully connected asynchronous network, up to
 t Byzantine faults. The MPC construction targets optimal resilience
  t < n/3 (i.e. n >= 3t + 1).
 
+Channel and adversary model, verbatim (Section 2, "The Model", p. 185):
+
+  Our model consists of a fully connected, asynchronous network of n
+  players. Every two players are connected via a secure and reliable
+  channel of communication. That is, each message sent on such a
+  channel cannot be heard by other players, and is guaranteed to
+  arrive at its destination. However, each message may have an
+  arbitrary (finite) delay.
+  Up to t of the players may become faulty at any time during the
+  run of the protocol. The faulty players may deviate from their
+  protocols, and collaborate in order to reveal private data of
+  honest players, and even to disrupt the computation.
+
 Channel and adversary model (paper Section 2): every two players are
 connected by a secure and reliable channel -- a message on it cannot
 be heard by other players, is guaranteed to arrive, and may be
@@ -32,14 +45,14 @@ Termination caveat, and where it does NOT attach: the paper notes its
 MPC (and the Canetti-Rabin 1993 AVSS it builds on) carries an
 exponentially small but non-zero probability of not terminating, and
 states that this is unavoidable for AVSS. The paper gives the bound
-two ways. Section 1: "if n < 4t then any t-resilient asynchronous
-verifiable secret sharing protocol A must have some probability qA > 0
-of not terminating", and "A sketch of the proof appears in Section 6."
+two ways. Section 1 (p. 185, the relation checked against the page
+image): "if n <= 4t then any t-resilient asynchronous verifiable secret
+sharing protocol A must have some probability qA > 0 of not
+terminating", and "A sketch of the proof appears in Section 6."
 Section 6 opens "In this section we prove that if n ~ 4i" -- the
-scan's tilde and "4i" -- and its sketch runs at "n = 4, t= 1", which
-is n = 4t, so the strict form would exclude the paper's own worked
-example. Read the Section 6 relation as n <= 4t, the bound the proof
-instantiates. That caveat attaches to the secret-sharing side, not to
+scan's tilde and "4i" for the same n <= 4t -- and its sketch runs at
+"n = 4, t= 1", which is n = 4t, the bound the proof instantiates.
+That caveat attaches to the secret-sharing side, not to
 ACS. The paper draws the contrast itself -- this "should be contrasted
 with the asynchronous Byzantine Agreement problem where the randomized
 protocol terminates with probability 1."
@@ -69,6 +82,33 @@ ACS takes one subprotocol as input:
 
 Problem setup
 -------------
+
+The Section 4 opener, verbatim (p. 187; the print sets n - t >= 2t + 1
+with a >= glyph, which the scan renders as a tilde; its minus is set
+here as a hyphen, its subscript P_j with an underscore, and the
+italic "honest" in the second paragraph is set plain):
+
+  During the computation stage, there are times that the players need
+  to decide on a subset of players, of size at least n - t >= 2t + 1,
+  that satisfy some property. It is known that all the honest players
+  will eventually satisfy this property, but some faulty players may
+  satisfy it as well. For example, the property may be that a player
+  has properly shared his input. The problem is that all the (honest)
+  players need to agree on the same subset.
+  Suppose there is a dynamic predicate Q, that assigns a binary value
+  to each player. By dynamic we mean that not all the players need to
+  be assigned at the same time. When a player P_j is assigned his
+  value, denoted as Q(j), it is guaranteed that all the players will
+  (eventually) learn to know this value. Furthermore, it is known that
+  all the honest players will (eventually) be assigned the value 1. In
+  this section we present a protocol that enables the players to agree
+  on a subset of size at least n - t of players for whom the predicate
+  is 1.
+  The idea is to execute a BA protocol for each player, to determine
+  whether it will be in the agreed set. That is, n BA protocols are
+  executed simultaneously, and each player enters his inputs to the
+  BAs asynchronously. (To save a log n factor of running the n BAs,
+  the techniques of [BOEY91] are employed).
 
 A dynamic predicate Q assigns a binary value to each player. "Dynamic"
 means not all players' values are assigned at the same time; when
