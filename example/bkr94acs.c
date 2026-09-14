@@ -144,10 +144,11 @@
  * lossless n = 4 run ends QUIESCENT at tick 297).
  *
  * So this number is slack for paths the demo does not exercise, kept
- * small rather than round because slack is paid at Init: bkr94acsSz
- * is O(N^2 * maxPhases * 3), allocated whether or not a phase is ever
- * entered, and the continuation runs every phase it buys.  A
- * deployment sizes this against the coin it supplies, and
+ * small rather than round because slack is paid at Init: the Fig 1
+ * instance space is O(N^2 * maxPhases * 3) and each instance is O(N)
+ * bytes, so bkr94acsSz grows as N^3 * maxPhases, allocated whether or
+ * not a phase is ever entered, and the continuation runs every phase
+ * it buys.  A deployment sizes this against the coin it supplies, and
  * demoCoin is precisely the coin no budget is right for -- agreed, so
  * it ends a phase, but predictable, so an adversary scheduling on it
  * can deny that ending.  There is no such adversary here.
