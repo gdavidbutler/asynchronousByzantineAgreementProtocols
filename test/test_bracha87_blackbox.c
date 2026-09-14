@@ -1640,14 +1640,16 @@ main(int argc, char **argv)
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("Fig4: a decided process keeps its decision under t < (d,v) <= 2t and ends its last phase without EXHAUSTED");
+  BANNER("Fig4: a decided process adopts under t < (d,v) <= 2t and ends its last phase without EXHAUSTED");
   /* ---------------------------------------------------------------- */
   /* Decide at phase 0 with > 2t (d,1), continue into phase 1, and at  */
   /* its step 3 validate exactly 2t (d,1): more than t, not more than  */
-  /* 2t.  A decided process must neither adopt, nor toss, nor change   */
-  /* its value, and when that is its last phase the round returns 0    */
-  /* rather than EXHAUSTED -- it has decided.  Pass 0 leaves the       */
-  /* sample without a base-value majority, pass 1 keeps one.           */
+  /* 2t.  Case (ii) fires as written and adopts 1, which is the        */
+  /* decision (Lemma 10: no correct process validates a (d, 0) in the  */
+  /* phase another validates a (d, 1)); no second DECIDE is output,    */
+  /* and when that is its last phase the round returns 0 rather than   */
+  /* EXHAUSTED -- it has decided.  Pass 0 leaves the sample without a  */
+  /* base-value majority, pass 1 keeps one.                            */
   {
     static unsigned char fig4Buf[32 * 1024];
     struct bracha87Fig4 *fig4 = (struct bracha87Fig4 *) fig4Buf;
@@ -1689,12 +1691,8 @@ main(int argc, char **argv)
             "decided arm: the last phase of a decided process returns 0, not EXHAUSTED");
       CHECK((fig4->flags & BRACHA87_F4_EXHAUSTED) == 0,
             "decided arm: no EXHAUSTED flag on a decided process");
-      /* dmax is 1 here, so an errant adopt would write the decision's
-       * own value and the sub-round-2 tail restores it regardless:
-       * this pins consistency, and the arm's discriminating check is
-       * the return code above. */
       CHECK(fig4->value == 1 && fig4->decision == 1,
-            "decided arm: t < (d,v) <= 2t leaves the decision in place");
+            "decided arm: t < (d,v) <= 2t adopts v, and v is the decision");
     }
   }
 
@@ -1731,86 +1729,93 @@ main(int argc, char **argv)
   }
 
   /* ---------------------------------------------------------------- */
-  BANNER("Fig4: a decided process holds its decision through samples with no >n/2 camp");
+  BANNER("Fig4: a decided process runs the figure unchanged, and a peer validates what it broadcasts");
   /* ---------------------------------------------------------------- */
-  /* Notes 1 and 9: a decided process keeps broadcasting and keeps its */
-  /* decision as the broadcast value, whatever later samples show.     */
-  /* Step 1 takes the sample's majority on no threshold at all, step 2 */
-  /* flags a >n/2 camp, step 3 takes the >2t or >t (d,v) count or      */
-  /* tosses; every one of them is suppressed once decided.  A sample   */
-  /* only WITNESSES that suppression when what the rule would have     */
-  /* written differs from the decision, so the sample below carries a  */
-  /* majority of 0 against a decision of 1 and no camp above n/2 -- at */
-  /* n = 4, t = 1 a 2-1 split of an n-t sample is no camp at all.  At  */
-  /* n = 4t+2 a decided process can also meet a >2t (d,v) count that   */
-  /* still carries no camp, which the second half of the arm drives.   */
+  /* Figure 4 has no decided state: case (i) reads "decision_p :=      */
+  /* value_p := v" and every case ends "Go to round 1 of phase i+1",   */
+  /* so a decided process plays the next phase exactly as an undecided */
+  /* one does -- step 1 the majority, step 2 (d, v), step 3 v again -- */
+  /* and DECIDE is the once-only OUTPUT (bracha87Fig4Round).  Theorem  */
+  /* 2's Agreement proof consumes that: an undecided q that adopted v  */
+  /* at case (ii) decides at phase r+1 on 2t+1 (d, v) messages, and    */
+  /* the decided processes' are among them.  The samples below are the */
+  /* ones Lemma 9 presents to every correct process after a decision   */
+  /* (all v, then all (d, v)), and the peer's Fig 3 is the judge of    */
+  /* what the decided process broadcasts: at round 3i+2 more than n/2  */
+  /* agree, so N demands (d, v) and a bare v is what no correct        */
+  /* process could have sent.                                          */
   {
     static unsigned char fig4Buf[64 * 1024];
+    static unsigned char peerBuf[64 * 1024];
     struct bracha87Fig4 *fig4 = (struct bracha87Fig4 *) fig4Buf;
-    unsigned char values[6];
+    struct bracha87Fig4 *peer = (struct bracha87Fig4 *) peerBuf;
+    unsigned char values[N_ACT];
+    unsigned char bcast[9];
     unsigned int nact;
+    unsigned int vc;
     unsigned int r;
+    unsigned int p;
 
-    sz = bracha87Fig4Sz(N_ENC, 4);
-    CHECK(sz <= sizeof (fig4Buf), "fig4Buf size for the split-sample arm");
-    bracha87Fig4Init(fig4, N_ENC, T_VAL, 4, 0, 0, testCoinAlt, 0);
+    sz = bracha87Fig4Sz(N_ENC, 3);
+    CHECK(sz <= sizeof (fig4Buf), "fig4Buf size for the figure-unchanged arm");
+    bracha87Fig4Init(fig4, N_ENC, T_VAL, 3, 1, 0, testCoinAlt, 0);
+    bcast[0] = 1;
     values[0] = values[1] = values[2] = 1;
     (void) bracha87Fig4Round(fig4, 0, 3, values);
+    bcast[1] = fig4->value;
     (void) bracha87Fig4Round(fig4, 1, 3, values);
+    bcast[2] = fig4->value;
     values[0] = values[1] = values[2] = 1 | BRACHA87_D_FLAG;
     nact = bracha87Fig4Round(fig4, 2, 3, values);
+    bcast[3] = fig4->value;
     CHECK(nact == (BRACHA87_DECIDE | BRACHA87_BROADCAST)
-          && fig4->decision == 1,
-          "split-sample arm: decided 1 at the end of phase 0");
+          && fig4->decision == 1 && fig4->value == 1,
+          "figure-unchanged arm: decided 1 at the end of phase 0, value v");
 
-    /* Phases 1 and 2, every sub-round on a 2-1 split carrying a
-     * majority of 0 against this decision of 1, and no d-flags at
-     * all.  Nothing here may move the decision or the value the
-     * process broadcasts, and every suppressed rule would write
-     * something else: step 1 the majority 0, step 2 0|D_FLAG, step 3
-     * the coin.  Both phases are played because the coin is the one
-     * that agrees half the time -- testCoinAlt answers the phase
-     * parity, so phase 1 would answer 1 and phase 2 0. */
-    values[0] = 0;
-    values[1] = 0;
-    values[2] = 1;
+    /* Phases 1 and 2 on the Lemma 9 trajectory.  Every rule fires as
+     * written; the value is v after steps 1 and 3 and (d, v) after
+     * step 2; DECIDE is never output a second time; the last phase
+     * ends in 0, never EXHAUSTED. */
     for (r = 3; r < 9; ++r) {
+      if (r % 3 == 2) {
+        values[0] = values[1] = values[2] = 1 | BRACHA87_D_FLAG;
+      } else {
+        values[0] = values[1] = values[2] = 1;
+      }
       nact = bracha87Fig4Round(fig4, (unsigned char) r, 3, values);
-      CHECK(nact == BRACHA87_BROADCAST,
-            "split-sample arm: a decided process keeps broadcasting");
+      if (r + 1 < 9)
+        bcast[r + 1] = fig4->value;
+      CHECK(nact == ((r == 8) ? 0 : BRACHA87_BROADCAST),
+            "figure-unchanged arm: a decided process keeps broadcasting to the end of the phase space");
       CHECK((fig4->flags & BRACHA87_F4_DECIDED)
             && (fig4->flags & BRACHA87_F4_EXHAUSTED) == 0,
-            "split-sample arm: DECIDED holds and EXHAUSTED stays clear");
-      CHECK(fig4->decision == 1 && fig4->value == 1,
-            "split-sample arm: no camp cannot drift a decided value");
+            "figure-unchanged arm: DECIDED holds and EXHAUSTED stays clear");
+      CHECK(fig4->decision == 1,
+            "figure-unchanged arm: the decision does not move");
+      CHECK(fig4->value == ((r % 3 == 1) ? (1 | BRACHA87_D_FLAG) : 1),
+            "figure-unchanged arm: step 2 sets (d, v) after a decision, steps 1 and 3 set v");
     }
 
-    /* n = 6, t = 1 -- the n = 4t+2 boundary.  A decided process meets
-     * a sample of five carrying three (d,1) and two 0: more than 2t
-     * flagged, and still no camp above n/2. */
-    sz = bracha87Fig4Sz(5, 4);
-    CHECK(sz <= sizeof (fig4Buf), "fig4Buf size for the n=6 split arm");
-    bracha87Fig4Init(fig4, 5, 1, 4, 0, 0, testCoinAlt, 0);
-    values[0] = values[1] = values[2] = values[3] = values[4] = 1;
-    (void) bracha87Fig4Round(fig4, 0, 5, values);
-    (void) bracha87Fig4Round(fig4, 1, 5, values);
-    values[0] = values[1] = values[2] = 1 | BRACHA87_D_FLAG;
-    values[3] = values[4] = 0;
-    nact = bracha87Fig4Round(fig4, 2, 5, values);
-    CHECK(nact == (BRACHA87_DECIDE | BRACHA87_BROADCAST)
-          && fig4->decision == 1,
-          "n=6 split arm: decided 1 without a base-value majority");
-    values[0] = values[1] = values[2] = values[3] = values[4] = 1;
-    (void) bracha87Fig4Round(fig4, 3, 5, values);
-    (void) bracha87Fig4Round(fig4, 4, 5, values);
-    values[0] = values[1] = values[2] = 1 | BRACHA87_D_FLAG;
-    values[3] = values[4] = 0;
-    nact = bracha87Fig4Round(fig4, 5, 5, values);
-    CHECK(nact == BRACHA87_BROADCAST,
-          "n=6 split arm: a decided process broadcasts through a second >2t (d,v)");
-    CHECK(fig4->decision == 1 && fig4->value == 1
-          && (fig4->flags & BRACHA87_F4_EXHAUSTED) == 0,
-          "n=6 split arm: the second >2t (d,v) leaves the decision in place");
+    /* A peer's Fig 3 fed the decided process's own broadcasts as three
+     * senders (after p's decision every correct process is on the same
+     * trajectory, Lemma 9): the round-5 (d, 1) validates and the round
+     * completes.  A bare 1 at round 5 from a fourth sender is what no
+     * correct process sends there, and it is rejected. */
+    sz = bracha87Fig4Sz(N_ENC, 3);
+    CHECK(sz <= sizeof (peerBuf), "peerBuf size for the figure-unchanged arm");
+    bracha87Fig4Init(peer, N_ENC, T_VAL, 3, 1, 0, testCoinAlt, 0);
+    for (r = 0; r < 6; ++r)
+      for (p = 0; p < 3; ++p)
+        (void) bracha87Fig3Accept(&peer->fig3, (unsigned char) r,
+                                  (unsigned char) p, bcast[r], 0);
+    CHECK(bracha87Fig3ValidCount(&peer->fig3, 4) == 3,
+          "figure-unchanged arm: the peer validates the round-4 broadcasts");
+    CHECK(bracha87Fig3ValidCount(&peer->fig3, 5) == 3
+          && bracha87Fig3RoundComplete(&peer->fig3, 5),
+          "figure-unchanged arm: the peer validates a decided process's round-5 (d, v) and completes the round");
+    vc = 0;
+    CHECK(bracha87Fig3Accept(&peer->fig3, 5, 3, 1, &vc) == 0 && vc == 3,
+          "figure-unchanged arm: a bare v at round 5 is rejected by the peer");
   }
 
   /* ---------------------------------------------------------------- */

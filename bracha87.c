@@ -1510,13 +1510,14 @@ bracha87Fig4Round(
 
 #include "bracha87Fig4Rules.c"
 
-  /* Apply value updates from dispatch outputs.  At most one fires. */
+  /* Apply the dispatch outputs.  At most one value update fires;
+   * decideV writes the decision, not the value, and fires together
+   * with adoptV in step 3 case (i) -- "decision_p := value_p := v". */
   if (setMajority)
     b->value = (cnt[1] > cnt[0]) ? 1 : 0;
   if (setDMajority)
     b->value = (((cnt[1] * 2 > B_N(b)) ? 1 : 0) | BRACHA87_D_FLAG);
   if (decideV) {
-    b->value = dmax;
     b->decision = dmax;
     b->flags |= BRACHA87_F4_DECIDED;
   }
@@ -1546,8 +1547,9 @@ bracha87Fig4Round(
       return (BRACHA87_DECIDE | BRACHA87_BROADCAST);
     }
     if (haveDecided) {
-      /* Post-decide continuation: broadcast the decision. */
-      b->value = b->decision;
+      /* Post-decide continuation: the figure never halts, and the
+       * value it carries into phase i+1 is the one the dispatch just
+       * wrote, as at any other phase (Lemma 9 makes it the decision). */
       if (ph + 1 >= b->maxPhases)
         return (0);
       b->phase = (ph + 1);

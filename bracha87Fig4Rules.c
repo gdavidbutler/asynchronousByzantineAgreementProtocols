@@ -3,9 +3,7 @@
   if (gt2T == 0)
     goto L2;
   /* ">2t round-(3i+3) messages of form (d,v) agree on v" = yes */
-  /* "adopt v" = no */
   /* "set value to coin flip" = no */
-  adoptV = 0;
   setCoin = 0;
   if (gtT == 0)
     goto L5;
@@ -15,87 +13,134 @@ L7:;
     goto L8;
   /* "decide v" = no */
   /* "have decided" = yes */
-  /* "set value to (d, majority of round (3i+2))" = no */
-  /* "set value to majority of round (3i+1)" = no */
   decideV = 0;
-  setDMajority = 0;
-  setMajority = 0;
-L10:;
   if (n2Half == 0)
     goto L11;
   /* ">n/2 round-(3i+2) messages have same value v" = yes */
-L13:;
   if (subRound == 0)
     goto L14;
-  if (subRound == 1)
-    goto L17;
-  /* "step" = 3 */
-  goto Ldone;
-L17:;
-  /* "step" = 2 */
-  goto Ldone;
-L14:;
-  /* "step" = 1 */
-  goto Ldone;
-L11:;
-  /* ">n/2 round-(3i+2) messages have same value v" = no */
-  goto L13;
-L8:;
-  /* "have decided" = no */
-  if (n2Half == 0)
-    goto L20;
-  /* ">n/2 round-(3i+2) messages have same value v" = yes */
-  if (subRound == 0)
-    goto L23;
   /* "set value to majority of round (3i+1)" = no */
   setMajority = 0;
   if (subRound == 1)
-    goto L26;
-  /* "decide v" = yes */
+    goto L17;
+L18:;
+  /* "adopt v" = yes */
   /* "set value to (d, majority of round (3i+2))" = no */
   /* "step" = 3 */
-  decideV = 1;
+  adoptV = 1;
   setDMajority = 0;
   goto Ldone;
-L26:;
-  /* "decide v" = no */
+L17:;
+  /* "adopt v" = no */
   /* "set value to (d, majority of round (3i+2))" = yes */
   /* "step" = 2 */
-  decideV = 0;
+  adoptV = 0;
   setDMajority = 1;
   goto Ldone;
-L23:;
-  /* "decide v" = no */
+L14:;
+  /* "adopt v" = no */
   /* "set value to (d, majority of round (3i+2))" = no */
   /* "set value to majority of round (3i+1)" = yes */
   /* "step" = 1 */
-  decideV = 0;
+  adoptV = 0;
   setDMajority = 0;
   setMajority = 1;
   goto Ldone;
-L20:;
+L11:;
   /* ">n/2 round-(3i+2) messages have same value v" = no */
   /* "set value to (d, majority of round (3i+2))" = no */
   setDMajority = 0;
+  if (subRound == 0)
+    goto L20;
+  /* "set value to majority of round (3i+1)" = no */
+  setMajority = 0;
+  if (subRound == 1)
+    goto L23;
+L24:;
+  /* "adopt v" = yes */
+  /* "step" = 3 */
+  adoptV = 1;
+  goto Ldone;
+L23:;
+  /* "adopt v" = no */
+  /* "step" = 2 */
+  adoptV = 0;
+  goto Ldone;
+L20:;
+  /* "adopt v" = no */
+  /* "set value to majority of round (3i+1)" = yes */
+  /* "step" = 1 */
+  adoptV = 0;
+  setMajority = 1;
+  goto Ldone;
+L8:;
+  /* "have decided" = no */
+  if (n2Half == 0)
+    goto L26;
+  /* ">n/2 round-(3i+2) messages have same value v" = yes */
   if (subRound == 0)
     goto L29;
   /* "set value to majority of round (3i+1)" = no */
   setMajority = 0;
   if (subRound == 1)
     goto L32;
+  /* "adopt v" = yes */
   /* "decide v" = yes */
+  /* "set value to (d, majority of round (3i+2))" = no */
   /* "step" = 3 */
+  adoptV = 1;
   decideV = 1;
+  setDMajority = 0;
   goto Ldone;
 L32:;
+  /* "adopt v" = no */
   /* "decide v" = no */
+  /* "set value to (d, majority of round (3i+2))" = yes */
   /* "step" = 2 */
+  adoptV = 0;
   decideV = 0;
+  setDMajority = 1;
   goto Ldone;
 L29:;
+  /* "adopt v" = no */
+  /* "decide v" = no */
+  /* "set value to (d, majority of round (3i+2))" = no */
+  /* "set value to majority of round (3i+1)" = yes */
+  /* "step" = 1 */
+  adoptV = 0;
+  decideV = 0;
+  setDMajority = 0;
+  setMajority = 1;
+  goto Ldone;
+L26:;
+  /* ">n/2 round-(3i+2) messages have same value v" = no */
+  /* "set value to (d, majority of round (3i+2))" = no */
+  setDMajority = 0;
+  if (subRound == 0)
+    goto L35;
+  /* "set value to majority of round (3i+1)" = no */
+  setMajority = 0;
+  if (subRound == 1)
+    goto L38;
+  /* "adopt v" = yes */
+  /* "decide v" = yes */
+  /* "step" = 3 */
+  adoptV = 1;
+  decideV = 1;
+  goto Ldone;
+L38:;
+  /* "adopt v" = no */
+  /* "decide v" = no */
+  /* "step" = 2 */
+  adoptV = 0;
+  decideV = 0;
+  goto Ldone;
+L35:;
+  /* "adopt v" = no */
   /* "decide v" = no */
   /* "set value to majority of round (3i+1)" = yes */
   /* "step" = 1 */
+  adoptV = 0;
   decideV = 0;
   setMajority = 1;
   goto Ldone;
@@ -107,95 +152,46 @@ L2:;
   /* "decide v" = no */
   decideV = 0;
   if (gtT == 0)
-    goto L35;
+    goto L41;
   /* ">t round-(3i+3) messages of form (d,v) agree on v" = yes */
   /* "set value to coin flip" = no */
   setCoin = 0;
   if (haveDecided == 0)
-    goto L38;
-  /* "adopt v" = no */
+    goto L44;
   /* "have decided" = yes */
-  /* "set value to (d, majority of round (3i+2))" = no */
-  /* "set value to majority of round (3i+1)" = no */
-  adoptV = 0;
-  setDMajority = 0;
-  setMajority = 0;
-  goto L10;
-L38:;
-  /* "have decided" = no */
+L46:;
   if (n2Half == 0)
-    goto L41;
+    goto L47;
   /* ">n/2 round-(3i+2) messages have same value v" = yes */
   if (subRound == 0)
-    goto L44;
+    goto L14;
   /* "set value to majority of round (3i+1)" = no */
   setMajority = 0;
   if (subRound == 1)
-    goto L47;
-  /* "adopt v" = yes */
-  /* "set value to (d, majority of round (3i+2))" = no */
-  /* "step" = 3 */
-  adoptV = 1;
-  setDMajority = 0;
-  goto Ldone;
+    goto L17;
+  goto L18;
 L47:;
-  /* "adopt v" = no */
-  /* "set value to (d, majority of round (3i+2))" = yes */
-  /* "step" = 2 */
-  adoptV = 0;
-  setDMajority = 1;
-  goto Ldone;
-L44:;
-  /* "adopt v" = no */
-  /* "set value to (d, majority of round (3i+2))" = no */
-  /* "set value to majority of round (3i+1)" = yes */
-  /* "step" = 1 */
-  adoptV = 0;
-  setDMajority = 0;
-  setMajority = 1;
-  goto Ldone;
-L41:;
   /* ">n/2 round-(3i+2) messages have same value v" = no */
   /* "set value to (d, majority of round (3i+2))" = no */
   setDMajority = 0;
   if (subRound == 0)
-    goto L50;
+    goto L20;
   /* "set value to majority of round (3i+1)" = no */
   setMajority = 0;
   if (subRound == 1)
-    goto L53;
-  /* "adopt v" = yes */
-  /* "step" = 3 */
-  adoptV = 1;
-  goto Ldone;
-L53:;
-  /* "adopt v" = no */
-  /* "step" = 2 */
-  adoptV = 0;
-  goto Ldone;
-L50:;
-  /* "adopt v" = no */
-  /* "set value to majority of round (3i+1)" = yes */
-  /* "step" = 1 */
-  adoptV = 0;
-  setMajority = 1;
-  goto Ldone;
-L35:;
+    goto L23;
+  goto L24;
+L44:;
+  /* "have decided" = no */
+  goto L46;
+L41:;
   /* ">t round-(3i+3) messages of form (d,v) agree on v" = no */
   /* "adopt v" = no */
   adoptV = 0;
   if (haveDecided == 0)
     goto L56;
   /* "have decided" = yes */
-  /* "set value to (d, majority of round (3i+2))" = no */
-  /* "set value to coin flip" = no */
-  /* "set value to majority of round (3i+1)" = no */
-  setCoin = 0;
-  setDMajority = 0;
-  setMajority = 0;
-  goto L10;
-L56:;
-  /* "have decided" = no */
+L58:;
   if (n2Half == 0)
     goto L59;
   /* ">n/2 round-(3i+2) messages have same value v" = yes */
@@ -253,4 +249,7 @@ L68:;
   setCoin = 0;
   setMajority = 1;
   goto Ldone;
+L56:;
+  /* "have decided" = no */
+  goto L58;
 Ldone:;

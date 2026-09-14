@@ -137,13 +137,17 @@
  * called: a lossless run among honest processes does not reach Fig 4
  * step 3 case (iii), so the coin's convergence -- and with it the
  * budget a real coin would need -- is not something this demo
- * measures.  The highest round these arms reach, 5, is post-decide
- * continuation, and it is the same at every budget above one.
+ * measures.  Every round in the budget is reached all the same: past
+ * the phase-0 decision the rounds are post-decide continuation, which
+ * runs to the end of the round space, so the budget also sets the
+ * run's length and its BA traffic (3 phases is rounds 0..8, and the
+ * lossless n = 4 run ends QUIESCENT at tick 297).
  *
  * So this number is slack for paths the demo does not exercise, kept
  * small rather than round because slack is paid at Init: bkr94acsSz
  * is O(N^2 * maxPhases * 3), allocated whether or not a phase is ever
- * entered.  A deployment sizes this against the coin it supplies, and
+ * entered, and the continuation runs every phase it buys.  A
+ * deployment sizes this against the coin it supplies, and
  * demoCoin is precisely the coin no budget is right for -- agreed, so
  * it ends a phase, but predictable, so an adversary scheduling on it
  * can deny that ending.  There is no such adversary here.
@@ -1048,10 +1052,10 @@ main(
        * consumes (bkr94acs.h, at bkr94acsTurn).  MET fires free --
        * the full sample is in hand and waiting buys nothing.
        * Patience is scoped to UNDECIDED BAs: once bkr94acsBaDecision
-       * reports a decision, post-decide continuation rounds carry the
-       * pinned value and their sample no longer chooses anything, so
-       * holding them to the patience would only convoy the cohort
-       * (each process's round-k INITIAL waits on its own turn of
+       * reports a decision, post-decide continuation rounds have
+       * nothing left to choose (Lemma 9 fixes every sample they can
+       * meet), so holding them to the patience would only convoy the
+       * cohort (each process's round-k INITIAL waits on its own turn of
        * k-1, and one process's stall holds everyone at n-t).  One
        * turn per BA per tick, and the clock re-arms only when duty
        * leaves TOLERANCE: a cascade that holds it continuously

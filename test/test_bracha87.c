@@ -1976,8 +1976,9 @@ testFig4AdoptFinalExhausted(
 
 /*
  * Test Fig4: decided process continues participating (paper requirement).
- * After deciding, subsequent rounds return BRACHA87_BROADCAST with the
- * decision value unchanged, advancing through phases.
+ * After deciding, subsequent rounds return BRACHA87_BROADCAST, never a
+ * second DECIDE, advancing through phases; the value follows the figure
+ * (step 1 the majority, here the decision) and the decision stands.
  */
 static void
 testFig4PostDecide(
@@ -2009,53 +2010,49 @@ testFig4PostDecide(
         act == (BRACHA87_DECIDE | BRACHA87_BROADCAST));
   check("Post-decide: advanced to phase 1", b->phase == 1);
 
-  /* Subsequent round: process continues, value frozen at decision */
+  /* Subsequent round: process continues; step 1 takes the majority,
+   * which after a decision is the decision (Lemma 9) */
   for (i = 0; i < 4; ++i) vals[i] = 0;
   act = bracha87Fig4Round(b, 3, 4, vals);
   printf("    Post-decide round 3    : act=%u value=%u\n", act, b->value);
   check("Post-decide: BROADCAST", act == BRACHA87_BROADCAST);
-  check("Post-decide: value frozen", b->value == 0);
+  check("Post-decide: step 1 value is the majority", b->value == 0);
   check("Post-decide: decision unchanged", b->decision == 0);
 
-  /* Another round: still continues */
+  /* Another round: still continues, and step 2 sets (d, v) as written */
   act = bracha87Fig4Round(b, 4, 4, vals);
   check("Post-decide round 4: BROADCAST", act == BRACHA87_BROADCAST);
+  check("Post-decide: step 2 value is (d, v)",
+        b->value == (0 | BRACHA87_D_FLAG));
   check("Post-decide: decision still unchanged", b->decision == 0);
   free(b);
 }
 
 /*
- * Test Fig4 post-decide value preservation under adversarial inputs.
- *
- * Post-decide continuation (Implementation Note 1) requires a decided
- * process to keep broadcasting its decision value -- not whatever
- * majority/(d, majority) the next phase's validated set would suggest.
- * The .dtc-faithful Fig4 dispatch zeroes setMajority and setDMajority
- * when have_decided=yes; this test exercises that explicitly by
- * feeding inputs whose majority disagrees with the decision and
- * checking that b->value remains the decision through every sub-round
- * of the next phase.
- *
- * If sub=0 set value to majority post-decide, b->value would drift to
- * the adversarial majority and the decided process's continuation
- * broadcast would carry the wrong value, potentially stranding processes
- * still trying to decide.
+ * Post-decide, no rule gated: the header promises that a decided
+ * process runs every later phase as the figure writes it, and on the
+ * samples the model presents after a decision (Lemma 9: all v, then
+ * all (d, v)) a step 1 or a coin gated on the decision would write
+ * the same value the figure does.  Only a sample Lemma 9 EXCLUDES can
+ * witness that those two rules are not gated, so this arm feeds one
+ * -- a majority against the decision at step 1, no d-message at all
+ * at step 3 -- and requires the figure's answer: the majority, then
+ * (d, majority), then the coin.  The decision stands throughout, and
+ * DECIDE is not output again.
  */
 static void
-testFig4PostDecideAdversarial(
+testFig4PostDecideUngated(
   void
 ){
   struct bracha87Fig4 *b;
   unsigned long sz;
   unsigned char vals[MAX_N];
-  unsigned int i;
   unsigned int act;
+  unsigned int i;
 
-  printf("\n  Post-decide value preservation under adversarial majority:\n");
+  printf("\n  Post-decide, no value rule gated:\n");
 
   sz = bracha87Fig4Sz(3, 10);
-
-  /* Decide 0; then feed phase 1 inputs whose majority is 1. */
   b = calloc(1, sz);
   CoinVal = 0;
   bracha87Fig4Init(b, 3, 1, 10, 0, 0, testCoin, 0);
@@ -2065,61 +2062,21 @@ testFig4PostDecideAdversarial(
   bracha87Fig4Round(b, 1, 4, vals);
   for (i = 0; i < 4; ++i) vals[i] = 0 | BRACHA87_D_FLAG;
   act = bracha87Fig4Round(b, 2, 4, vals);
-  check("Decide 0: decided", (b->flags & BRACHA87_F4_DECIDED) && b->decision == 0);
-  check("Decide 0: DECIDE|BROADCAST",
-        act == (BRACHA87_DECIDE | BRACHA87_BROADCAST));
+  check("Post-decide ungated: decided 0",
+        act == (BRACHA87_DECIDE | BRACHA87_BROADCAST) && b->decision == 0);
 
-  /* Phase 1 sub=0: 4 plain 1s. Buggy: b->value = majority = 1.
-   * Paper-faithful: b->value preserved at decision = 0. */
   for (i = 0; i < 4; ++i) vals[i] = 1;
   act = bracha87Fig4Round(b, 3, 4, vals);
-  printf("    decide=0, sub=0 maj=1  : act=%u value=%u\n", act, b->value);
-  check("Adversarial sub=0: BROADCAST", act == BRACHA87_BROADCAST);
-  check("Adversarial sub=0: value=decision (not majority)", b->value == 0);
-
-  /* Phase 1 sub=1: 4 plain 1s. cnt[1]*2 > B_N(=4), so n2Half fires.
-   * Buggy: b->value = 1 | D_FLAG = 0x81. Paper-faithful: 0. */
-  for (i = 0; i < 4; ++i) vals[i] = 1;
+  check("Post-decide ungated: step 1 follows the majority",
+        act == BRACHA87_BROADCAST && b->value == 1);
   act = bracha87Fig4Round(b, 4, 4, vals);
-  printf("    decide=0, sub=1 (d,1)? : act=%u value=0x%02x\n", act, b->value);
-  check("Adversarial sub=1: BROADCAST", act == BRACHA87_BROADCAST);
-  check("Adversarial sub=1: value=decision (no D_FLAG drift)",
-        b->value == 0);
-
-  /* Phase 1 sub=2: 4 d-flagged 1s. Original C explicitly assigns
-   * b->value = b->decision here; new code does too. Either way 0. */
-  for (i = 0; i < 4; ++i) vals[i] = 1 | BRACHA87_D_FLAG;
+  check("Post-decide ungated: step 2 flags the majority",
+        act == BRACHA87_BROADCAST && b->value == (1 | BRACHA87_D_FLAG));
+  CoinVal = 1;
   act = bracha87Fig4Round(b, 5, 4, vals);
-  check("Adversarial sub=2: BROADCAST", act == BRACHA87_BROADCAST);
-  check("Adversarial sub=2: value=decision", b->value == 0);
-  check("Adversarial: decision unchanged", b->decision == 0);
-
-  free(b);
-
-  /* Mirror: decide 1, then feed adversarial 0-majority. */
-  b = calloc(1, sz);
-  bracha87Fig4Init(b, 3, 1, 10, 1, 0, testCoin, 0);
-
-  for (i = 0; i < 4; ++i) vals[i] = 1;
-  bracha87Fig4Round(b, 0, 4, vals);
-  bracha87Fig4Round(b, 1, 4, vals);
-  for (i = 0; i < 4; ++i) vals[i] = 1 | BRACHA87_D_FLAG;
-  bracha87Fig4Round(b, 2, 4, vals);
-  check("Mirror decide 1: decided", (b->flags & BRACHA87_F4_DECIDED) && b->decision == 1);
-
-  for (i = 0; i < 4; ++i) vals[i] = 0;
-  bracha87Fig4Round(b, 3, 4, vals);
-  printf("    decide=1, sub=0 maj=0  : value=%u\n", b->value);
-  check("Mirror sub=0: value=decision", b->value == 1);
-
-  bracha87Fig4Round(b, 4, 4, vals);
-  printf("    decide=1, sub=1 (d,0)? : value=0x%02x\n", b->value);
-  check("Mirror sub=1: value=decision", b->value == 1);
-
-  for (i = 0; i < 4; ++i) vals[i] = 0 | BRACHA87_D_FLAG;
-  bracha87Fig4Round(b, 5, 4, vals);
-  check("Mirror sub=2: value=decision", b->value == 1);
-  check("Mirror: decision unchanged", b->decision == 1);
+  check("Post-decide ungated: step 3 tosses without a d-message",
+        act == BRACHA87_BROADCAST && b->value == CoinVal);
+  check("Post-decide ungated: the decision stands", b->decision == 0);
   free(b);
 }
 
@@ -3522,8 +3479,10 @@ testByzantineComposed(
 
 /*
  * Post-decide multi-phase: decided process runs through 3+ additional
- * phases, verifying D_FLAG never leaks into step 1 broadcasts and
- * the decision value stays frozen.
+ * phases on the Lemma 9 trajectory (each round fed the value it just
+ * broadcast, so step 3 meets 2t+1 (d, v)), verifying case (i)'s
+ * value_p := v still fires once decided -- D_FLAG never leaks into a
+ * step 1 broadcast -- and the decision never moves.
  */
 static void
 testPostDecideMultiPhase(
@@ -3571,8 +3530,9 @@ testPostDecideMultiPhase(
 
     sub = k % 3;
 
-    /* After step 1 (sub was 0, now subRound is 1): no D_FLAG */
-    if (sub == 0 && (b->value & BRACHA87_D_FLAG))
+    /* After step 3 (sub was 2): the value now broadcast into the next
+     * phase's step 1 carries no D_FLAG */
+    if (sub == 2 && (b->value & BRACHA87_D_FLAG))
       dflagLeak = 1;
 
     /* Decision must never change */
@@ -5484,7 +5444,7 @@ main(
   testFig4Step3Boundary();
   testFig4AdoptFinalExhausted();
   testFig4PostDecide();
-  testFig4PostDecideAdversarial();
+  testFig4PostDecideUngated();
   testFig4EdgeCases();
   testFig4SubsetMajority();
   testFig4SubsetMajorityBoundary();

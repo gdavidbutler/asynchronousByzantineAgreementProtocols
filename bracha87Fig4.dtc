@@ -39,16 +39,27 @@
 #       else value_p unchanged (non-deterministic across processes)
 #   Step 3 (round 3i+3):
 #     case (i)   more than 2t round-(3i+3) messages of form (d, v)
-#                  agree on v: decide v
+#                  agree on v: decision_p := value_p := v
 #     case (ii)  more than t (and at most 2t) such messages: value_p := v
 #     case (iii) otherwise: value_p := coin_i
 #     advance to phase i+1, step 1
 #
-# Implementation Note 1 (post-decide continuation): a process that has
-# decided MUST continue broadcasting, with value_p := decision, until
-# the surrounding application releases it.  The "have decided"
-# guard in each step's update rule preserves the decision value
-# while still outputting broadcast and advance side-effects.
+# Implementation Note 1 (post-decide continuation): the figure has no
+# decided state.  Case (i) reads "decision_p := value_p := v", every
+# case ends "Go to round 1 of phase i+1", and the paper's only word on
+# halting is that it is not built here (Bracha87.txt, Protocol
+# halting).  So a decided process plays every later phase as written
+# -- step 1 the majority, step 2 (d, v), step 3 v -- and what holds
+# its value at the decision is Lemma 9, not a rule: after a decision
+# every correct process starts the next phase with v (Theorem 2,
+# Agreement), so the majority is v, more than n/2 agree, and more than
+# 2t (d, v) arrive.  Theorem 2 consumes exactly those broadcasts: an
+# undecided q that adopted v at case (ii) decides at phase r+1 on 2t+1
+# (d, v) messages, the decided processes' among them, and Figure 3
+# would reject a bare v there (more than n/2 agree at round 3i+2, so
+# N demands (d, v)).  "have decided" therefore guards one output only,
+# the DECIDE the library reports once (Rule 4.3); it never touches a
+# value update.
 #
 # Predicates appearing as inputs are computed by C functions over
 # the validated set delivered by Figure 3 (majority counts,
@@ -82,32 +93,33 @@
 # ===== Step 1: set value to majority of round (3i+1) =====
 
 # Rule 4.1.  At step 1, set value_p to the majority of the n-t
-# validated round-(3i+1) values.  Skipped when already decided
-# (the decision value is preserved).
-@"set value to majority of round (3i+1)","step","have decided"
-yes,1,no
-no,1,yes
-no,2,
-no,3,
+# validated round-(3i+1) values.
+@"set value to majority of round (3i+1)","step"
+yes,1
+no,2
+no,3
 
 # ===== Step 2: set value to (d, majority of round (3i+2)) =====
 
 # Rule 4.2.  At step 2, if more than n/2 of the round-(3i+2)
 # messages have the same value v, set value_p := (d, v).  Otherwise
-# value_p is unchanged.  Skipped when already decided.
-@"set value to (d, majority of round (3i+2))","step","have decided",">n/2 round-(3i+2) messages have same value v"
-yes,2,no,yes
-no,2,no,no
-no,2,yes,
-no,1,,
-no,3,,
+# value_p is unchanged.
+@"set value to (d, majority of round (3i+2))","step",">n/2 round-(3i+2) messages have same value v"
+yes,2,yes
+no,2,no
+no,1,
+no,3,
 
 # ===== Step 3 case (i): decide v =====
 
 # Rule 4.3.  At step 3, if more than 2t of the round-(3i+3)
-# messages of form (d, v) agree on v, decide v.  Skipped when
-# already decided (decision is final; the second time through
-# the same case the rule does not re-fire).
+# messages of form (d, v) agree on v, decide v: the decision_p half
+# of case (i)'s "decision_p := value_p := v" (the value_p half is
+# Rule 4.4).  Skipped when already decided -- the decision is final
+# and is reported once; the figure, which has no decided state,
+# decides v again here every phase, and Theorem 2's Agreement
+# argument (every correct process opens the next phase with v, so
+# Lemma 9 decides v there) makes it the same v.
 @"decide v","step","have decided",">2t round-(3i+3) messages of form (d,v) agree on v"
 yes,3,no,yes
 no,3,no,no
@@ -115,30 +127,28 @@ no,3,yes,
 no,1,,
 no,2,,
 
-# ===== Step 3 case (ii): adopt v =====
+# ===== Step 3 cases (i) and (ii): adopt v =====
 
-# Rule 4.4.  At step 3, if more than t (but not more than 2t)
-# of the round-(3i+3) messages of form (d, v) agree on v, set
-# value_p := v.  Skipped when already decided or when case (i)
-# fired.
-@"adopt v","step","have decided",">2t round-(3i+3) messages of form (d,v) agree on v",">t round-(3i+3) messages of form (d,v) agree on v"
-yes,3,no,no,yes
-no,3,no,yes,
-no,3,no,no,no
-no,3,yes,,
-no,1,,,
-no,2,,,
+# Rule 4.4.  At step 3, if more than t of the round-(3i+3) messages
+# of form (d, v) agree on v, set value_p := v.  This is case (ii)
+# whole and the value_p half of case (i), whose decision_p half is
+# Rule 4.3: above 2t the two rules fire together, and once decided
+# only this one still does.
+@"adopt v","step",">2t round-(3i+3) messages of form (d,v) agree on v",">t round-(3i+3) messages of form (d,v) agree on v"
+yes,3,yes,
+yes,3,no,yes
+no,3,no,no
+no,1,,
+no,2,,
 
 # ===== Step 3 case (iii): set value to coin flip =====
 
 # Rule 4.5.  At step 3, if no more than t of the
 # round-(3i+3) messages of form (d, v) agree on v, set
-# value_p := coin_i.  Skipped when already decided or when case
-# (i) or (ii) fired.
-@"set value to coin flip","step","have decided",">2t round-(3i+3) messages of form (d,v) agree on v",">t round-(3i+3) messages of form (d,v) agree on v"
-yes,3,no,no,no
-no,3,no,yes,
-no,3,no,no,yes
-no,3,yes,,
-no,1,,,
-no,2,,,
+# value_p := coin_i.  Skipped when case (i) or (ii) fired.
+@"set value to coin flip","step",">2t round-(3i+3) messages of form (d,v) agree on v",">t round-(3i+3) messages of form (d,v) agree on v"
+yes,3,no,no
+no,3,yes,
+no,3,no,yes
+no,1,,
+no,2,,

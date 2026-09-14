@@ -871,7 +871,7 @@ bracha87Fig3RoundComplete(
 /*     If >n/2 same v: value_p := (d,v). Else unchanged.                 */
 /*                                                                       */
 /*  3. Broadcast(p, 3i+2, value_p).                                      */
-/*     If >2t (d,v): decide v.                                           */
+/*     If >2t (d,v): decision_p := value_p := v.                         */
 /*     Else if >t (d,v): value_p := v.                                   */
 /*     Else: value_p := coin.                                            */
 /*                                                                       */
@@ -1065,10 +1065,15 @@ bracha87Fig4Init(
  * process still short of n-t has no recourse the model admits.  The
  * paper's only word on halting is one unproved clause (Bracha87.txt;
  * Implementation Note 1 carries the argument).  So a decided process
- * keeps broadcasting.  A decision taken on the LAST phase has no next
- * round, so there it is returned alone: the decision stands, and the
- * continuation is simply over.  This is the one path that yields a
- * bare BRACHA87_DECIDE.
+ * keeps broadcasting, and what it broadcasts is what the figure
+ * writes: the figure has no decided state, so every later phase runs
+ * as the first did -- step 1 the majority, step 2 (d, v), step 3 v --
+ * and the decision is held there by Lemma 9, not by a rule (after a
+ * decision every correct process opens the next phase with v).  The
+ * once-only DECIDE is the only thing the decided state gates.  A
+ * decision taken on the LAST phase has no next round, so there it is
+ * returned alone: the decision stands, and the continuation is simply
+ * over.  This is the one path that yields a bare BRACHA87_DECIDE.
  *
  * DECIDE is a success signal, NOT a stop condition.  A decided
  * process keeps broadcasting (post-decide continuation, above) for as
@@ -1121,11 +1126,11 @@ bracha87Fig4Init(
  * LAST phase returns BRACHA87_DECIDE without advancing -- there is no
  * next round to name -- so phase/subRound still spell that round and
  * it is not refused a second time.  Re-calling it recomputes a spent
- * round: the dispatch runs again over the values handed in, and the
- * post-decide arm then rewrites value from decision, so the decision
- * itself cannot change -- but the call is not the refusal the rule
- * above promises.  The same holds for a post-decide continuation that
- * ran out of phase space.  Both are terminals: read
+ * round: the dispatch runs again over the values handed in, and only
+ * the value follows them -- the decision is written by the once-only
+ * decide rule alone, so it cannot change -- but the call is not the
+ * refusal the rule above promises.  The same holds for a post-decide
+ * continuation that ran out of phase space.  Both are terminals: read
  * BRACHA87_F4_DECIDED in fig4->flags and stop calling, rather than
  * driving a terminal round a second time.  The third terminal needs
  * no such care: an EXHAUSTED instance is refused by its own guard.

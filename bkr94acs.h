@@ -887,10 +887,10 @@ bkr94acsFanout(
  * round is the caller's to add and is not advised: it prices a
  * catch-up the cohort has already earned.
  * Scope patience to UNDECIDED BAs (bkr94acsBaDecision == 0xFF):
- * post-decide continuation rounds carry the pinned value and their
- * sample no longer chooses anything, while their turn feeds the
- * NEXT process's round -- holding them to the patience convoys the
- * cohort, since one process's stall holds everyone else at n-t.
+ * post-decide continuation rounds have nothing left to choose --
+ * Lemma 9 fixes every sample they can meet -- while their turn feeds
+ * the NEXT process's round -- holding them to the patience convoys
+ * the cohort, since one process's stall holds everyone else at n-t.
  * The bundled example's sweep loop is the reference discipline for
  * a paced caller.
  */

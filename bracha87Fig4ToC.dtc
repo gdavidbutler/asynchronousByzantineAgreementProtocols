@@ -38,7 +38,9 @@ yes,1
 no,0
 
 # Domain action -> boolean local that drives a value-update side
-# effect.  At most one of these fires per call.
+# effect.  At most one value-setting output fires per call; "decide
+# v" sets the decision, not the value, and fires alongside "adopt v"
+# in step 3 case (i).
 
 @~setMajority,"set value to majority of round (3i+1)"
 1,yes

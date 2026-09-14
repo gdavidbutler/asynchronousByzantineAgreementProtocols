@@ -575,27 +575,35 @@ alone.  Under the mutation that check goes red.
 #END
 
 #MUTANT M21
-#FAMILY figure 4 -- post-decide value preservation broken
+#FAMILY figure 4 step 2 -- the (d, v) update guarded on the decided state
 #FILE bracha87.c
-#ORACLE test_bracha87
-#LABEL Adversarial sub=0: value=decision (not majority)
+#ORACLE test_bracha87_blackbox
+#LABEL figure-unchanged arm: the peer validates a decided process's round-5 (d, v) and completes the round
 #EXPECT KILLED
 #WHY
-A decided process must keep broadcasting, and what it broadcasts is its
-DECISION -- not whatever majority the later samples show.  Letting the
-step 1 update run after a decision lets an adversarial majority drag
-the broadcast value away from the decision, which breaks the
-continuation the later processes are relying on.  The oracle decides an
-instance and then feeds it step 1 samples whose majority is the
-opposite value, requiring the broadcast value to stay the decision.
-Under the mutation it follows the majority and the check goes red on
-the first such round.
+Figure 4 has no decided state: case (i) reads "decision_p := value_p
+:= v" and every case ends "Go to round 1 of phase i+1", so a decided
+process sets (d, v) at step 2 of every later phase exactly as an
+undecided one does.  Guarding that update on the decision is the
+plausible "preserve the decision value" reading, and it is a liveness
+defect dressed as safety: the decided process then
+broadcasts a bare v at round 3i+3, and Figure 3 at every peer rejects
+it, because more than n/2 of the round-(3i+2) messages agree and N
+demands (d, v).  Theorem 2's Agreement proof consumes exactly the
+message the guard withholds -- an undecided q that adopted v at case
+(ii) decides at phase r+1 on 2t+1 (d, v), the decided processes' among
+them.  Reachability: the oracle decides a process at phase 0, plays it
+through phase 1 on the Lemma 9 trajectory, and feeds its own
+broadcasts as three senders to a peer's Fig 3; the correct machine's
+round-5 (d, 1) validates and completes the round, and under the
+mutation the round-5 message is a bare 1, nothing validates, and the
+completion check goes red.
 #ANCHOR
-  if (setMajority)
-    b->value = (cnt[1] > cnt[0]) ? 1 : 0;
+  if (setDMajority)
+    b->value = (((cnt[1] * 2 > B_N(b)) ? 1 : 0) | BRACHA87_D_FLAG);
 #WITH
-  if (setMajority || (b->flags & BRACHA87_F4_DECIDED))
-    b->value = (cnt[1] > cnt[0]) ? 1 : 0;
+  if (setDMajority && !haveDecided)
+    b->value = (((cnt[1] * 2 > B_N(b)) ? 1 : 0) | BRACHA87_D_FLAG);
 #END
 
 #MUTANT M22
@@ -1120,37 +1128,30 @@ withheld and one arrives.
 #END
 
 #MUTANT M42
-#FAMILY figure 4 step 3 -- the coin fallback forgets the decided column
+#FAMILY figure 4 step 3 -- case (i)'s value update guarded on the decided state
 #FILE bracha87.c
-#ORACLE -
-#EXPECT INVISIBLE
+#ORACLE test_bracha87
+#LABEL MultiPhase: no D_FLAG in step 1
+#EXPECT KILLED
 #WHY
-Step 3 case (iii) tosses a coin when neither the >2t nor the >t (d, v)
-count is met.  A DECIDED process must not, and the dispatch zeroes
-every value-setting output for it -- the coin included.  Letting case
-(iii) fire on the decided path is the plausible slip, since it is the
-one value-setting row whose condition names no count at all.  This
-catalogue claims NO oracle reaches it, and the reason is worth having
-written down: case (iii) is a sub-round-2 rule, and Fig4Round's
-sub-round-2 tail restores b->value = b->decision unconditionally for a
-process that arrived decided.  Any value the dispatch writes during
-that same call is overwritten before the call returns, so a coin toss
-here cannot reach a caller.  Note 9's protection therefore has TWO
-independent mechanisms and only one of them is the dispatch; the
-counterpart defect at sub-round 0, where no such restore happens, IS
-visible and is M21 -- no entry mutates the sub-round-1 setDMajority or
-the decided adopt, so those two stay unwitnessed by the catalogue even
-though the split-sample arm would red on them.  What the mutation does change is the
-caller's coin sequence -- a spurious draw from the application's
-randomness -- which the library's own contract does not expose and no
-arm can observe.  Reaching it needs a decided process meeting case
-(iii): no >n/2 camp and no d-flags at all, which the split-sample arm
-now drives at both phase parities.  The run records whether the battery
-agrees that it stays green there.
+Case (i) is two assignments, "decision_p := value_p := v", and only
+the first is once-only: the library reports DECIDE once, so the
+dispatch gates "decide v" on the decided state and leaves "adopt v"
+-- the value_p half, shared with case (ii) -- to fire every phase.
+Gating the whole case is the plausible slip, since the figure writes
+it as one line.  The value then stays where step 2 left it, (d, v),
+and rides into the next phase's step-1 broadcast, which VALID^(3i+1)
+rejects (no correct process sends a d-message at step 1).
+Reachability: the oracle decides at phase 0 and plays three more
+phases feeding each round the value it just broadcast; under the
+mutation the round-6 broadcast carries D_FLAG and the leak check goes
+red.
 #ANCHOR
-  if (setCoin)
+  if (adoptV)
+    b->value = dmax;
 #WITH
-  if (setCoin || (subRound == 2 && !gtT))
+  if (adoptV && !haveDecided)
+    b->value = dmax;
 #END
 
 #MUTANT M43
@@ -1803,6 +1804,54 @@ there finds nothing to validate.
             ++F3_VCNT(b, r);
 #WITH
             F3_VCNT(b, r) = (unsigned char)(F3_VCNT(b, r) + 1);
+#END
+
+#MUTANT M62
+#FAMILY figure 4 step 1 -- the majority update guarded on the decided state
+#FILE bracha87.c
+#ORACLE test_bracha87
+#LABEL Post-decide ungated: step 1 follows the majority
+#EXPECT KILLED
+#WHY
+Figure 4 has no decided state, so step 1 sets value_p to the majority
+of the sample after a decision as before it.  A guard here is the
+same "preserve the decision" reading as M21 at step 2, and unlike
+M21 it is invisible on every sample the model presents: after a
+decision the majority IS the decision (Lemma 9), so the guarded and
+the unguarded machine write the same value.  The only witness is a
+sample Lemma 9 excludes, which is what the oracle feeds -- a decided
+process handed a step-1 majority against its decision -- requiring
+the figure's answer.  Under the mutation the value stays at the
+decision and the check goes red.
+#ANCHOR
+  if (setMajority)
+    b->value = (cnt[1] > cnt[0]) ? 1 : 0;
+#WITH
+  if (setMajority && !haveDecided)
+    b->value = (cnt[1] > cnt[0]) ? 1 : 0;
+#END
+
+#MUTANT M63
+#FAMILY figure 4 step 3 -- the coin guarded on the decided state
+#FILE bracha87.c
+#ORACLE test_bracha87
+#LABEL Post-decide ungated: step 3 tosses without a d-message
+#EXPECT KILLED
+#WHY
+Case (iii) tosses when no more than t (d, v) messages are validated,
+decided or not; the figure has no decided state to consult.  Guarding
+the toss is the same reading as M62, and it is invisible on the same
+grounds: after a decision every validated step-3 message is (d, v)
+(Lemma 9), so case (iii) is never reached by a correct process.  The
+oracle hands a decided process a step-3 sample with no d-message and
+requires the coin; under the mutation the value stays where step 2
+left it and the check goes red.
+#ANCHOR
+  if (setCoin)
+    b->value = b->coin(b->coinClosure, b->instance, ph);
+#WITH
+  if (setCoin && !haveDecided)
+    b->value = b->coin(b->coinClosure, b->instance, ph);
 #END
 
 CATALOGUE_END
