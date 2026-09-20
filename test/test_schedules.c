@@ -32,14 +32,14 @@
  * SURFACE 1 is the bare Fig 1 array loop of example/bracha87Fig1.c:
  * one Fig 1 instance per process, one designated honest initiator,
  * the caller-side forged-INITIAL filter, wire bits 4/5 framing,
- * ingress ordered Input -> ProcessAccepted (a READY with bit 4) ->
- * ProcessResend (a READY without bit 5) with rotation re-entry, and
- * the self-accept recorded at ACCEPT.
+ * ingress the one Input call carrying the two wire bits (self's accept
+ * rides its own hand-back carrying ACCEPTED) with rotation re-entry
+ * on an unmarked READY.
  *
  * SURFACE 2 is the ACS loop of example/bkr94acs.c: the bkr94acsAcast
  * bootstrap, both Input classes with the canonical packed-byte
- * framing, bkr94acs*Accepted / bkr94acs*Resend routing with the same
- * re-entry.
+ * framing, the annotations carried off the annot argument into
+ * bracha87Fig1Input's two, with the same re-entry.
  *
  * The HEADERS define the contract; the examples DEMONSTRATE it and
  * are downstream of bracha87.[hc] / bkr94acs.[hc].  What this
@@ -292,10 +292,11 @@
  *
  * EVERY CONFIG HERE IS CEILING-BOUND.  The smallest configuration --
  * surface 1, n=2, t=0, two Fig 1 instances and ten root contents --
- * CLOSES at K=3: 84,708,681 distinct states, 632,200,620 edges, 135 s
- * and a 1.5 GB visited table (-c 200000000 -b 27), so its 4,000,000
- * ceiling is a budget, and the closed graph's four QUIESCENT terminals
- * are the same four the ceiling-bound prefix finds.  No larger config
+ * CLOSES at K=3: 157,684,733 distinct states, 1,226,713,950 edges, 26
+ * min and a 3 GB visited table (-c 400000000 -b 28; the table is what
+ * takes the time on an 8 GB machine), so its 4,000,000 ceiling is a
+ * budget, and the closed graph's one QUIESCENT terminal is the one the
+ * ceiling-bound prefix finds.  No larger config
  * has been run to closure.  What grows the space is the pool: each
  * tick pushes fresh copies of contents whose count had dropped, and a
  * duplicate unmarked READY re-arms its sender after an egress consumed
@@ -392,19 +393,19 @@
  *     which that BA turned no round.  Both duties are functions of
  *     the image, so the pre/post pair across one transition is the
  *     whole monotonicity chain and nothing is stored in the state.
- *   - acFrom \ {self} subset of rdFrom after every ingress.  The
- *     naive subset is FALSE: the self-accept is recorded at ACCEPT
- *     with the local index and no rdFrom guard
- *     (bracha87Fig1ProcessAccepted), while the process's
- *     own (ready, v) can still be pending in the pool.
+ *   - acFrom subset of rdFrom after every ingress, self included:
+ *     every accept, self's too, is recorded by bracha87Fig1Input's
+ *     BPR rows behind the (ready, v) that carries it.  On both surfaces, over
+ *     every Fig 1 the surface owns.
  *   - the RECEIVED mask is present only on a READY act
  *     (struct bracha87Fig1Act.received, struct bkr94acsAct.received).
- *   - HARNESS SELF-CHECKS, labeled as such because they prove framer
- *     discipline and not library behavior: a marked READY is never
- *     routed to *Resend, and the wire RECEIVED bit is set for
- *     recipient p only where the RECEIVED mask says so.  The second
- *     would be an identity at the library layer anyway --
- *     bracha87Fig1Received RETURNS acFrom.
+ *   - HARNESS SELF-CHECK, labeled as such because it proves framer
+ *     discipline and not library behavior: the wire RECEIVED bit is
+ *     set for recipient p only where the RECEIVED mask says so -- an
+ *     identity at the library layer anyway, bracha87Fig1Received
+ *     RETURNS acFrom.  (That a marked READY is never routed to
+ *     *Resend is now a row of bracha87Fig1.dtc, run inside
+ *     bracha87Fig1Input, not framer discipline.)
  *   - single input per BA: bkr94acsBaEntered latched once entered.
  *   - Bracha Lemma 1 (surface 1): under an honest initiator every
  *     instance whose echoed value exists carries the initiator's
@@ -451,8 +452,8 @@
  *     precedence above.  Pool empty.  AND the ending claim per owned
  *     Fig 1 instance, read through bkr94acsAcastFig1 / bkr94acsBaFig1:
  *     every SENT instance THE RETRY STILL SERVES has a RECEIVED mask
- *     covering all n.  The scope matters: the decided-0 retry gate
- *     (bkr94acsRetryProcessGate) skips an excluded process's A-Cast walk,
+ *     covering all n.  The scope matters: the decided-0 verdict gate
+ *     (bkr94acsRetryStep) skips an excluded process's A-Cast walk,
  *     so there the gate itself is the retire, and a late-submitted
  *     excluded A-Cast legitimately quiesces accepted-everywhere with
  *     a short mask and outstanding arms nothing will consume.  The
@@ -637,17 +638,17 @@ static struct config Configs[] = {
    * as configs 1 and 4 under a ceiling measured to keep each under a
    * second.  They carry the reachability assertions, which is what a
    * subsecond run can honestly carry: the clean machine reaches its
-   * first QUIESCENT terminal at state 19 (surface 1) and 199 (surface
+   * first QUIESCENT terminal at state 23 (surface 1) and 268 (surface
    * 2), so a ceiling three orders of magnitude past that is a real
    * detector and not a token. */
   { "s1", "smoke: surface 1, n=2 t=0, K=3",
     60000UL, 4000UL,
-    60000UL, 254604UL, 4UL, 0UL, 35UL, 1UL,
+    60000UL, 237033UL, 1UL, 0UL, 44UL, 1UL,
     18, 3, 1, 2, 0, 0, 0xFF, 1, 1, 0, 0, 0, 1, 0, 1, 0xFF, 0, 0, 0 },
 
   { "s2", "smoke: surface 2, n=2 t=0 maxPhases=1, K=40",
     60000UL, 4000UL,
-    60000UL, 190885UL, 676UL, 0UL, 7UL, 1UL,
+    60000UL, 328022UL, 252UL, 0UL, 0UL, 1UL,
     18, 40, 2, 2, 0, 1, 0xFF, 1, 1, 1, 0, 0, 0, 1, 1, 0xFF, 0, 0, 0 },
 
   /* s3 -- the adversary smoke: b2's shape at J=2 under a ceiling
@@ -660,7 +661,7 @@ static struct config Configs[] = {
   { "s3", "smoke: surface 1, n=4 t=1, K=3, honest initiator 0,"
           " adversary 3, J=2",
     500UL, 4000UL,
-    233000UL, 632500UL, 0UL, 0UL, 2800UL, 466UL,
+    233000UL, 686122UL, 0UL, 0UL, 1073UL, 466UL,
     12, 3, 1, 4, 1, 0, 0xFF, 1, 0, 0, 0, 0, 2, 0, 1, 3, 0, 0, 2 },
 
   /* 1 -- THE ANCHOR.  Surface 1, n=2 t=0.  K=3 is the measured floor
@@ -675,14 +676,14 @@ static struct config Configs[] = {
    * in the banner); the 4,000,000 ceiling here is a budget. */
   { "1", "surface 1, n=2 t=0, K=3 -- the anchor",
     4000000UL, 4000UL,
-    4000000UL, 24075069UL, 4UL, 0UL, 64UL, 1UL,
+    4000000UL, 23468411UL, 1UL, 0UL, 48UL, 1UL,
     24, 3, 1, 2, 0, 0, 0xFF, 1, 1, 0, 0, 0, 1, 0, 0, 0xFF, 0, 0, 0 },
 
   /* 2 -- surface 1 at real thresholds.  n=4 t=1: echo threshold
    * (n+t)/2+1 = 3, ready t+1 = 2, accept 2t+1 = 3. */
   { "2", "surface 1, n=4 t=1, K=3 -- real thresholds",
     4000000UL, 4000UL,
-    4000000UL, 21752396UL, 15UL, 0UL, 833UL, 1UL,
+    4000000UL, 23219346UL, 1UL, 0UL, 439UL, 1UL,
     24, 3, 1, 4, 1, 0, 0xFF, 1, 1, 0, 0, 0, 1, 0, 0, 0xFF, 0, 0, 0 },
 
   /* 3a -- THE TARGET.  Surface 2, n=4 t=1, maxPhases=1, every A-Cast
@@ -692,7 +693,7 @@ static struct config Configs[] = {
    * the unentered set is empty and FanoutDuty is MET forever. */
   { "3a", "surface 2, n=4 t=1 maxPhases=1, all A-Casts at the root",
     400000UL, 6000UL,
-    400000UL, 2351444UL, 1UL, 0UL, 0UL, 1UL,
+    400000UL, 3651040UL, 1UL, 0UL, 0UL, 1UL,
     21, 200, 2, 4, 1, 1, 0xFF, 0, 1, 0, 1, 0, 0, 1, 0, 0xFF, 0, 0, 0 },
 
   /* 3b -- the same, with process 3's A-Cast behind an acast() event.
@@ -703,7 +704,7 @@ static struct config Configs[] = {
    * needle, and the branch order puts the explorer inside it first. */
   { "3b", "surface 2, n=4 t=1 maxPhases=1, process 3's A-Cast deferred",
     400000UL, 6000UL,
-    400000UL, 3591919UL, 19UL, 0UL, 0UL, 1UL,
+    400000UL, 3588377UL, 19UL, 0UL, 0UL, 1UL,
     21, 200, 2, 4, 1, 1, 3, 0, 1, 0, 0, 1, 0, 1, 0, 0xFF, 0, 0, 0 },
 
   /* 4 -- the degenerate control.  At t=0, n-t = n, so TurnDuty's
@@ -713,7 +714,7 @@ static struct config Configs[] = {
    * claims and the EXHAUSTED-empty structural fact. */
   { "4", "surface 2, n=2 t=0 maxPhases=1 -- degenerate control",
     1000000UL, 4000UL,
-    1000000UL, 3783178UL, 676UL, 0UL, 7UL, 1UL,
+    1000000UL, 7391240UL, 300UL, 0UL, 0UL, 1UL,
     22, 40, 2, 2, 0, 1, 0xFF, 1, 1, 1, 0, 0, 0, 1, 0, 0xFF, 0, 0, 0 },
 
   /* THE ADVERSARY CONFIGS.  Process 3 holds no library image, receives
@@ -735,7 +736,7 @@ static struct config Configs[] = {
    * expected here; the witness is every honest process accepted. */
   { "b1", "surface 1, n=4 t=1, K=3, adversary 3 is the initiator",
     2000UL, 4000UL,
-    104504656UL, 426320190UL, 0UL, 0UL, 88580UL, 34781UL,
+    104504656UL, 426654594UL, 0UL, 0UL, 86513UL, 34781UL,
     14, 3, 1, 4, 1, 0, 0xFF, 1, 0, 0, 0, 0, 1, 0, 0, 3, 1, 0, 4 },
 
   /* b2 -- surface 1, n=4 t=1, honest initiator 0, adversary 3 echoes
@@ -743,7 +744,7 @@ static struct config Configs[] = {
    * the initiator's value (Lemma 4's value half) -- and Lemma 1. */
   { "b2", "surface 1, n=4 t=1, K=3, honest initiator 0, adversary 3",
     2000UL, 4000UL,
-    9052000UL, 26128026UL, 256UL, 0UL, 86228UL, 4526UL,
+    9052000UL, 31208385UL, 64UL, 0UL, 32972UL, 4526UL,
     14, 3, 1, 4, 1, 0, 0xFF, 1, 1, 0, 0, 0, 2, 0, 0, 3, 0, 0, 3 },
 
   /* b3 -- surface 2, n=4 t=1 maxPhases=1, adversary 3 plays its own
@@ -757,7 +758,7 @@ static struct config Configs[] = {
   { "b3", "surface 2, n=4 t=1 maxPhases=1, adversary 3 plays its own"
           " broadcasts",
     3000UL, 6000UL,
-    38496000UL, 71435612UL, 0UL, 0UL, 702UL, 12832UL,
+    38496000UL, 66312411UL, 0UL, 0UL, 702UL, 12832UL,
     15, 200, 2, 4, 1, 1, 0xFF, 0, 0, 0, 1, 1, 0, 2, 0,
     3, 0, ADV_INST_OWN_ACAST | ADV_INST_OWN_BA, 3 },
 
@@ -770,7 +771,7 @@ static struct config Configs[] = {
   { "b4", "surface 2, n=4 t=1 maxPhases=1, adversary 3 plays the honest"
           " broadcasts",
     3000UL, 6000UL,
-    34869000UL, 62836112UL, 0UL, 0UL, 1989UL, 11623UL,
+    34869000UL, 58617211UL, 0UL, 0UL, 1989UL, 11623UL,
     15, 200, 2, 4, 1, 1, 0xFF, 0, 0, 0, 0, 1, 0, 2, 0,
     3, 0, ADV_INST_ACAST | ADV_INST_BA, 3 }
 };
@@ -1302,6 +1303,27 @@ explore(
           FailMsg = "Lemma 4: the accepted value is not the initiator's";
           goto fail;
         }
+        /* The paired payload's retire (bracha87.h at
+         * bracha87Fig1AllEchoed: "a paired side channel retires on the
+         * readied set, bracha87Fig1Skip(BRACHA87_ECHO_ALL)").  At a
+         * quiescent terminal the READY mask below covers all n and
+         * acFrom is a subset of rdFrom (the per-transition oracle), so
+         * this read is implied here; its teeth are the black-box Q1
+         * lane, which drives the order that separates the readied set
+         * from the echoed one.  It is read at the terminal so the
+         * registered claim is checked where quiescence is. */
+        if (!Cfg->advInit && p == Initiator) {
+          const unsigned char *rd;
+
+          rd = bracha87Fig1Skip((struct bracha87Fig1 *)Img[p],
+                                BRACHA87_ECHO_ALL);
+          for (q = 0; q < N; ++q)
+            if (!(rd && BRACHA87_SKIP_TST(rd, q))) {
+              FailMsg = "quiescent terminal: the readied set at the"
+                        " initiator is short of a correct process";
+              goto fail;
+            }
+        }
         /* THE ENDING CLAIM, and the reason it is checked rather than
          * inferred from the 0 return: example/bracha87Fig1.c's header
          * says quiescence is reached because "each instance's suppress
@@ -1357,6 +1379,36 @@ explore(
             FailMsg = "quiescent terminal: a 0xFE sentinel is present";
             goto fail;
           }
+        /* The paired payload's retire at this process's own A-Cast
+         * (bkr94acs.h at bkr94acsAcastAllReadied): every correct
+         * process's READY reached the initiator.  LIVE, not implied: a
+         * machine that writes the self-accept from local state passes
+         * the RECEIVED-mask read below and reds only here (its
+         * hand-back is suppressed, so rdFrom lacks self while acFrom
+         * holds it).  The black-box Q1 lane carries the same read
+         * under a forced order.  Scoped as the header scopes the
+         * retire: a submitted A-Cast whose BA did not decide 0 -- a
+         * deferred submission never made is unsent, and an excluded
+         * one is retired by the verdict gate. */
+        if (p != Adv
+         && (bkr94acsAcastFig1(Acsp, (unsigned char)p)->flags
+             & BRACHA87_F1_INITIATOR)
+         && bkr94acsBaDecision(Acsp, (unsigned char)p) != 0) {
+          const unsigned char *rd;
+
+          if (!bkr94acsAcastAllReadied(Acsp, (unsigned char)p)) {
+            FailMsg = "quiescent terminal: bkr94acsAcastAllReadied is 0"
+                      " at the initiator";
+            goto fail;
+          }
+          rd = bkr94acsAcastReadied(Acsp, (unsigned char)p);
+          for (q = 0; q < N; ++q)
+            if (!(rd && BRACHA87_SKIP_TST(rd, q))) {
+              FailMsg = "quiescent terminal: the readied set at the"
+                        " initiator is short of a correct process";
+              goto fail;
+            }
+        }
         /* THE ENDING CLAIM, per owned Fig 1 instance -- checked, not
          * inferred from the Retry 0 return, the same distinction the
          * surface-1 arm turns on (Notes 10/13): at quiescence a
@@ -1377,7 +1429,7 @@ explore(
           for (b = 0; b < N; ++b) {
             /* The decided-0 retry gate OUTRANKS the annotation
              * exchange for an excluded process's A-Cast
-             * (bkr94acsRetryProcessGate: BA decided 0 -> the retry skips
+             * (bkr94acsRetryStep: BA decided 0 -> the retry skips
              * the A-Cast walk; the gate itself is the retire).  A
              * late-submitted excluded A-Cast can therefore quiesce
              * accepted-everywhere with a permanently short RECEIVED
@@ -1694,24 +1746,17 @@ explore(
       NActs = bracha87Fig1Input(F1p,
                                 (unsigned char)KEY_FLD(key, KEY_TYPE_SH, 2),
                                 (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4),
-                                &Sym[KEY_FLD(key, KEY_VAL_SH, 1)], Out1);
+                                &Sym[KEY_FLD(key, KEY_VAL_SH, 1)],
+                                (unsigned char)KEY_FLD(key, KEY_ACC_SH, 1),
+                                (unsigned char)KEY_FLD(key, KEY_RCV_SH, 1),
+                                Out1);
       if (NActs > 3) {
         FailMsg = "bracha87Fig1Input output more than 3 acts";
         goto fail;
       }
-      if (KEY_FLD(key, KEY_TYPE_SH, 2) == BRACHA87_READY) {
-        if (KEY_FLD(key, KEY_ACC_SH, 1))
-          bracha87Fig1ProcessAccepted(F1p,
-            (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4));
-        /* HARNESS SELF-CHECK: a marked READY is never routed to
-         * *Resend -- a marked READY that re-armed its sender would
-         * ping-pong and the pair would never fall silent. */
-        if (!KEY_FLD(key, KEY_RCV_SH, 1)) {
-          bracha87Fig1ProcessResend(F1p,
-            (unsigned char)KEY_FLD(key, KEY_FROM_SH, 4));
-          Quiescent[Self] = 0;
-        }
-      }
+      if (KEY_FLD(key, KEY_TYPE_SH, 2) == BRACHA87_READY
+       && !KEY_FLD(key, KEY_RCV_SH, 1))
+        Quiescent[Self] = 0;
       for (i = 0; i < NActs; ++i) {
         const unsigned char *cv;
 
@@ -1738,9 +1783,6 @@ explore(
         if (Out1[i] == BRACHA87_ACCEPT) {
           Accepted[Self] = 1;
           AcceptVal[Self] = *cv;
-          /* The instance is not told its own index, so the caller
-           * supplies it for the self-accept the all-n gate counts. */
-          bracha87Fig1ProcessAccepted(F1p, (unsigned char)Self);
           continue;
         }
         PushType = (unsigned char)((Out1[i] == BRACHA87_ECHO_ALL)
@@ -2078,23 +2120,19 @@ explore(
 
         if (p == Adv)
           continue;
-        /* acFrom \ {self} is a subset of rdFrom.  acFrom raw is the
-         * RECEIVED mask; rdFrom is the ECHO_ALL suppress mask.  The self
-         * bit is excluded because the self-accept is recorded with no
-         * rdFrom guard while this process's own (ready, v) can still
-         * be pending. */
+        /* acFrom is a subset of rdFrom, self included: every accept
+         * is recorded only after the (ready, v) that carries it, and
+         * self's rides its own marked hand-back.  acFrom raw is the
+         * RECEIVED mask; rdFrom is the ECHO_ALL suppress mask. */
         ac = bracha87Fig1Received((struct bracha87Fig1 *)Img[p]);
         rd = bracha87Fig1Skip((struct bracha87Fig1 *)Img[p],
                               BRACHA87_ECHO_ALL);
         if (ac && rd)
-          for (q = 0; q < N; ++q) {
-            if (q == p)
-              continue;
+          for (q = 0; q < N; ++q)
             if (BRACHA87_SKIP_TST(ac, q) && !BRACHA87_SKIP_TST(rd, q)) {
-              FailMsg = "acFrom \\ {self} is not a subset of rdFrom";
+              FailMsg = "acFrom is not a subset of rdFrom";
               goto fail;
             }
-          }
         /* Lemma 1: two correct READY senders carry the same value.
          * Lemma 2: any two accepts of one broadcast agree.  Both
          * pairwise over the honest processes; under an honest
@@ -2125,6 +2163,41 @@ explore(
         if (p == Adv)
           continue;
         Acsp = (struct bkr94acs *)Img[p];
+        /* acFrom is a subset of rdFrom, self included, over every
+         * Fig 1 the composition owns -- the same oracle surface 1
+         * carries, on the surface where a self-accept written from
+         * local state actually lived until it was found. */
+        {
+          unsigned int b;
+          unsigned int r;
+          unsigned int w;
+          const struct bracha87Fig1 *f1;
+          const unsigned char *ac;
+          const unsigned char *rd;
+
+          for (b = 0; b < N; ++b)
+            for (r = 0; r <= 3u * Cfg->maxPhases; ++r)
+              for (w = 0; w < N; ++w) {
+                if (r == 3u * Cfg->maxPhases) {
+                  if (w)
+                    break;
+                  f1 = bkr94acsAcastFig1(Acsp, (unsigned char)b);
+                } else
+                  f1 = bkr94acsBaFig1(Acsp, (unsigned char)b,
+                                      (unsigned char)r, (unsigned char)w);
+                if (!f1)
+                  continue;
+                ac = bracha87Fig1Received(f1);
+                rd = bracha87Fig1Skip(f1, BRACHA87_ECHO_ALL);
+                if (!ac || !rd)
+                  continue;
+                for (q = 0; q < N; ++q)
+                  if (BRACHA87_SKIP_TST(ac, q) && !BRACHA87_SKIP_TST(rd, q)) {
+                    FailMsg = "acFrom is not a subset of rdFrom";
+                    goto fail;
+                  }
+              }
+        }
         if (bkr94acsFanoutDuty(Acsp) < PreFan[p]) {
           FailMsg = "bkr94acsFanoutDuty is not monotone";
           goto fail;

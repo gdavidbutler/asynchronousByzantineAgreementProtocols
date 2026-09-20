@@ -480,12 +480,12 @@ main(int argc, char **argv)
     struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
     static const unsigned char v[1] = { 1 };
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
-    act_count = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, actions);
+    act_count = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, 0, 1, actions);
     CHECK(act_count >= 1, "Rule1 fires on initial");
     CHECK(actions[0] == BRACHA87_ECHO_ALL, "Rule1 outputs ECHO_ALL");
     CHECK((b->flags & BRACHA87_F1_ECHOED) != 0, "ECHOED set after Rule1");
     /* Re-deliver same initial: ECHOED guard fails Rule 1 */
-    act_count = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, actions);
+    act_count = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, 0, 1, actions);
     CHECK(act_count == 0, "Rule1 cannot re-fire once ECHOED");
   }
 
@@ -504,12 +504,12 @@ main(int argc, char **argv)
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
     /* duplicate echoes from sender 0 -- must not fire Rule 2 */
     for (i = 0; i < 8; ++i)
-      (void) bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, actions);
+      (void) bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, 0, 1, actions);
     CHECK((b->flags & BRACHA87_F1_ECHOED) == 0, "echo dedup per sender");
     /* feed echoes from all remaining processes (1..N_ACT-1) */
     for (i = 1; i < N_ACT; ++i) {
       act_count = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i,
-                                    v, actions);
+                                    v, 0, 1, actions);
       for (j = 0; j < act_count; ++j)
         if (actions[j] == BRACHA87_ECHO_ALL) sawRule2 = 1;
     }
@@ -526,7 +526,7 @@ main(int argc, char **argv)
     static const unsigned char v[1] = { 1 };
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
     for (i = 0; i < 8; ++i)
-      (void) bracha87Fig1Input(b, BRACHA87_READY, 0, v, actions);
+      (void) bracha87Fig1Input(b, BRACHA87_READY, 0, v, 0, 1, actions);
     /* dedup only -- without crossing t+1 distinct senders Rule 3      */
     /* must not have fired ECHOED via the READY path.                  */
     CHECK((b->flags & BRACHA87_F1_ECHOED) == 0,
@@ -545,12 +545,12 @@ main(int argc, char **argv)
     int sawAccept = 0;
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
     /* Send INITIAL first to fire Rule 1, getting ECHOED set. */
-    (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, actions);
+    (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, 0, 1, actions);
     /* Now feed READYs from all distinct processes; at some point Rule 5  */
     /* fires (sets RDSENT) and eventually Rule 6 fires (accept).      */
     for (i = 0; i < N_ACT; ++i) {
       act_count = bracha87Fig1Input(b, BRACHA87_READY, (unsigned char) i,
-                                    v, actions);
+                                    v, 0, 1, actions);
       /* Verify documented order: actions in order echo, ready, accept */
       {
         int posEcho = -1, posReady = -1, posAccept = -1;
@@ -573,10 +573,10 @@ main(int argc, char **argv)
     {
       int reAccept = 0;
       static const unsigned char v2[1] = { 1 };
-      act_count = bracha87Fig1Input(b, BRACHA87_READY, 0, v2, actions);
+      act_count = bracha87Fig1Input(b, BRACHA87_READY, 0, v2, 0, 1, actions);
       for (j = 0; j < act_count; ++j)
         if (actions[j] == BRACHA87_ACCEPT) reAccept = 1;
-      CHECK(!reAccept, "ACCEPT does not re-fire (dedup retains ACCEPTED)");
+      CHECK(!reAccept, "ACCEPT does not re-fire (the have-accepted row withholds it)");
     }
   }
 
@@ -605,7 +605,7 @@ main(int argc, char **argv)
     broadcastFig1(0, N_ACT, BRACHA87_INITIAL_ALL, V, vBytes);
     while (qPopRandom(&w) && safety++ < 200000) {
       struct bracha87Fig1 *b = processes[w.to];
-      act_count = bracha87Fig1Input(b, w.type, w.from, w.value, actions);
+      act_count = bracha87Fig1Input(b, w.type, w.from, w.value, 0, 1, actions);
       for (i = 0; i < act_count; ++i) {
         unsigned char a = actions[i];
         const unsigned char *cv = bracha87Fig1Value(b);
@@ -657,7 +657,7 @@ main(int argc, char **argv)
     }
     while (qPopRandom(&w) && safety++ < 200000) {
       struct bracha87Fig1 *b = processes[w.to];
-      act_count = bracha87Fig1Input(b, w.type, w.from, w.value, actions);
+      act_count = bracha87Fig1Input(b, w.type, w.from, w.value, 0, 1, actions);
       for (i = 0; i < act_count; ++i) {
         unsigned char a = actions[i];
         const unsigned char *cv = bracha87Fig1Value(b);
@@ -714,7 +714,7 @@ main(int argc, char **argv)
       }
       while (qPopRandom(&w) && safety++ < 200000) {
         struct bracha87Fig1 *b = processes[w.to];
-        act_count = bracha87Fig1Input(b, w.type, w.from, w.value, actions);
+        act_count = bracha87Fig1Input(b, w.type, w.from, w.value, 0, 1, actions);
         for (i = 0; i < act_count; ++i) {
           unsigned char a = actions[i];
           const unsigned char *cv = bracha87Fig1Value(b);
@@ -797,7 +797,7 @@ main(int argc, char **argv)
       struct bracha87Fig1 *b;
       if (w.to >= N_ACT) continue;
       b = processes[w.to];
-      act_count = bracha87Fig1Input(b, w.type, w.from, w.value, actions);
+      act_count = bracha87Fig1Input(b, w.type, w.from, w.value, 0, 1, actions);
       if (w.to == 0) continue; /* skip Byzantine process's outputs */
       for (i = 0; i < act_count; ++i) {
         unsigned char a = actions[i];
@@ -845,7 +845,7 @@ main(int argc, char **argv)
     CHECK(actions[0] == BRACHA87_INITIAL_ALL, "Bpr INITIATOR -> INITIAL_ALL");
 
     /* Set ECHOED via Rule 1 */
-    (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, buf);
+    (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, 0, 1, buf);
     CHECK((b->flags & BRACHA87_F1_ECHOED) != 0, "ECHOED set");
     act_count = bracha87Fig1Bpr(b, actions);
     CHECK(act_count == 2, "Bpr 2 acts when INITIATOR + ECHOED");
@@ -854,7 +854,7 @@ main(int argc, char **argv)
 
     /* Drive to RDSENT by feeding all echoes */
     for (i = 1; i < N_ACT; ++i)
-      (void) bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, buf);
+      (void) bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, 0, 1, buf);
     CHECK((b->flags & BRACHA87_F1_RDSENT) != 0, "RDSENT set");
     act_count = bracha87Fig1Bpr(b, actions);
     CHECK(act_count == 3, "Bpr 3 acts when INITIATOR+ECHOED+RDSENT");
@@ -864,7 +864,7 @@ main(int argc, char **argv)
 
     /* Drive to ACCEPTED by feeding readys */
     for (i = 0; i < N_ACT; ++i)
-      (void) bracha87Fig1Input(b, BRACHA87_READY, (unsigned char) i, v, buf);
+      (void) bracha87Fig1Input(b, BRACHA87_READY, (unsigned char) i, v, 0, 1, buf);
     CHECK((b->flags & BRACHA87_F1_ACCEPTED) != 0, "ACCEPTED");
     /* Post-ACCEPT contract: INITIAL and ECHO retire (bootstrap-only;
      * accept witnesses t+1 correct readys, so amplification completes
@@ -894,7 +894,7 @@ main(int argc, char **argv)
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
     CHECK(bracha87Fig1AllEchoed(b) == 0, "AllEchoed: fresh -> 0");
     for (i = 0; i < N_ACT; ++i) {
-      (void) bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, buf);
+      (void) bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, 0, 1, buf);
       CHECK(bracha87Fig1AllEchoed(b) == (i + 1 == N_ACT),
             "AllEchoed: 1 exactly when echoSenders == n");
     }
@@ -911,7 +911,7 @@ main(int argc, char **argv)
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
     bracha87Fig1Initiator(b, v);
     for (i = 0; i < N_ACT; ++i)
-      (void) bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, buf);
+      (void) bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, 0, 1, buf);
     CHECK(bracha87Fig1AllEchoed(b) == 1,
           "AllEchoed retire: every process has echoed");
     CHECK((b->flags & BRACHA87_F1_ACCEPTED) == 0,
@@ -949,8 +949,8 @@ main(int argc, char **argv)
     CHECK(bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL) != 0, "Skip: INITIAL non-null");
 
     /* INITIAL skip = echoed processes; ECHO skip = readied (not merely echoed). */
-    (void) bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, buf);   /* process 0 echoes */
-    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, buf);  /* process 2 readies */
+    (void) bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, 0, 1, buf);   /* process 0 echoes */
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, 0, 1, buf);  /* process 2 readies */
     m = bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL);
     CHECK(BRACHA87_SKIP_TST(m, 0) && !BRACHA87_SKIP_TST(m, 1), "Skip INITIAL: echoed process only");
     m = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
@@ -967,9 +967,9 @@ main(int argc, char **argv)
 
     /* All-n-accepted READY quiescence. */
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
-    (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, buf);
-    (void) bracha87Fig1Input(b, BRACHA87_READY, 1, v, buf);
-    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, buf); /* RDSENT */
+    (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, 0, 1, buf);
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 1, v, 0, 1, buf);
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, 0, 1, buf); /* RDSENT */
     act_count = bracha87Fig1Bpr(b, actions);
     saw_ready = 0;
     for (i = 0; i < act_count; ++i)
@@ -1006,9 +1006,9 @@ main(int argc, char **argv)
 
     /* Pre-ACCEPTED an unmarked READY records nothing. */
     bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
-    (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, buf);
-    (void) bracha87Fig1Input(b, BRACHA87_READY, 1, v, buf);
-    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, buf); /* RDSENT */
+    (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, 0, 1, buf);
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 1, v, 0, 1, buf);
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, 0, 1, buf); /* RDSENT */
     CHECK((b->flags & BRACHA87_F1_ACCEPTED) == 0, "Resend: setup not accepted");
     bracha87Fig1ProcessAccepted(b, 1);
     bracha87Fig1ProcessResend(b, 1);
@@ -1019,7 +1019,7 @@ main(int argc, char **argv)
      * process the suppress mask drops -- the two masks are different
      * questions about the same recipient. */
     for (i = 0; i < N_ACT; ++i)
-      (void) bracha87Fig1Input(b, BRACHA87_READY, (unsigned char) i, v, buf);
+      (void) bracha87Fig1Input(b, BRACHA87_READY, (unsigned char) i, v, 0, 1, buf);
     CHECK((b->flags & BRACHA87_F1_ACCEPTED) != 0, "Resend: setup accepted");
     for (i = 0; i < N_ACT; ++i)
       bracha87Fig1ProcessAccepted(b, (unsigned char) i);
@@ -1097,7 +1097,7 @@ main(int argc, char **argv)
     bracha87Fig1Initiator(b, v);
     /* 2t+1 = 3 distinct readys accept, with no echo recorded. */
     for (i = 0; i < 2u * T_VAL + 1; ++i)
-      act_count = bracha87Fig1Input(b, BRACHA87_READY, (unsigned char) i, v, actions);
+      act_count = bracha87Fig1Input(b, BRACHA87_READY, (unsigned char) i, v, 0, 1, actions);
     saw_accept = 0;
     for (i = 0; i < act_count; ++i)
       if (actions[i] == BRACHA87_ACCEPT) saw_accept = 1;
@@ -1108,7 +1108,7 @@ main(int argc, char **argv)
     post_acts = 0;
     saw_accept = 0;
     for (i = 0; i < N_ACT; ++i) {
-      act_count = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, actions);
+      act_count = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i, v, 0, 1, actions);
       post_acts += act_count;
       for (j = 0; j < act_count; ++j)
         if (actions[j] == BRACHA87_ACCEPT) saw_accept = 1;
@@ -1116,9 +1116,9 @@ main(int argc, char **argv)
             "PostAccept: AllEchoed 1 exactly when echo senders == n");
     }
     /* Duplicates and an INITIAL round out the post-accept traffic. */
-    post_acts += bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, actions);
-    post_acts += bracha87Fig1Input(b, BRACHA87_READY, 0, v, actions);
-    post_acts += bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, actions);
+    post_acts += bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, 0, 1, actions);
+    post_acts += bracha87Fig1Input(b, BRACHA87_READY, 0, v, 0, 1, actions);
+    post_acts += bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, 0, 1, actions);
     CHECK(post_acts == 0, "PostAccept: every post-accept Input returns 0 actions");
     CHECK(!saw_accept, "PostAccept: ACCEPT is not output a second time");
     CHECK(bracha87Fig1AllEchoed(b) == 1, "PostAccept: AllEchoed stays 1");
@@ -1188,7 +1188,7 @@ main(int argc, char **argv)
     }
     for (i = 4; i < 8; ++i) arr[i] = 0;
     bracha87Fig1Initiator(arr[1], v);
-    (void) bracha87Fig1Input(arr[2], BRACHA87_INITIAL, 0, v, buf);
+    (void) bracha87Fig1Input(arr[2], BRACHA87_INITIAL, 0, v, 0, 1, buf);
     CHECK(bracha87Fig1SentCount((struct bracha87Fig1 *const *) arr, 8)
             == 2, "SentCount = 2 (initiator + echoed)");
     bracha87RetryInit(&retry);
@@ -1279,7 +1279,7 @@ main(int argc, char **argv)
      */
     for (i = 0; i < N_ACT; ++i)
       (void) bracha87Fig1Input(sarr[0], BRACHA87_READY,
-                               (unsigned char) i, sv, buf);
+                               (unsigned char) i, sv, 0, 1, buf);
     for (i = 0; i < N_ACT; ++i)
       bracha87Fig1ProcessAccepted(sarr[0], (unsigned char) i);
     before = sretry.sweeps;
@@ -1311,7 +1311,7 @@ main(int argc, char **argv)
     /* Echoes from senders 0, 1, 2 (3rd echo = sender 2) */
     for (i = 0; i < 3; ++i) {
       act_count = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i,
-                                    v, actions);
+                                    v, 0, 1, actions);
       for (j = 0; j < act_count; ++j)
         if (actions[j] == BRACHA87_ECHO_ALL) firedAt[i] = 1;
     }
@@ -1339,7 +1339,7 @@ main(int argc, char **argv)
     for (i = 0; i < 7; ++i) firedAt[i] = 0;
     for (i = 0; i < 7; ++i) {
       act_count = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char) i,
-                                    v, actions);
+                                    v, 0, 1, actions);
       for (j = 0; j < act_count; ++j)
         if (actions[j] == BRACHA87_ECHO_ALL) firedAt[i] = 1;
       if ((b->flags & BRACHA87_F1_ECHOED) != 0) break;
@@ -1526,7 +1526,7 @@ main(int argc, char **argv)
     int sawEcho = 0, sawReady = 0, sawAccept = 0;
 
     CHECK(bracha87Fig1Init(b, N_ENC, 0, VLEN_BIN) == 1, "Fig1Init at t = 0");
-    act_count = bracha87Fig1Input(b, BRACHA87_READY, 1, v, actions);
+    act_count = bracha87Fig1Input(b, BRACHA87_READY, 1, v, 0, 1, actions);
     for (j = 0; j < act_count; ++j) {
       if (actions[j] == BRACHA87_ECHO_ALL) sawEcho = 1;
       if (actions[j] == BRACHA87_READY_ALL) sawReady = 1;
@@ -1556,11 +1556,11 @@ main(int argc, char **argv)
 
     CHECK(bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN) == 1,
           "Fig1Init for the un-echoed crossing");
-    CHECK(bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, actions) == 0,
+    CHECK(bracha87Fig1Input(b, BRACHA87_ECHO, 0, v, 0, 1, actions) == 0,
           "un-echoed crossing: the first echo is below the threshold");
-    CHECK(bracha87Fig1Input(b, BRACHA87_ECHO, 1, v, actions) == 0,
+    CHECK(bracha87Fig1Input(b, BRACHA87_ECHO, 1, v, 0, 1, actions) == 0,
           "un-echoed crossing: the second echo is below the threshold");
-    act_count = bracha87Fig1Input(b, BRACHA87_ECHO, 2, v, actions);
+    act_count = bracha87Fig1Input(b, BRACHA87_ECHO, 2, v, 0, 1, actions);
     for (j = 0; j < act_count; ++j) {
       if (actions[j] == BRACHA87_ECHO_ALL) sawEcho = 1;
       if (actions[j] == BRACHA87_READY_ALL) sawReady = 1;
@@ -1571,7 +1571,7 @@ main(int argc, char **argv)
     CHECK((b->flags & (BRACHA87_F1_ECHOED | BRACHA87_F1_RDSENT))
           == (BRACHA87_F1_ECHOED | BRACHA87_F1_RDSENT),
           "un-echoed crossing: ECHOED and RDSENT both set");
-    CHECK(bracha87Fig1Input(b, BRACHA87_ECHO, 3, v, actions) == 0,
+    CHECK(bracha87Fig1Input(b, BRACHA87_ECHO, 3, v, 0, 1, actions) == 0,
           "un-echoed crossing: a later echo adds nothing");
   }
 
@@ -1843,6 +1843,98 @@ main(int argc, char **argv)
             "Fig3RoundComplete refuses a null instance");
       free(b3);
     }
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("Fig1 annotation exchange on bracha87Fig1Input");
+  /* ---------------------------------------------------------------- */
+  /* Header, bracha87Fig1Input: accepted and received "drive two side   */
+  /* effects this entry takes after the paper actions:                 */
+  /* bracha87Fig1ProcessAccepted(from) on a (ready, v) carrying        */
+  /* ACCEPTED, and bracha87Fig1ProcessResend(from) on a (ready, v) NOT */
+  /* carrying RECEIVED once this instance has accepted -- 'once' read  */
+  /* after the accept this very message may have caused"; "SELF IS A   */
+  /* SENDER LIKE ANY OTHER ... It is never written from local state";  */
+  /* a duplicate "runs the dispatch all the same and returns 0"; and   */
+  /* at t = 0, written at the ACCEPT act "the hand-back would never be */
+  /* sent, and rdFrom would never gain self."                          */
+  {
+    struct bracha87Fig1 *b = (struct bracha87Fig1 *) fig1Storage[0];
+    static const unsigned char v[1] = { 1 };
+    const unsigned char *ac;
+    const unsigned char *sk;
+    const unsigned char *rd;
+    unsigned int n;
+
+    bracha87Fig1Init(b, N_ENC, T_VAL, VLEN_BIN);
+    (void) bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, 0, 1, buf);
+    n = bracha87Fig1Input(b, BRACHA87_READY, 1, v, 1, 0, buf);
+    ac = bracha87Fig1Received(b);
+    CHECK(BRACHA87_SKIP_TST(ac, 1), "Annot: a (ready, v) carrying ACCEPTED marks its sender");
+    sk = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    CHECK(BRACHA87_SKIP_TST(sk, 1), "Annot: and before this instance accepts, no arm is taken");
+    CHECK(n == 0, "Annot: the annotations are side effects, not actions");
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, 0, 1, buf);   /* t+1: ready */
+    /* The accepting READY, unmarked: its own arm lands in the same
+     * call -- the chained rule. */
+    n = bracha87Fig1Input(b, BRACHA87_READY, 0, v, 1, 0, buf);      /* 2t+1: accept */
+    CHECK(b->flags & BRACHA87_F1_ACCEPTED, "Annot: setup accepted");
+    CHECK(n == 1 && buf[0] == BRACHA87_ACCEPT, "Annot: the accept is the one action");
+    sk = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    CHECK(!BRACHA87_SKIP_TST(sk, 0)
+          && BRACHA87_SKIP_TST(bracha87Fig1Received(b), 0),
+          "Annot: the accepting unmarked (ready, v) is recorded and armed in its own call");
+    ac = bracha87Fig1Received(b);
+    CHECK(!BRACHA87_SKIP_TST(ac, 3), "Annot: self is not written from local state at accept");
+    /* A duplicate, unmarked: recorded nothing, returned 0, and armed. */
+    n = bracha87Fig1Input(b, BRACHA87_READY, 1, v, 1, 0, buf);
+    sk = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    CHECK(n == 0 && !BRACHA87_SKIP_TST(sk, 1),
+          "Annot: a duplicate unmarked (ready, v) arms its sender once accepted");
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 2, v, 1, 1, buf);
+    sk = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    CHECK(BRACHA87_SKIP_TST(sk, 2), "Annot: a marked (ready, v) re-arms nothing");
+    /* Self's first hand-back after accept, as a framer builds it:
+     * ACCEPTED from the flag, RECEIVED from acFrom -- which lacks self. */
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 3, v, 1, 0, buf);
+    ac = bracha87Fig1Received(b);
+    rd = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
+    sk = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    CHECK(BRACHA87_SKIP_TST(ac, 3) && BRACHA87_SKIP_TST(rd, 3),
+          "Annot: self recorded by its own hand-back carrying ACCEPTED, behind its ready");
+    CHECK(!BRACHA87_SKIP_TST(sk, 3), "Annot: and armed, the hand-back lacking RECEIVED");
+    n = bracha87Fig1Bpr(b, buf);                              /* consumes the arm */
+    sk = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    CHECK(n > 0 && !BRACHA87_SKIP_TST(sk, 3), "Annot: the next egress reaches self");
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 3, v, 1, 1, buf);
+    n = bracha87Fig1Bpr(b, buf);
+    sk = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    CHECK(BRACHA87_SKIP_TST(sk, 3), "Annot: its hand-back carrying both re-arms nothing");
+    /* Every process announced -- 1, 0 and 2 on their READYs, self on
+     * its hand-back -- and no arm outstanding: the READY retires. */
+    CHECK(n == 0, "Annot: and with all n announced the instance quiesces");
+
+    /* t = 0, n = 2: one (ready, v) returns READY and ACCEPT together
+     * -- self (1) has echoed on the INITIAL and not readied when the
+     * first foreign ready arrives, which is t+1 = 1 (Rule 5) and 2t+1
+     * = 1 (Rule 6) at once.  The READY act's skip mask must not hold
+     * self when the caller frames it; the hand-back, marked, records
+     * self. */
+    bracha87Fig1Init(b, 1, 0, VLEN_BIN);
+    n = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, v, 0, 1, buf);
+    CHECK(n == 1 && buf[0] == BRACHA87_ECHO_ALL, "Annot t=0: the INITIAL echoes");
+    n = bracha87Fig1Input(b, BRACHA87_READY, 0, v, 1, 0, buf);
+    CHECK(n == 2 && buf[0] == BRACHA87_READY_ALL && buf[1] == BRACHA87_ACCEPT,
+          "Annot t=0: one foreign ready readies and accepts together");
+    sk = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    CHECK(!BRACHA87_SKIP_TST(sk, 1), "Annot t=0: self is not suppressed before its hand-back");
+    (void) bracha87Fig1Input(b, BRACHA87_READY, 1, v, 1, 0, buf);
+    ac = bracha87Fig1Received(b);
+    rd = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
+    CHECK(BRACHA87_SKIP_TST(ac, 1) && BRACHA87_SKIP_TST(rd, 1),
+          "Annot t=0: self recorded, readied set holds self");
+    CHECK(BRACHA87_SKIP_TST(ac, 0) && BRACHA87_SKIP_TST(ac, 1),
+          "Annot t=0: the all-n gate is reachable");
   }
 
   /* ---------------------------------------------------------------- */

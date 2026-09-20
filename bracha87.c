@@ -71,8 +71,8 @@
  * one bit short forever, and q re-sends unmarked into our suppression.
  * The unmarked re-send IS the repair signal: a (ready, v) arriving WITHOUT
  * the RECEIVED annotation shows its sender has not recorded our accept,
- * and the caller routes it to bracha87Fig1ProcessResend, which arms
- * armFrom.  armFrom un-suppresses that process for one egress -- skFrom is
+ * and the dispatch's arm row reaches bracha87Fig1ProcessResend, which
+ * arms armFrom.  armFrom un-suppresses that process for one egress -- skFrom is
  * the difference -- and is consumed by that egress; a lost marked re-send
  * is re-armed by its target's next unmarked one.  A marked (ready, v)
  * never arms, so the exchange cannot ping-pong.
@@ -304,6 +304,8 @@ bracha87Fig1Input(
  ,unsigned char type
  ,unsigned char from
  ,const unsigned char *value
+ ,unsigned char accepted
+ ,unsigned char received
  ,unsigned char *out
 ){
   unsigned int nout;
@@ -311,63 +313,79 @@ bracha87Fig1Input(
   unsigned int rd;
   unsigned char haveEchoed;
   unsigned char haveSentReady;
+  unsigned char haveAccepted;
   unsigned char ecGtHalfNT;
   unsigned char rdGeTPlus1;
   unsigned char rdGe2TPlus1;
+  unsigned char amInitiator;
+  unsigned char allEchoed;
+  unsigned char readyMaskFull;
+  unsigned char annAccepted;
+  unsigned char annReceived;
   unsigned char sendEcho;
   unsigned char sendReady;
   unsigned char acceptV;
+  unsigned char retryInitial;
   unsigned char retryEcho;
   unsigned char retryReady;
+  unsigned char recordSender;
+  unsigned char armSender;
 
   if (!b || !value || !out || from > b->n)
     return (0);
 
-  /* Per-sender deduplication and count update; ec/rd are 0 on the
-   * branches where the corresponding count cannot fire a rule. */
+  /* Per-sender record and count.  A sender's first echo and first
+   * ready are recorded; a duplicate (a re-send, or a differing-value
+   * copy) records nothing and leaves the counts as they were -- and
+   * still runs the dispatch below, since a duplicate (ready, v) is
+   * exactly the message the annotation rules must see.  ec/rd are 0
+   * on the branches where the corresponding count cannot fire a rule. */
   ec = 0;
   rd = 0;
   switch (type) {
   case BRACHA87_INITIAL:
     break;
   case BRACHA87_ECHO:
-    if (BIT_TST(F1_ECFROM(b), from))
-      return (0);
-    fig1SetEc(b, from, value);
+    if (!BIT_TST(F1_ECFROM(b), from))
+      fig1SetEc(b, from, value);
     ec = fig1EcCnt(b, value);
     break;
   case BRACHA87_READY:
-    if (BIT_TST(F1_RDFROM(b), from))
-      return (0);
-    fig1SetRd(b, from, value);
+    if (!BIT_TST(F1_RDFROM(b), from))
+      fig1SetRd(b, from, value);
     rd = fig1RdCnt(b, value);
     break;
   default:
     return (0);
   }
 
-  /* Post-accept arrivals are recorded, never computed: the per-sender
-   * writes above keep AllEchoed, the INITIAL/ECHO suppress masks, and
-   * the acFrom-subset-of-rdFrom property live past ACCEPT, while the
-   * dispatch below stays unreachable -- ACCEPT outputs exactly once. */
-  if (b->flags & BRACHA87_F1_ACCEPTED)
-    return (0);
-
   haveEchoed    = (b->flags & BRACHA87_F1_ECHOED) ? 1 : 0;
   haveSentReady = (b->flags & BRACHA87_F1_RDSENT) ? 1 : 0;
+  haveAccepted  = (b->flags & BRACHA87_F1_ACCEPTED) ? 1 : 0;
   ecGtHalfNT    = ec >= (B_N(b) + b->t) / 2 + 1;
   rdGeTPlus1    = rd >= (unsigned int)b->t + 1;
   rdGe2TPlus1   = rd >= 2u * b->t + 1;
-  sendEcho    = 0;
-  sendReady   = 0;
-  acceptV     = 0;
-  retryEcho  = 0;
-  retryReady = 0;
+  /* The retire inputs: this entry discards the retry outputs, and
+   * nothing it reads depends on these (bracha87Fig1.dtc, one
+   * dispatch, two entry points; test_predicates enumerates it). */
+  amInitiator   = 0;
+  allEchoed     = 0;
+  readyMaskFull = 0;
+  annAccepted   = accepted ? 1 : 0;
+  annReceived   = received ? 1 : 0;
+  sendEcho     = 0;
+  sendReady    = 0;
+  acceptV      = 0;
+  retryInitial = 0;
+  retryEcho    = 0;
+  retryReady   = 0;
+  recordSender = 0;
+  armSender    = 0;
 
 #include "bracha87Fig1Rules.c"
 
-  /* Entry-point discriminator: BPR retry outputs are
-   * exhaustiveness-only on the Input path and discarded. */
+  /* Entry-point discriminator: the retry outputs are Bpr's. */
+  (void)retryInitial;
   (void)retryEcho;
   (void)retryReady;
 
@@ -386,6 +404,13 @@ bracha87Fig1Input(
     b->flags |= BRACHA87_F1_ACCEPTED;
     out[nout++] = BRACHA87_ACCEPT;
   }
+  /* The annotation outputs, after the accept this message may have
+   * caused (the arm rule chains on accept(v); the setter reads the
+   * flag) and after the sender's own ready record above. */
+  if (recordSender)
+    bracha87Fig1ProcessAccepted(b, from);
+  if (armSender)
+    bracha87Fig1ProcessResend(b, from);
   return (nout);
 }
 
@@ -407,169 +432,121 @@ bracha87Fig1Bpr(
   unsigned char type;
   unsigned char haveEchoed;
   unsigned char haveSentReady;
+  unsigned char haveAccepted;
   unsigned char ecGtHalfNT;
   unsigned char rdGeTPlus1;
   unsigned char rdGe2TPlus1;
+  unsigned char amInitiator;
+  unsigned char allEchoed;
+  unsigned char readyMaskFull;
+  unsigned char annAccepted;
+  unsigned char annReceived;
   unsigned char sendEcho;
   unsigned char sendReady;
   unsigned char acceptV;
+  unsigned char retryInitial;
   unsigned char retryEcho;
   unsigned char retryReady;
+  unsigned char recordSender;
+  unsigned char armSender;
 
   if (!b || !out)
     return (0);
 
-  /* Nothing sent yet and not the initiator -> nothing to retry. */
+  /* Nothing sent yet and not the initiator -> nothing to retry.  A
+   * fast path only: the rows say the same. */
   if (!(b->flags & (BRACHA87_F1_ECHOED | BRACHA87_F1_INITIATOR)))
     return (0);
 
-  nout = 0;
+  /*
+   * The READY suppress mask, materialized here where the egress
+   * consumes the arms: skFrom = acFrom & ~armFrom, and armFrom is
+   * cleared.  acFrom records processes' announced accepts
+   * (bracha87Fig1ProcessAccepted, fed from the ACCEPTED annotation on
+   * their ready retries, self by its own hand-back); armFrom records
+   * the processes whose READYs arrived unmarked, each showing this
+   * instance's accept not received there (bracha87Fig1ProcessResend).
+   * skFrom carries BOTH decisions: full coverage retires the action
+   * (the "READY suppress mask covers all n" input below), and each set
+   * bit suppresses one recipient (bracha87Fig1Skip).  Reaching full
+   * coverage requires every CORRECT process's true accept -- a
+   * byzantine process's forged ACCEPTED only marks itself, never
+   * strands a correct laggard -- so the gate is byzantine-safe; a
+   * byzantine process that keeps re-arming costs one masked READY
+   * aimed back at itself per pass and displaces nothing owed to a
+   * correct process, since every other bit of skFrom still suppresses.
+   * The two setters keep skFrom in step as they write acFrom and
+   * armFrom, so the Input-path READY act reads a current mask before
+   * this has ever run for the instance.  An arm set after this point
+   * draws the next tick's marked re-send; a lost marked re-send is
+   * re-armed by its target's next unmarked one, which is what makes
+   * quiescence reachable under fair loss rather than merely under
+   * lossless delivery.
+   */
+  readyMaskFull = 0;
+  if (b->flags & BRACHA87_F1_RDSENT) {
+    unsigned char *ac;
+    unsigned char *am;
+    unsigned char *sk;
+    unsigned int bs;
+    unsigned int i;
+
+    ac = F1_ACFROM(b);
+    am = F1_ARMFROM(b);
+    sk = F1_SKFROM(b);
+    bs = BIT_SZ(B_N(b));
+    for (i = 0; i < bs; ++i) {
+      sk[i] = ac[i] & ~am[i];
+      am[i] = 0;
+    }
+    readyMaskFull = fig1FromCnt(sk, B_N(b)) >= B_N(b);
+  }
 
   /*
-   * INITIAL / ECHO are bootstrap-only.  Their sole purpose is to
-   * drive t+1 CORRECT processes to send (ready, v); past that
-   * point Bracha's ready-amplification
-   * rule (rdCnt >= t+1 -> send ready, no echo threshold required)
-   * is self-sustaining and needs no further initials or echoes.
-   *
-   * ACCEPTED is the locally-observable proof that this point has
-   * passed: accept requires 2t+1 distinct readys, of which at most
-   * t are byzantine, so >= t+1 came from correct processes.  Those
-   * correct processes have RDSENT and retry (ready, v) for as long as
-   * anyone can still consume it -- READY has no LOCAL retire, and its
-   * remote one needs every process accepted and holding this accept,
-   * which none of them do yet here -- so under fair loss every correct process
-   * eventually collects t+1 of them, amplifies, sends ready, and --
-   * once n-t >= 2t+1 correct readys circulate -- accepts.  No
-   * INITIAL or ECHO is consumed anywhere in that tail.  So once THIS
-   * instance has ACCEPTED, its INITIAL and ECHO retries are provably
-   * dead weight: retire them.
-   *
-   * This is NOT the forbidden local-saturation gate.  Note 11
-   * forbids retiring INITIAL at merely ECHOED -- correct, because at
-   * local-echo time no readys may exist yet, so the rescue set is
-   * not established and the bootstrap is still load-bearing.
-   * ACCEPTED is strictly stronger: it is the witness that the t+1
-   * correct readys now exist.  (Note 10's ban on retiring READY
-   * at accept is untouched -- READY is exactly what the amplification
-   * tail consumes; see the READY output below.)  Input keeps recording
-   * per-sender echoes and readys past accept, so the all-echoed retire
-   * and the suppress masks stay live for the side channels that consume
-   * them.
-   *
-   * INITIAL carries a second, independent retire: echoSenders == n.
-   * INITIAL induces only echoes (Rule 1/2); once every process has
-   * echoed there is nothing left to induce.  Trivially sound,
-   * value-agnostic, monotone-latched, and fires before accept for a
-   * fast initiator -- so output only while NEITHER condition holds.
-   * Under <= t byzantine-silent processes echoSenders cannot reach n, so
-   * that path self-disables and ACCEPTED carries the retirement.
-   *
-   * Single-input guards, captured in C rather than as a DTC
-   * sub-table (see decisionTableCompiler/README.md
-   * "Cross-Domain Bridge Pattern" -- guards with no ordering
-   * insight stay in C).
+   * The dispatch, entered with a "kind of message" that cannot fire a
+   * paper rule given the sent state -- (initial, v) with "have
+   * echoed" as it stands leaves Rules 1-3 inhibited once echoed and
+   * Rules 4-6 unmet, and an un-echoed initiator's Rule 1 output is
+   * discarded below with the rest -- and the annotations fixed.  The
+   * retire inputs are the instance's; the retry outputs are applied,
+   * everything else discarded (bracha87Fig1.dtc, one dispatch, two
+   * entry points).
    */
-  if ((b->flags & BRACHA87_F1_INITIATOR)
-   && !(b->flags & BRACHA87_F1_ACCEPTED)
-   && fig1FromCnt(F1_ECFROM(b), B_N(b)) < B_N(b))
-    out[nout++] = BRACHA87_INITIAL_ALL;
-
-  /*
-   * Echo / ready retry: chain on the merged paper+BPR
-   * dispatch.  Bpr enters with a "kind of message" that cannot
-   * fire any paper rule given current sent state -- type =
-   * INITIAL with have echoed = yes leaves Rules 1-3 inhibited
-   * (need !echoed) and Rules 4-6 unmet (need kind = (echo, v)
-   * or (ready, v)).  Bracha outputs come back all "no" and the
-   * chained BPR rules fire from "send X = no AND have-X-state =
-   * yes".  Threshold predicates are immaterial to the chained
-   * BPR rules in this state; 0 suffices.
-   *
-   * In the initiator-but-not-echoed branch (above), the INITIAL
-   * retry is already output; the dispatch is skipped because
-   * ECHOED clear means the BPR echo / ready rules would output
-   * no-retry regardless of their other inputs (their guards
-   * require haveEchoed = yes / haveSentReady = yes).
-   */
-  if (b->flags & BRACHA87_F1_ECHOED) {
-    type          = BRACHA87_INITIAL;
-    haveEchoed    = 1;
-    haveSentReady = (b->flags & BRACHA87_F1_RDSENT) ? 1 : 0;
-    ecGtHalfNT    = 0;
-    rdGeTPlus1    = 0;
-    rdGe2TPlus1   = 0;
-    sendEcho    = 0;
-    sendReady   = 0;
-    acceptV     = 0;
-    retryEcho  = 0;
-    retryReady = 0;
+  type          = BRACHA87_INITIAL;
+  haveEchoed    = (b->flags & BRACHA87_F1_ECHOED) ? 1 : 0;
+  haveSentReady = (b->flags & BRACHA87_F1_RDSENT) ? 1 : 0;
+  haveAccepted  = (b->flags & BRACHA87_F1_ACCEPTED) ? 1 : 0;
+  ecGtHalfNT    = 0;
+  rdGeTPlus1    = 0;
+  rdGe2TPlus1   = 0;
+  amInitiator   = (b->flags & BRACHA87_F1_INITIATOR) ? 1 : 0;
+  allEchoed     = fig1FromCnt(F1_ECFROM(b), B_N(b)) >= B_N(b);
+  annAccepted   = 0;
+  annReceived   = 1;
+  sendEcho     = 0;
+  sendReady    = 0;
+  acceptV      = 0;
+  retryInitial = 0;
+  retryEcho    = 0;
+  retryReady   = 0;
+  recordSender = 0;
+  armSender    = 0;
 
 #include "bracha87Fig1Rules.c"
 
-    /* Bracha outputs are guaranteed 0 by the type/state passed;
-     * Bpr applies BPR retry outputs only. */
-    (void)sendEcho;
-    (void)sendReady;
-    (void)acceptV;
+  (void)sendEcho;
+  (void)sendReady;
+  (void)acceptV;
+  (void)recordSender;
+  (void)armSender;
 
-    /*
-     * ECHO retires at ACCEPTED for the same reason as INITIAL: once
-     * t+1 correct readys exist (witnessed by this instance's accept),
-     * every correct process reaches accept on readys alone, via
-     * amplification, with no echo consumed.  READY does NOT retire HERE
-     * (Note 10) -- it is precisely what that amplification tail
-     * consumes, so ACCEPTED must not touch it.  Its own retire is the
-     * remote one immediately below.
-     */
-    if (retryEcho && !(b->flags & BRACHA87_F1_ACCEPTED))
-      out[nout++] = BRACHA87_ECHO_ALL;
-    /*
-     * READY never retires on LOCAL state (Note 10): an accepted process
-     * still owes (ready, v) to processes below 2t+1.  But it DOES retire on
-     * the REMOTE fact that every process has accepted AND holds this
-     * instance's own accept -- then no process consumes a ready anywhere
-     * and the instance is quiescent.  acFrom records processes' own accepts
-     * (bracha87Fig1ProcessAccepted, fed from the ACCEPTED annotation on their
-     * ready retries, self included via the caller); armFrom records the
-     * processes whose READYs arrived unmarked, each showing this
-     * instance's accept not received there (bracha87Fig1ProcessResend).
-     * skFrom is the difference, and it carries
-     * BOTH decisions: full coverage retires the action, and each set bit
-     * suppresses one recipient.  Reaching full coverage requires every
-     * CORRECT process's true accept -- a byzantine process's forged
-     * ACCEPTED only marks itself, never strands a correct laggard -- so the
-     * gate is byzantine-safe; a byzantine process that keeps re-arming
-     * costs one masked READY aimed back at itself per tick and displaces
-     * nothing owed to a correct process, since every other bit of skFrom
-     * still suppresses.
-     *
-     * The materialization is here, and only here, because an arm is
-     * consumed by the egress it un-suppresses.  An arm set after this
-     * point draws the next tick's marked re-send; a lost marked re-send is
-     * re-armed by its target's next unmarked one, which is what makes
-     * quiescence reachable under fair loss rather than merely under
-     * lossless delivery.
-     */
-    if (retryReady) {
-      unsigned char *ac;
-      unsigned char *am;
-      unsigned char *sk;
-      unsigned int bs;
-      unsigned int i;
-
-      ac = F1_ACFROM(b);
-      am = F1_ARMFROM(b);
-      sk = F1_SKFROM(b);
-      bs = BIT_SZ(B_N(b));
-      for (i = 0; i < bs; ++i) {
-        sk[i] = ac[i] & ~am[i];
-        am[i] = 0;
-      }
-      if (fig1FromCnt(sk, B_N(b)) < B_N(b))
-        out[nout++] = BRACHA87_READY_ALL;
-    }
-  }
+  nout = 0;
+  if (retryInitial)
+    out[nout++] = BRACHA87_INITIAL_ALL;
+  if (retryEcho)
+    out[nout++] = BRACHA87_ECHO_ALL;
+  if (retryReady)
+    out[nout++] = BRACHA87_READY_ALL;
   return (nout);
 }
 
@@ -591,9 +568,9 @@ bracha87Fig1AllEchoed(
  * the sender of a (ready, v) carrying the ACCEPTED annotation, so the
  * caller has already fed that ready through bracha87Fig1Input (setting
  * rdFrom[from]) before calling this; acFrom is thus a subset of rdFrom.
- * Pass the local index for self-accept so the quiescence count can reach
- * n (a Fig1 instance does not know its own process index -- the caller,
- * which routes by it, supplies it).
+ * Self is a sender like any other: its accept arrives on its own marked
+ * (ready, v) hand-back, behind that hand-back's ready record, so the
+ * quiescence count reaches n with no self-index and no local write.
  */
 void
 bracha87Fig1ProcessAccepted(
@@ -607,8 +584,8 @@ bracha87Fig1ProcessAccepted(
    * Keep the effective mask in step with the formula skFrom = acFrom &
    * ~armFrom.  Deriving the bit rather than setting it is what makes this
    * setter and bracha87Fig1ProcessResend order-independent: one READY can
-   * carry both facts (its sender has accepted, and it lacks ours), and the
-   * caller routes them in whichever order it likes.
+   * carry both facts (its sender has accepted, and it lacks ours); the
+   * dispatch applies them in a fixed order and a direct caller in any.
    */
   if (BIT_TST(F1_ARMFROM(b), from))
     BIT_CLR(F1_SKFROM(b), from);
@@ -625,8 +602,11 @@ bracha87Fig1ProcessAccepted(
  * bracha87Fig1Received, the RECEIVED annotation back).
  *
  * Records nothing before this instance has ACCEPTED: there is no accept to
- * announce yet, and the post-accept retries reach an unannounced-to process
- * anyway, since it is not yet in acFrom.  Idempotent within a tick; a
+ * announce yet, and the unannounced-to process's own READY keeps arriving
+ * unmarked until it is -- the first such arrival after accept arms it (an
+ * announcement it made before this instance accepted already suppresses
+ * it, so the arm, not the ordinary retry, is what reaches it).
+ * Idempotent within a tick; a
  * duplicate re-arms by arriving again after the egress consumed the last
  * one, and that re-arming IS the loss recovery.
  */
@@ -662,9 +642,12 @@ bracha87Fig1ProcessResend(
  *     still owed this instance's own announcement (bracha87Fig1Process-
  *     Resend) -- suppressing those would strand them.
  *
- * Each mask uses only the soonest sound evidence: ecFrom (not rdFrom)
- * would under-suppress INITIAL; rdFrom (not ecFrom) would over-suppress
- * ECHO to processes still collecting echoes toward Rule 4.
+ * Each mask uses only the soonest sound evidence: rdFrom for INITIAL
+ * would under-suppress it (an echoed-but-not-readied process induces
+ * nothing and would still be sent to); ecFrom for ECHO would
+ * over-suppress it, withholding echoes from processes still collecting
+ * toward Rule 4 -- at n = 3t+1 with a silent process, fatally.  The
+ * catalogue's M66 and M67 are those two swaps.
  */
 const unsigned char *
 bracha87Fig1Skip(

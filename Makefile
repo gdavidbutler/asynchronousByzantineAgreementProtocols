@@ -64,7 +64,7 @@ test_bracha87: test/test_bracha87.c bracha87.o bracha87.h
 test_bkr94acs: test/test_bkr94acs.c bkr94acs.o bracha87.o bkr94acs.h bracha87.h
 	$(CC) $(CFLAGS) -I. -o $@ test/test_bkr94acs.c bkr94acs.o bracha87.o
 
-test_predicates: test/test_predicates.c bracha87.c bracha87.h bracha87Fig1Rules.c bracha87Fig3Rules.c bracha87Fig4Rules.c
+test_predicates: test/test_predicates.c bracha87.c bracha87.h bracha87Fig1Rules.c bracha87Fig3Rules.c bracha87Fig4Rules.c bkr94acs.c bkr94acs.h bkr94acsRules.c
 	$(CC) $(CFLAGS) -I. -o $@ test/test_predicates.c
 
 test_bracha87_blackbox: test/test_bracha87_blackbox.c bracha87.o bracha87.h

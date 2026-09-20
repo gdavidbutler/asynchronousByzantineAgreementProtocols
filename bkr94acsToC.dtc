@@ -1,7 +1,8 @@
 # Bridge from bkr94acs.dtc (paper vocabulary) to C symbols used in
 # bkr94acsAcastInput (Q(j)=1 dispatch site) and bkr94acsTurn
-# (BA_j outputs dispatch site).  The same dispatch is #include'd at both
-# sites; C-function-scoped labels keep them distinct.
+# (BA_j outputs dispatch site), and at the BPR sites below.  The same
+# dispatch is #include'd at every site; C-function-scoped labels keep
+# them distinct.
 #
 # The BA-outputs site is the round TURN, not the arrival path:
 # bkr94acsBaInput only banks evidence and dispatches nothing (see
@@ -40,5 +41,47 @@ no,0
 0,no
 
 @~doOutputSubset,"output SubSet"
+1,yes
+0,no
+
+# ===========================================================
+# Bracha Phase Retry (BPR)
+# ===========================================================
+#
+# The verdict gate reads the BA decision byte as bkr94acsBaDecision
+# answers it; the duty inputs are the seam's predicates, computed at
+# the duty site (bkr94acsDuty in bkr94acs.c); the seam constants are
+# file-local macros there.  A site that does not read a group feeds
+# it a fixed value and discards its outputs; test_predicates requires
+# that nothing a site reads depends on what it feeds that way.
+
+@"BA_j decision",~baDecision
+undecided,0xFF
+"decided 0",0
+"decided 1",1
+exhausted,0xFE
+
+@"seam",~seam
+fanout,BKR94ACS_SEAM_FANOUT
+turn,BKR94ACS_SEAM_TURN
+
+@"enabled",~enabled
+yes,1
+no,0
+
+@"nothing left to wait for",~nothingLeft
+yes,1
+no,0
+
+@~walk,"walk A-Cast j"
+1,yes
+0,no
+
+@~duty,"duty"
+BKR94ACS_DUTY_HELD,HELD
+BKR94ACS_DUTY_TOLERANCE,TOLERANCE
+BKR94ACS_DUTY_MET,MET
+
+@~fire,"fire on call"
 1,yes
 0,no

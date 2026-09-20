@@ -35,11 +35,19 @@
 #   "echo-count(v) > (n+t)/2"    { yes, no }
 #   "ready-count(v) >= t+1"      { yes, no }
 #   "ready-count(v) >= 2t+1"     { yes, no }
+#   "have accepted"              { yes, no }
 #
 # Outputs (the actions the process may take):
 #   "send (echo, v)"             { yes, no }
 #   "send (ready, v)"            { yes, no }
 #   "accept(v)"                  { yes, no }
+#
+# "have accepted" is an input of the paper rules that Fig 1 does not
+# write down: a step program ends at accept(v), so it accepts once.
+# The row that says so is on the accept table below, and it is what
+# lets every arrival -- a duplicate, a post-accept ready -- run this
+# dispatch: the BPR rules further down consume messages the paper is
+# finished with, and no paper output fires twice.
 #
 # The figure is a sequence of STEPS, not a set of independent
 # rules: Bracha87.txt reads "Three paths into echo (step 1), two
@@ -143,14 +151,21 @@ no,"(ready, v)",no,no,,
 # process that had not sent ready fires Rule 5 here and accepts
 # on the same message -- the conjunct never withholds an accept,
 # and stating it keeps the row the figure's.
-@"accept(v)","kind of message","send (ready, v)","have sent ready","ready-count(v) >= 2t+1"
-yes,"(ready, v)",yes,,yes
-no,"(ready, v)",yes,,no
-yes,"(ready, v)",no,yes,yes
-no,"(ready, v)",no,yes,no
-no,"(ready, v)",no,no,
-no,"(initial, v)",,,
-no,"(echo, v)",,,
+#
+# Once: a process that has accepted accepts no more -- the step
+# program has ended.  Stated as a row so that arrivals after accept
+# (recorded for the BPR sets, and consumed by the BPR rules below)
+# fire nothing here.
+@"accept(v)","kind of message","send (ready, v)","have sent ready","ready-count(v) >= 2t+1","have accepted"
+yes,"(ready, v)",yes,,yes,no
+no,"(ready, v)",yes,,no,
+no,"(ready, v)",yes,,,yes
+yes,"(ready, v)",no,yes,yes,no
+no,"(ready, v)",no,yes,no,
+no,"(ready, v)",no,yes,,yes
+no,"(ready, v)",no,no,,
+no,"(initial, v)",,,,
+no,"(echo, v)",,,,
 
 # ===========================================================
 # Bracha Phase Retry (BPR)
@@ -163,12 +178,15 @@ no,"(echo, v)",,,
 # retrying the broadcast actions an instance has sent, whenever
 # the application's retry ticks.  No application-layer bookkeeping
 # is needed: retry state is intrinsic to Bracha's own sent flags
-# (echoed, rdSent) plus an "am initiator" bit that names this
-# process as the broadcast initiator.
+# (echoed, rdSent), an "am initiator" bit that names this process
+# as the broadcast initiator, and the per-sender bitmaps the
+# instance already keeps -- who echoed (the INITIAL retire and
+# mask), who readied (the ECHO mask), who announced an accept and
+# who is armed (the READY retire and mask).
 #
 # Justification: end-to-end argument (Saltzer/Reed/Clark 1984;
 # see SRC84.txt).  The "still owed" predicate lives at the Bracha
-# endpoint -- F1_ECHOED, F1_RDSENT, F1_INITIATOR -- so the
+# endpoint -- the sent flags and the per-sender bitmaps -- so the
 # retransmission function is placed at the endpoint that holds
 # the knowledge needed to implement it correctly.  A separate
 # stubborn-link layer below would have to be told by Bracha when
@@ -186,94 +204,153 @@ no,"(echo, v)",,,
 # Trigger.  The application calls bracha87Fig1Bpr on an instance
 # whenever its own retry cadence advances.  No wall-clock
 # predicate appears anywhere; the application's tick IS the
-# event, so asynchrony is preserved.  The Bpr wrapper enters the
-# merged dispatch with a "kind of message" that cannot fire any
-# paper rule given current sent state (kind=(initial, v)
-# with have echoed=yes leaves Rules 1-3 inhibited and Rules 4-6
-# unmet).  Bracha outputs come back all "no" and the chained BPR
-# rules fire from the sent flags.  In silent periods the
+# event, so asynchrony is preserved.  In silent periods the
 # application omits the call and the protocol stays silent.
 #
-# Discriminator.  bracha87.c selects which outputs to apply by
-# entry point: bracha87Fig1Input applies the paper outputs and
-# discards BPR outputs (retry would be redundant when first-
-# output fires); bracha87Fig1Bpr applies BPR outputs and discards
-# the paper outputs (which are guaranteed all "no" in its call
-# path).  No discriminator is required inside the dispatch.
+# One dispatch, two entry points.  bracha87Fig1Input runs it on
+# every arriving message and applies the paper outputs and the
+# annotation outputs; bracha87Fig1Bpr runs it on a tick and
+# applies the retry outputs.  Each entry discards the other's
+# outputs.  The inputs it feeds from state are the ones its own
+# outputs read; the rest it feeds a fixed value (Bpr's "kind of
+# message" is (initial, v) with the thresholds unmet, ACCEPTED
+# absent and RECEIVED present; Input's "am initiator", "all echoed" and
+# "READY mask covers all n" are "no"), and the discarded outputs
+# may fire on them -- an un-echoed initiator's tick fires Rule 1,
+# and drops it.  What makes that harmless is that nothing an entry
+# reads moves with a value it fed by fiat -- a fact of the rows,
+# not of the table's shape: the echo and ready retries chain on the send rules,
+# which read the kind of message Bpr fixes, and they stay constant
+# because a retry is "no" whenever its send fires.  So it is
+# checked, not derived: test_predicates enumerates both entries'
+# input spaces against the snippet and requires it.  The rules
+# are written once, in the paper's and
+# BPR.md's vocabulary, and dtc resolves the chains across both
+# groups.
 #
-# Retirement (minimal retry).  Each retry stops at the
-# soonest point it is provably no longer owed to any correct
-# process.  INITIAL and ECHO are bootstrap-only: they exist to
-# drive t+1 correct processes to send (ready, v), after which
-# Bracha's ready-amplification
-# (rdCnt >= t+1 -> send ready) is self-sustaining and consumes
-# neither.  "accepted" is the local witness this has passed
-# (>= t+1 of the 2t+1 readys are correct, retried forever),
-# so the wrapper bracha87Fig1Bpr drops the "retry (echo, v)"
-# output when ACCEPTED.  (ready, v) is NOT dropped on accepted:
-# it is exactly what the amplification tail consumes -- an
-# accepted process still owes its ready to processes under 2t+1, and
-# retry is the only delivery mechanism under loss.  (ready, v)
-# retires only on remote evidence, per process and whole-action:
-# it is suppressed to each process for which the remote pair of
-# facts holds -- accepted, and holding this instance's accept
-# (the ACCEPTED and RECEIVED annotations riding the READY
-# already being retried) -- and the retry falls silent when
-# that evidence covers all n: quiescence, the owing ending.
-# BPR.md (Retirement, Suppression and the Announcements,
-# Quiescence) carries each gate's argument; the application's
-# abandon policy remains the backstop.
+# Retirement (minimal retry).  Each retry stops at the soonest
+# point it is provably no longer owed to any correct process
+# (BPR.md, Retirement).  INITIAL and ECHO are bootstrap-only:
+# they exist to drive t+1 correct processes to send (ready, v),
+# after which Bracha's ready-amplification (rdCnt >= t+1 -> send
+# ready) is self-sustaining and consumes neither.  "have
+# accepted" is the local witness this has passed (>= t+1 of the
+# 2t+1 readys are correct, retried until every process has
+# accepted and holds the retrier's accept), so INITIAL and ECHO
+# retire at "have accepted" yes.  INITIAL also retires at "all
+# echoed" -- it induces only echoes, so once every process has
+# echoed there is nothing left for it to induce.  (ready, v) is
+# NOT dropped on accepted: it is exactly what the amplification
+# tail consumes -- an accepted process still owes its ready to
+# processes under 2t+1, and retry is the only delivery mechanism
+# under loss.  It retires only on remote evidence, per process
+# and whole-action: it is suppressed to each process for which
+# the remote pair of facts holds -- accepted, and holding this
+# instance's accept (the ACCEPTED and RECEIVED annotations riding
+# the READY already being retried) -- and the retry falls silent
+# when that evidence covers all n ("READY suppress mask covers all
+# n"): quiescence, the owing ending.  The forbidden weaker gates
+# -- INITIAL at merely echoed, READY at local accept -- are what
+# the rows below do not say (README Implementation Notes 10, 11).
 #
-# Initiator (initial, v) retry -- not in this dispatch.
-# A process that initiates a broadcast outputs (initial, v) on
-# every Bpr call while the initiator flag is set, UNTIL it has
-# accepted OR has observed an echo from every process
-# (echoSenders == n).  The "stop INITIAL once we have echoed
-# locally" optimization is incorrect -- in the n = 3t + 1
-# regime the Rule 2 echo threshold (n+t)/2 + 1 equals the
-# count of honest processes, so at local-echo time no readys may
-# exist yet and any honest process that missed the bootstrap can
-# leave the cascade one echo short forever; only the
-# initiator breaks it.  The two retirements above are sound
-# because both are strictly stronger than local-echo:
-# all-echoed leaves no process to induce; accepted establishes
-# the t+1 correct readys that finish the protocol without any
-# INITIAL.  Flag/count guards ("am initiator", "accepted",
-# "echoSenders == n") over a single output with no test-
-# ordering insight; the wrapper outputs BRACHA87_INITIAL_ALL as
-# a C early-output before the dispatch include.  See
-# decisionTableCompiler/README.md "Cross-Domain Bridge Pattern"
-# -- such guards stay in C; the BPR rules below are the cases
-# that benefit from joint optimization with the paper rules.
+# The annotation exchange (BPR.md, Suppression and the
+# Announcements).  A (ready, v) carries two facts beside its value:
+#   - the ACCEPTED annotation: its sender has accepted this
+#     instance and consumes no further ready from us -- record
+#     the sender as accepted (bracha87Fig1ProcessAccepted; drives
+#     the READY suppress mask and the all-n retire).  The record
+#     follows the message's own ready record, taken in C before
+#     this dispatch, so the accepted set stays a subset of the
+#     readied set.  Self is a sender like any other: its own
+#     accept arrives on its own hand-back carrying ACCEPTED.
+#   - the ABSENCE of the RECEIVED annotation: its sender has not
+#     recorded our accept, or it would have suppressed us instead
+#     of sending -- arm one marked re-send toward the sender
+#     (bracha87Fig1ProcessResend), once we have an accept to
+#     announce.  "Once we have" is read AFTER the accept rule has
+#     run on this same message, which is what "accept(v)" carries:
+#     the READY that accepts this instance and arrives unmarked
+#     arms its sender in the same dispatch.  Before we have
+#     accepted nothing is owed; the sender's unmarked READY keeps
+#     arriving until we do, and its first arrival after our accept
+#     is the one that arms.
+# INITIAL and ECHO carry no annotation and fire neither.  A
+# duplicate (ready, v) -- an unmarked re-send is one -- reaches
+# these rules because the dispatch runs on every arrival; that is
+# why "have accepted" is a paper input above rather than a C
+# early return.
 #
-# Additional outputs introduced by BPR (in this dispatch):
-#   "retry (echo, v)"           { yes, no }
-#   "retry (ready, v)"          { yes, no }
+# Additional inputs introduced by BPR (all read from the instance;
+# bridged in bracha87Fig1ToC.dtc):
+#   "am initiator"                   { yes, no }
+#   "all echoed"                     { yes, no }   echo senders == n
+#   "READY suppress mask covers all n" { yes, no }
+#   "carries ACCEPTED"               { yes, no }   read on (ready, v)
+#   "carries RECEIVED"               { yes, no }   read on (ready, v)
 #
-# No new input value, no new C constant, no change to "kind of
-# message" or its bridge.
+# Additional outputs introduced by BPR:
+#   "retry (initial, v)"             { yes, no }
+#   "retry (echo, v)"                { yes, no }
+#   "retry (ready, v)"               { yes, no }
+#   "record sender accepted"         { yes, no }
+#   "arm re-send to sender"          { yes, no }
+
+# ===== retry (initial, v) =====
+#
+# The initiator's INITIAL, until accepted or all-echoed.  Not
+# gated on "have echoed": at the n = 3t+1 boundary the Rule 2
+# echo threshold (n+t)/2 + 1 equals the count of honest processes,
+# so at local-echo time no readys may exist yet and any honest
+# process that missed the bootstrap can leave the cascade one echo
+# short forever; only the initiator breaks it.
+@"retry (initial, v)","am initiator","have accepted","all echoed"
+yes,yes,no,no
+no,yes,no,yes
+no,yes,yes,
+no,no,,
 
 # ===== retry (echo, v) =====
 #
-# Retry the sent echo iff Bracha is not firing send (echo,
-# v) on this dispatch and "have echoed" is set.  The sent
-# value is already in the instance state from a prior firing of
-# Rule 1, 2, or 3; BPR does not change it.
-@"retry (echo, v)","send (echo, v)","have echoed"
-no,yes,
-yes,no,yes
-no,no,no
+# Retry the sent echo iff Bracha is not firing send (echo, v) on
+# this dispatch, "have echoed" is set, and this instance has not
+# accepted.  The sent value is already in the instance state from
+# a prior firing of Rule 1, 2, or 3; BPR does not change it.
+@"retry (echo, v)","send (echo, v)","have echoed","have accepted"
+no,yes,,
+yes,no,yes,no
+no,no,yes,yes
+no,no,no,
 
 # ===== retry (ready, v) =====
 #
-# Retry the sent ready iff Bracha is not firing send
-# (ready, v) on this dispatch and "have sent ready" is set.  The
-# echoed value is already in the instance state from a prior
-# firing of Rule 4 or 5; BPR does not change it.  The accepted
-# flag does NOT gate this rule: an honest process that accepted
-# early owes its ready to processes still below the 2t+1 threshold,
-# and the whole point of retry is delivering it.
-@"retry (ready, v)","send (ready, v)","have sent ready"
-no,yes,
-yes,no,yes
-no,no,no
+# Retry the sent ready iff Bracha is not firing send (ready, v) on
+# this dispatch, "have sent ready" is set, and the READY suppress
+# mask is short of all n.  "have accepted" does NOT gate this rule.
+@"retry (ready, v)","send (ready, v)","have sent ready","READY suppress mask covers all n"
+no,yes,,
+yes,no,yes,no
+no,no,yes,yes
+no,no,no,
+
+# ===== record sender accepted =====
+#
+# A forged one marks only its own sender (BPR.md, Byzantine safety
+# of the annotations).
+@"record sender accepted","kind of message","carries ACCEPTED"
+yes,"(ready, v)",yes
+no,"(ready, v)",no
+no,"(initial, v)",
+no,"(echo, v)",
+
+# ===== arm re-send to sender =====
+#
+# Chained on accept(v): the accepting message's own arm is taken.
+# A marked READY re-arms nothing, which is what keeps the
+# exchange from ping-ponging.
+@"arm re-send to sender","kind of message","carries RECEIVED","accept(v)","have accepted"
+yes,"(ready, v)",no,yes,
+yes,"(ready, v)",no,no,yes
+no,"(ready, v)",no,no,no
+no,"(ready, v)",yes,,
+no,"(initial, v)",,,
+no,"(echo, v)",,,

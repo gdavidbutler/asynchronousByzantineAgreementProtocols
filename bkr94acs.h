@@ -165,13 +165,13 @@
 /**************************************************************************/
 
 #define BKR94ACS_CLS_ACAST  0x00 /* Fig1 reliable broadcast of A-Casts */
-#define BKR94ACS_CLS_BA 0x04 /* Fig1 messages for binary BA */
-#define BKR94ACS_CLS_MASK      0x04 /* recover class from a packed byte */
-#define BKR94ACS_ACCEPTED      0x10 /* on a READY: sender accepted this Fig1
-                                     * instance (BPR per-process READY retire) */
-#define BKR94ACS_RECEIVED      0x20 /* on a READY: sender has recorded the
-                                     * RECIPIENT's accept of this Fig1 instance
-                                     * -- "your accept was received here" */
+#define BKR94ACS_CLS_BA     0x04 /* Fig1 messages for binary BA */
+#define BKR94ACS_CLS_MASK   0x04 /* recover class from a packed byte */
+#define BKR94ACS_ACCEPTED   0x10 /* on a READY: sender accepted this Fig1
+                                  * instance (BPR per-process READY retire) */
+#define BKR94ACS_RECEIVED   0x20 /* on a READY: sender has recorded the
+                                  * RECIPIENT's accept of this Fig1 instance
+                                  * -- "your accept was received here" */
 
 /*************************************************************************/
 /*  Output actions                                                       */
@@ -421,19 +421,12 @@ bkr94acsInit(
  * instead re-arms every post-accept READY, so the suppress mask never
  * holds and the READY retire never converges.
  *
- * THE ANNOTATIONS ARE ROUTED HERE, and the routing is not a courtesy --
- * it is the only way to get the order right.  ACCEPTED must reach the
- * Fig1 after that READY's own sender record (so acFrom stays a subset of
- * rdFrom), and the re-send arm must be taken from the ABSENCE of
- * RECEIVED, after any accept this same message caused.  Both are facts
- * about one message, so both are arguments to the one call that carries
- * it, and a caller cannot get the sequence wrong by writing it in the
- * wrong order or by arming on a READY that was already marked.
- *
- * The arm still escapes Fig 1's duplicate dedup, which is what made a
- * separate entry look necessary: an unmarked re-send is a DUPLICATE
- * (ready, v) that bracha87Fig1Input returns 0 for, so the routing runs
- * on the message whether or not the Fig 1 produced any action.
+ * THE ANNOTATIONS RIDE THE FIG 1'S INPUT: this entry hands the two
+ * bits to bracha87Fig1Input on every message, where bracha87Fig1.dtc's
+ * BPR rows read them beside the paper rules -- the arm chained on the
+ * accept the same message may cause.  Self is a sender like any other:
+ * its accept arrives on its own READY hand-back carrying ACCEPTED, so
+ * the hand-back carries the same two bits.
  *
  * Byzantine-safe both ways.  A forged ACCEPTED marks only its own
  * sender, so it retires this process's retry to the liar alone and can
@@ -529,6 +522,13 @@ bkr94acsSubset(
  * Bracha 1987 Lemma 2 protects against Byzantine equivocation.
  * Pre-ACCEPT echoed values can disagree across honest processes and
  * are intentionally hidden here.
+ *
+ * Under the hold at Input (bkr94acsAcastAllReadied) a process that
+ * never receives an initiator's payload never accepts that A-Cast, so
+ * this stays 0 there while the BA can still decide 1 on the other
+ * processes' entries -- and every other process's READY toward it
+ * never retires, the never-announcer residue of BPR.md (Quiescence).
+ * The application reads the value from the side channel in that case.
  */
 const unsigned char *
 bkr94acsAcastValue(
@@ -621,8 +621,10 @@ bkr94acsAcast(
  *     its own BA can reach 0 through step 2 and SubSet agreement breaks.
  *   exhausted (0xFE)  -> retry.  No decision was made; earlier-round
  *     traffic may still help others.
- *   decided 0         -> SKIP.  The process is excluded from SubSet and
- *     step 2 has already conveyed this process's entry.
+ *   decided 0         -> SKIP.  The process is excluded from SubSet at
+ *     every correct process (BA agreement), so nobody needs its
+ *     A-Cast; this process's own entry -- 0 by step 2, or 1 by step
+ *     1 before the BA went the other way -- is spent.
  * The BA Fig1 walk is ungated; Bpr returns 0 on unsent instances.
  *
  * The decided-0 skip is itself a retire, and it OUTRANKS the annotation
@@ -666,7 +668,9 @@ bkr94acsRetryStep(
  *   the enter-0 fanout  (BKR94 step 2)      bkr94acsFanoutDuty/Fanout
  *   the BA round turn   (Bracha Fig4 round)  bkr94acsTurnDuty/Turn
  *
- * Both duty queries classify with the same trichotomy:
+ * Both duty queries classify with the same trichotomy, and both
+ * firings take their decision from the same rows, the BPR sub-tables of
+ * bkr94acs.dtc:
  *
  *   BKR94ACS_DUTY_HELD       not enabled: firing now would be
  *                            unsound or is impossible; elapsed
@@ -675,8 +679,9 @@ bkr94acsRetryStep(
  *                            improve the outcome; the caller
  *                            counts sweeps against its patience
  *                            and fires when it elapses.
- *   BKR94ACS_DUTY_MET        enabled with nothing left to wait
- *                            for; firing is free.
+ *   BKR94ACS_DUTY_MET        nothing left to wait for: the turn's
+ *                            firing is free, the fanout's is moot
+ *                            (and reached whatever the count).
  *
  * Caller discipline: per decision, count completed sweeps while
  * duty is TOLERANCE; call the firing when the count reaches the
@@ -739,7 +744,9 @@ bkr94acsRetryStep(
  * are never cleared).  Since a live pass always has some instance with
  * output, the 0 return does not fire, and a call-counting caller
  * closes late by the retired count -- which GROWS as a run matures,
- * because INITIAL and ECHO retire at ACCEPTED.  The patience unit
+ * as instances reach the READY coverage gate (an instance is walked
+ * past only once every one of its actions has retired).  The patience
+ * unit
  * would silently stretch over the run.  The counter has none of that,
  * and costs no walk.
  *
@@ -1012,46 +1019,74 @@ bkr94acsBaGetValid(
 );
 
 /*
- * Returns 1 iff A-Cast Fig1[process] has recorded an echo from all n
- * processes (distinct echo senders == n), else 0 (and 0 on null state or
+ * Returns 1 iff a READY on process's A-Cast has been recorded here from
+ * every one of the n processes (distinct ready senders == n, this
+ * process's own hand-back included), else 0 (and 0 on null state or
  * out-of-range process).
  *
  * Application use: a process that pairs a side-channel payload (e.g. a
- * PSK or a signature) with its own A-Cast, and whose receivers gate
- * their ECHO of that A-Cast on validating the payload, must keep
- * retrying the payload until this returns 1 for process == self.
- * All-echoed implies every process validated the payload (the receiver
- * holds echo until it does), which is strictly stronger than the
- * A-Cast's own ACCEPTED -- ACCEPTED can be reached at 2t+1 readys
- * (up to t byzantine, t un-validated above the n=3t+1 boundary) while
- * correct processes still lack the payload.  Pinning the side channel to
- * ACCEPTED would strand them; pinning it here does not.  Under <= t
- * silent processes this never returns 1, so the payload retries until the
- * application abandons -- the conservative, correct default.
+ * PSK or a signature) with its own A-Cast must keep retrying the
+ * payload until this returns 1 for process == self.  THE HOLD IS AT
+ * INPUT: a receiver feeds NO row of process's A-Cast -- INITIAL, ECHO
+ * or READY -- to bkr94acsAcastInput until it holds the payload, and
+ * drops the rows meanwhile (the READY re-send and the t+1-readys rule
+ * re-bootstrap it; BPR.md, Termination and Abandonment).  Dropping is
+ * the whole discipline; nothing need be stashed.  A correct readied
+ * process therefore holds the payload, and an ACCEPT at a correct
+ * process witnesses t+1 correct holders -- 2t+1 readys, at most t of
+ * them Byzantine, at every admitted n and t.  Withholding only the
+ * ECHO's wire copies does NOT do this: bracha87Fig1Input sets ECHOED
+ * whatever the caller sends, so a machine fed the rows readies and
+ * accepts without the payload -- by Rule 4 when its own withheld echo
+ * is still handed back to itself (at n=4 t=1 a Byzantine initiator
+ * that hands its payload to one correct process is then accepted
+ * everywhere: self + initiator + holder is the threshold), and by
+ * Rule 5 on t+1 readys with no echo count at all.
+ *
+ * The readied set is the one that closes -- not by a process's own
+ * retry, which is suppressed toward this initiator the moment this
+ * initiator's accept announcement is recorded there, possibly before
+ * its READY ever arrived here, but by the annotation exchange
+ * (bracha87.h at bracha87Fig1ProcessResend; BPR.md, Suppression and
+ * the Announcements): this initiator keeps re-sending READY, unmarked,
+ * to every process whose accept it has not recorded, and once such a
+ * process has accepted each unmarked arrival re-arms its READY toward
+ * here for one marked egress.  So every correct process's READY
+ * eventually reaches the initiator.  The echoed set does not close --
+ * ECHO is suppressed toward readied processes and retires at
+ * ACCEPTED, so a process whose first echo fires after this initiator's
+ * READY reached it is never recorded here -- which is why the retire
+ * reads READY and not ECHO.  The A-Cast's own ACCEPTED is not the stop
+ * either: 2t+1 readys, up to t of them Byzantine, leave correct
+ * processes that still lack the payload.  Under <= t silent processes
+ * this never returns 1, so the payload retries until the application
+ * abandons -- the conservative, correct default.  The verdict gate
+ * outranks it at both ends, as it outranks the A-Cast's own retry:
+ * once BA_self decides 0 the A-Cast is excluded and nobody needs the
+ * payload, and a receiver whose BA for this process decided 0 stops
+ * its own READY re-send on this A-Cast, so the set can stay short of
+ * it while BA agreement brings the same 0 here.
  */
 unsigned int
-bkr94acsAcastAllEchoed(
+bkr94acsAcastAllReadied(
   const struct bkr94acs *
  ,unsigned char            /* process */
 );
 
 /*
- * Per-process suppress mask for a side channel paired with process's
- * A-Cast INITIAL -- the per-process refinement of bkr94acsAcastAllEchoed.
- * Returns the A-Cast Fig1's INITIAL skip mask (its echoed-process bitmap;
- * process p skipped iff bit p set, test with BRACHA87_SKIP_TST), or 0 for a
- * null/out-of-range argument.
- *
- * Where bkr94acsAcastAllEchoed is the all-or-nothing stop (retire the
- * side channel once EVERY process has echoed), this drops each process from the
- * side channel's recipient set the moment IT echoes.  An application that
- * gates its ECHO on validating the paired payload (signature / PSK) thereby
- * stops re-sending the payload to a process as soon as that process proves -- by
- * echoing -- it already validated and holds it.  Same borrowed-pointer
- * lifetime as bracha87Fig1Skip (valid until the next mutating library call).
+ * The readied set of process's A-Cast: the A-Cast Fig 1's ECHO_ALL
+ * suppress mask, bracha87Fig1Skip(bkr94acsAcastFig1(a, process),
+ * BRACHA87_ECHO_ALL), the same bitmap -- bit p set iff process p's
+ * READY on it has been recorded here, this process's own hand-back
+ * included; BRACHA87_SKIP_TST reads it -- or 0 for a null/out-of-range
+ * argument.  The per-process refinement of bkr94acsAcastAllReadied:
+ * under the hold at Input a process proves it holds the paired payload
+ * the moment it readies, and the side channel stops re-sending to it
+ * then.  Same borrowed-pointer lifetime as bracha87Fig1Skip (valid
+ * until the next mutating library call).
  */
 const unsigned char *
-bkr94acsAcastSkip(
+bkr94acsAcastReadied(
   const struct bkr94acs *
  ,unsigned char            /* process */
 );
@@ -1065,22 +1100,25 @@ bkr94acsAcastSkip(
  *
  * READ-ONLY, structurally: the pointer is const, and inputs go through
  * the bkr94acs entries, which route wire facts to the right instance
- * and record the composition-level side effects (self-accept, step-1
- * enter) no bare Fig1 call knows to make.
+ * and take the composition-level side effect (the step-1 enter) no
+ * bare Fig1 call knows to make.
  *
  * What this is for: the quiescence ending claim is PER-INSTANCE
- * evidence -- a sent Fig1 retires its READY only when its
- * accepted-process bitmap (bracha87Fig1Received) covers all n -- while
- * the retry's 0 return is the weaker derived fact: a machine that
- * retired READY on the forbidden LOCAL accept (Notes 10/13) also
- * returns 0, sooner.  A caller or instrument that CHECKS the
- * claim rather than infers it reads the instance: bracha87Fig1Value
- * non-null is the sent test (both ready paths require ECHOED, so
- * RDSENT implies it, and an INITIATOR carries its value), and a sent
- * instance whose RECEIVED mask covers all n retired its READY on the
- * remote all-accepted gate -- the distinction the 0 return cannot
- * show.  Every other bracha87Fig1 reader (Skip, AllEchoed) composes
- * the same way.
+ * evidence -- a sent Fig1 retires its READY only when its READY
+ * suppress mask, bracha87Fig1Skip(BRACHA87_READY_ALL), covers all n:
+ * every process's accept announced (bracha87Fig1Received) AND no arm
+ * outstanding -- while the retry's 0 return is the weaker derived
+ * fact: a machine that retired READY on the forbidden LOCAL accept
+ * (Notes 10/13) also returns 0, sooner.  A caller or instrument that
+ * CHECKS the claim rather than infers it reads the instance:
+ * bracha87Fig1Value non-null is the sent test (both ready paths
+ * require ECHOED, so RDSENT implies it, and an INITIATOR carries its
+ * value), and a sent instance whose READY mask covers all n retired
+ * its READY on the remote gate -- the distinction the 0 return cannot
+ * show.  The RECEIVED mask alone can cover all n with the READY still
+ * owed: an arm outstanding (BPR.md, the re-arming forger's residue).
+ * Every other bracha87Fig1 reader (Skip, AllEchoed) composes the same
+ * way.
  *
  * SCOPE THE CHECK TO THE INSTANCES THE RETRY STILL SERVES.  An A-Cast
  * whose BA decided 0 is skipped by the verdict gate (see
@@ -1090,8 +1128,9 @@ bkr94acsAcastSkip(
  * bkr94acsBaDecision != 0 first.
  *
  * The paired side channel is NOT read this way -- it has its own two
- * entries above (bkr94acsAcastAllEchoed, bkr94acsAcastSkip), which say
- * what they are for in their names and keep a Fig 1 out of the caller.
+ * entries above (bkr94acsAcastAllReadied, bkr94acsAcastReadied), which
+ * say what they are for in their names and keep a Fig 1 out of the
+ * caller.
  */
 const struct bracha87Fig1 *
 bkr94acsAcastFig1(

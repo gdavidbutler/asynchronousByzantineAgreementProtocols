@@ -527,42 +527,28 @@ main(
         printf(" from %u\n", (unsigned)m->from);
       }
 
-      nout = bracha87Fig1Input(f1, type, m->from, m->value, out);
+      /* The two wire bits ride Input (bracha87Fig1.dtc's BPR rows read
+       * them beside the paper rules).  The hand-back to self carries them
+       * too, which is how this process's own accept is recorded for the
+       * all-n gate. */
+      nout = bracha87Fig1Input(f1, type, m->from, m->value,
+                               m->type & WIRE_ACCEPTED, m->type & WIRE_RECEIVED,
+                               out);
 
       /*
-       * ACCEPTED-annotation ingress: the bit on a retried READY says
-       * its sender has accepted this instance and consumes no further
-       * (ready, v) from us.  Route it AFTER the matching Input, so
-       * rdFrom is recorded first and acFrom stays a subset of it.
+       * Leaving the rotation is PROVISIONAL, and this is the whole
+       * reason ingress stays open: an unmarked READY is evidence that
+       * something IS still owed, and a process that has stopped
+       * ticking can never re-send marked.  Re-enter.  Under loss this
+       * is the path that makes quiescence reachable rather than
+       * merely hoped for -- a lost marked re-send is drawn again by
+       * the next unmarked one, and the unmarked one is worthless if
+       * nobody is left to hear it.
        */
-      if (type == BRACHA87_READY && (m->type & WIRE_ACCEPTED))
-        bracha87Fig1ProcessAccepted(f1, m->from);
-
-      /*
-       * RECEIVED-annotation ingress, the other half of the same retire:
-       * a (ready, v) WITHOUT the bit is its sender showing it has not
-       * recorded our accept -- it would have suppressed us otherwise --
-       * so un-suppress it for the next tick, whose re-send goes out
-       * marked.  Never route one that HAS the bit: a marked READY that
-       * re-armed its receiver would ping-pong, and the two would never
-       * fall silent.
-       */
-      if (type == BRACHA87_READY && !(m->type & WIRE_RECEIVED)) {
-        bracha87Fig1ProcessResend(f1, m->from);
-        /*
-         * Leaving the rotation is PROVISIONAL, and this is the whole
-         * reason ingress stays open: an unmarked READY is evidence that
-         * something IS still owed, and a process that has stopped
-         * ticking can never re-send marked.  Re-enter.  Under loss this
-         * is the path that makes quiescence reachable rather than
-         * merely hoped for -- a lost marked re-send is drawn again by
-         * the next unmarked one, and the unmarked one is worthless if
-         * nobody is left to hear it.
-         */
-        if (quiescent[m->to]) {
-          quiescent[m->to] = 0;
-          --quiesced;
-        }
+      if (type == BRACHA87_READY && !(m->type & WIRE_RECEIVED)
+       && quiescent[m->to]) {
+        quiescent[m->to] = 0;
+        --quiesced;
       }
 
       for (k = 0; k < nout; ++k) {
@@ -573,9 +559,6 @@ main(
         if (out[k] == BRACHA87_ACCEPT) {
           accepted[m->to] = 1;
           memcpy(acceptVal[m->to], cv, Vlen);
-          /* The instance is not told its own index, so the caller
-           * supplies it for the self-accept the all-n gate counts. */
-          bracha87Fig1ProcessAccepted(f1, m->to);
           if (verbose) {
             printf("process %u: ACCEPT value=", (unsigned)m->to);
             printValue(cv);

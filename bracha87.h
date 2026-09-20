@@ -249,19 +249,57 @@ bracha87Fig1Initiator(
 );
 
 /*
- * Process one incoming message. Returns number of actions (0..3).
- * Actions written to out[] in order (echo, ready, accept).
- * Caller provides out[] with room for 3 entries.
+ * Process one incoming message.  Returns the number of paper actions
+ * (0..3), written to out[] in order (echo, ready, accept); caller
+ * provides out[] with room for 3 entries.
  *
  * On any action, the echoed value is available via bracha87Fig1Value.
  *
- * Deduplication: at most one echo and one ready per sender.
+ * accepted and received are the two READY annotations the message
+ * carried (BPR.md, Suppression and the Announcements; the packed wire
+ * byte at bkr94acs.h's message-class defines): non-zero iff carried,
+ * read only on a BRACHA87_READY.  They are inputs of the same
+ * dispatch the paper rules run in (bracha87Fig1.dtc, the BPR
+ * sub-tables) and drive two side effects this entry takes after the
+ * paper actions: bracha87Fig1ProcessAccepted(from) on a (ready, v)
+ * carrying ACCEPTED, and bracha87Fig1ProcessResend(from) on a
+ * (ready, v) NOT carrying RECEIVED once this instance has accepted --
+ * "once" read after the accept this very message may have caused,
+ * which is the chained rule that makes the accepting message's own
+ * arm land.  Neither is an action; neither is counted in the return.
+ * 0 IS NOT A NEUTRAL received: its absence is the claim "I do not
+ * hold your accept" and arms a re-send; a caller that does not model
+ * the exchange passes received non-zero, which arms nothing.
  *
- * Recording continues past ACCEPT: an arrival after this instance has
- * accepted still takes its per-sender echo/ready record -- feeding
- * bracha87Fig1AllEchoed, the suppress masks, and the acFrom-subset-of-
- * rdFrom ingress order -- and returns 0.  No action is output twice,
- * ACCEPT included.
+ * SELF IS A SENDER LIKE ANY OTHER.  This process's own accept reaches
+ * its instance on its own (ready, v) hand-back carrying ACCEPTED --
+ * every retry carries it once the instance has accepted, and the
+ * hand-back is one of its recipients until self is suppressed --
+ * behind that hand-back's own ready record.  Two hand-backs do it:
+ * the first carries ACCEPTED but not RECEIVED (self is not in acFrom
+ * when the act is framed), so it records self AND arms self; the next
+ * egress consumes the arm and hands back carrying both, which re-arms
+ * nothing, and self is suppressed from then on.  It is never written
+ * from local state: written at the ACCEPT act, whenever READY and
+ * ACCEPT come out of one Input (t = 0: one (ready, v) crosses t+1 and
+ * 2t+1 together) it would fill the READY act's borrowed skip mask with
+ * self before the caller frames the hand-back, the hand-back would
+ * never be sent, and rdFrom would never gain self.  So a caller hands
+ * every action back to itself (BRACHA87_SKIP_TST), annotations
+ * included, and the all-n gate reaches n the way it reaches every
+ * other bit.
+ *
+ * Deduplication: at most one echo and one ready per sender are
+ * recorded and counted.  A duplicate, and every arrival after this
+ * instance has accepted, runs the dispatch all the same and returns 0
+ * actions -- the paper rows fire nothing twice ("have accepted" is a
+ * row of the accept rule; the send rules read their sent flags) --
+ * because it is exactly the unmarked re-send whose arm must not be
+ * lost.  Recording continues past ACCEPT: an arrival after this
+ * instance has accepted still takes its per-sender echo/ready record,
+ * feeding bracha87Fig1AllEchoed, the suppress masks, and the
+ * acFrom-subset-of-rdFrom order.  No action is output twice, ACCEPT
+ * included.
  *
  * INITIAL sender obligation: this instance is keyed to ONE designated
  * initiator.  Only that initiator may send (initial, v); ECHO and
@@ -274,6 +312,10 @@ bracha87Fig1Initiator(
  * non-initiator INITIAL is a forged broadcast the echo cascade would
  * carry to a false ACCEPT.  (bkr94acsAcastInput / bkr94acsBa-
  * Input enforce from == initiator / initiator on the caller's behalf.)
+ *
+ * A null instance, a type outside BRACHA87_INITIAL/ECHO/READY, a null
+ * value or out and an out-of-range from are refused: 0, nothing
+ * written.
  */
 unsigned int
 bracha87Fig1Input(
@@ -281,6 +323,8 @@ bracha87Fig1Input(
  ,unsigned char            /* type: BRACHA87_INITIAL/ECHO/READY */
  ,unsigned char            /* from: sender index */
  ,const unsigned char *    /* value: vLen + 1 bytes */
+ ,unsigned char            /* accepted: non-zero iff the ACCEPTED annotation was carried */
+ ,unsigned char            /* received: non-zero iff the RECEIVED annotation was carried */
  ,unsigned char *          /* out: actions, room for 3 */
 );
 
@@ -320,7 +364,9 @@ bracha87Fig1Value(
  * volume.
  *
  * Minimal retry -- each action retires at the soonest point
- * it is provably no longer owed to ANY correct process:
+ * it is provably no longer owed to ANY correct process (the rows of
+ * bracha87Fig1.dtc's BPR sub-tables, run in the one dispatch the paper
+ * rules run in):
  *   INITIAL (initiator only): retires at ACCEPTED, or once an echo has
  *     been observed from every process (echoSenders == n).  INITIAL
  *     only induces echoes, so all-echoed leaves nothing to induce;
@@ -347,9 +393,9 @@ bracha87Fig1Value(
  *     first alone silences the announcement q is waiting for -- q's own
  *     gate then stands one bit short forever, which a cursor phase
  *     offset reaches with no loss at all.  A (ready, v) arriving
- *     WITHOUT the RECEIVED annotation is q showing so; the caller routes
- *     it to bracha87Fig1ProcessResend and the next tick re-sends with the
- *     annotation set (bracha87Fig1Received).  A marked READY re-arms
+ *     WITHOUT the RECEIVED annotation is q showing so; the arm row
+ *     un-suppresses q and the next tick re-sends with the annotation
+ *     set (bracha87Fig1Received).  A marked READY re-arms
  *     nothing, so the exchange converges in one tick per direction and
  *     stops.
  *
@@ -363,8 +409,9 @@ bracha87Fig1Value(
  *     other process's count below n.  That is safe -- it can only
  *     persist once every correct process has accepted, and the
  *     un-quiesced process merely retries a READY no correct process
- *     consumes.  An outstanding arm costs one masked READY per tick of
- *     the process holding this instance, aimed only at the process it
+ *     consumes.  An outstanding arm costs one masked READY per pass of
+ *     the process holding this instance (one instance per tick on the
+ *     array and composition paths), aimed only at the process it
  *     un-suppressed; a Byzantine process that announced and then keeps
  *     re-arming can hold the gate open at that price, displacing
  *     nothing owed to any correct process.  The application's
@@ -373,7 +420,8 @@ bracha87Fig1Value(
  * Per-process suppression: every retry action carries a suppress mask
  * (bracha87Fig1Skip; on the array path, struct bracha87Fig1Act.skip)
  * naming processes that provably no longer consume it -- echoed processes for
- * INITIAL, readied processes for ECHO, accepted processes for READY.  The
+ * INITIAL, readied processes for ECHO, accepted-and-not-armed processes for
+ * READY (bracha87Fig1Skip).  The
  * caller's broadcast skips them.  This is the individual-process refinement
  * of the all-or-nothing retires above: a fast process is dropped from the
  * recipient set the moment IT crosses, not when the last process does.
@@ -410,15 +458,14 @@ bracha87Fig1Bpr(
  *
  * This is the same monotone quantity that retires INITIAL retry (see
  * bracha87Fig1Bpr): once every process has echoed there is nothing left
- * for (initial, v) to induce.  It is exposed because an application
- * that pairs a side-channel payload with the broadcast -- and gates
- * its own ECHO on having validated that payload -- needs all-echoed,
- * NOT the A-Cast's ACCEPTED, as the retirement point for the side
- * channel: all-echoed implies every process validated the payload, which
- * ACCEPTED (2t+1 readys, of which up to t may be byzantine and t the
- * un-validated tail above the n=3t+1 boundary) does not.  Under <= t
- * silent processes this never reaches 1, so such a side channel retries
- * until the application abandons -- the conservative, correct default.
+ * for (initial, v) to induce.  It is exposed so a checker can read that
+ * gate rather than infer it.  It is NOT a retirement point for anything
+ * paired with the broadcast: the echoed set need not close -- ECHO is
+ * suppressed toward readied processes and retires at ACCEPTED, so a
+ * process whose first echo fires after this initiator's READY reached
+ * it is never recorded here.  A paired side channel retires on the
+ * readied set, bracha87Fig1Skip(BRACHA87_ECHO_ALL), which closes
+ * through the READY re-send (bkr94acs.h at bkr94acsAcastAllReadied).
  */
 unsigned int
 bracha87Fig1AllEchoed(
@@ -429,22 +476,17 @@ bracha87Fig1AllEchoed(
  * Record that process 'from' has ACCEPTED this instance (idempotent,
  * value-agnostic).  Drives the READY suppress mask and, with
  * bracha87Fig1ProcessResend, the READY quiescence gate.  'from' is the
- * announcing process -- the sender of
- * a (ready, v) carrying the ACCEPTED annotation, already fed through
- * bracha87Fig1Input -- or the local index, supplied by the caller for
- * self-accept (a Fig1 instance does not know its own process index).
+ * announcing process -- the sender of a (ready, v) carrying the
+ * ACCEPTED annotation, already fed through bracha87Fig1Input -- and
+ * this process itself is one such sender, on its own hand-back
+ * carrying it (bracha87Fig1Input, SELF IS A SENDER LIKE ANY OTHER).
  * Out-of-range 'from' and a null instance are ignored.
  *
- * THIS STAYS A SEPARATE ENTRY, and the composition above it is not the
- * precedent.  bkr94acs{Acast,Ba}Input take the same two annotations as
- * an `annot` argument, on the argument that both are facts about one
- * message so both belong to the call that carries it.  That argument
- * does not reach down here: SELF-ACCEPT IS A FACT ABOUT NO MESSAGE.
- * There is no Input to hang it on, and a bare-Fig1 caller has no other
- * way to record it -- which is why bkr94acs itself calls this entry
- * internally at each of its own ACCEPT points.  Folding these two into
- * bracha87Fig1Input would take self-accept away from every caller that
- * runs its own Fig 1 and leave the quiescence gate unable to reach n.
+ * bracha87Fig1Input calls this from the dispatch's "record sender
+ * accepted" row, after the message's own ready record, so the accepted
+ * set stays a subset of the readied set.  The entry stays public for a
+ * caller that learned an announcement some other way; it owes the same
+ * order.
  */
 void
 bracha87Fig1ProcessAccepted(
@@ -459,19 +501,22 @@ bracha87Fig1ProcessAccepted(
  * same message: a (ready, v) that arrives WITHOUT the RECEIVED annotation
  * is its sender showing this process's accept has not been recorded there
  * -- had it recorded one, it would have suppressed this process instead of
- * sending.  Call AFTER the matching bracha87Fig1Input for that (ready, v),
- * the same discipline ProcessAccepted takes; the two are order-independent
- * with respect to each other, and one message can legitimately carry both
- * facts (its sender has accepted, and it lacks ours).
- *
- * The arm cannot ride Input itself: an unmarked re-send is a DUPLICATE
- * (ready, v), which Input dedups and returns 0 for before reaching any
- * post-accept region.  Caller-fed is how the arm escapes that dedup --
- * exactly as ProcessAccepted already does for the ACCEPTED annotation.
+ * sending.  bracha87Fig1Input calls this from the dispatch's "arm re-send
+ * to sender" row, chained on the accept the same message may have caused;
+ * the two setters are order-independent with respect to each other, and
+ * one message can legitimately carry both facts (its sender has accepted,
+ * and it lacks ours).  An unmarked re-send is a DUPLICATE (ready, v),
+ * which Input records nothing for and still runs through the dispatch, so
+ * the row that arms sees it.
  *
  * Records nothing until this instance has BRACHA87_F1_ACCEPTED: there is
- * no accept to announce, and the post-accept retries reach an
- * unannounced-to process anyway, since it is not yet in acFrom.  Consumed
+ * no accept to announce, and nothing is lost by waiting -- the
+ * unannounced-to process's own READY cannot retire toward here (its
+ * mask lacks this process, which never announced), so it keeps arriving
+ * unmarked, and its first arrival after this instance accepts arms it.
+ * (An announcement that arrived BEFORE this instance accepted already
+ * suppresses that process, so the first post-accept retry does not reach
+ * it on its own; the arm is what does.)  Consumed
  * by the next READY egress, which goes out marked; a lost marked re-send
  * is re-armed by its target's next unmarked one, and that re-arming is the
  * loss recovery.  Out-of-range 'from' and a null instance are ignored.
@@ -487,7 +532,7 @@ bracha87Fig1ProcessAccepted(
  *
  * Byzantine note, the mirror of ProcessAccepted's: an arm only ever
  * un-suppresses its own sender, so a forged unmarked READY buys the forger
- * one masked READY per tick of the process holding this instance, aimed
+ * one masked READY per pass of the process holding this instance, aimed
  * at the forger.  It can hold this instance's READY retire open -- the
  * same standing an announcement it never sends already has, and at a
  * message cost silence does not pay -- and displaces nothing owed to a
@@ -1280,11 +1325,11 @@ bracha87RetryInit(
  *             READY -- the announcement that drives processes' per-process READY
  *             retire and the quiescence gate (bracha87Fig1Process-
  *             Accepted on ingress).  0 otherwise.  Mirror of
- *             bkr94acsAct.accepted; a bare-layer caller that wires this
- *             back (plus bracha87Fig1ProcessAccepted) gets the same READY
- *             quiescence the bkr94acs layer has.  Without it READY simply
- *             retries until application abandonment -- safe, just not
- *             quiescent.
+ *             bkr94acsAct.accepted; a bare-layer caller that hands this
+ *             back to bracha87Fig1Input's accepted argument, with the
+ *             RECEIVED bit beside it, gets the same READY quiescence
+ *             the bkr94acs layer has.  Without it READY simply retries until
+ *             application abandonment -- safe, just not quiescent.
  *   idx       index in the caller's instances array
  *   value     borrowed pointer into the Fig 1 instance's
  *             echoed-value slot, vLen+1 bytes; valid until the

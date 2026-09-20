@@ -214,6 +214,26 @@
 #include "bracha87.h"
 #include "bkr94acs.h"
 
+/* The one turn drain here is `while (bkr94acsTurn(...) > 0 &&
+ * turnDrained())`: a drain ends because the turn advances or refuses,
+ * and a machine that emitted acts without advancing would spin it.
+ * Counted against a ceiling no correct run approaches; abort past it,
+ * announced, never a silent hang. */
+#define TURN_CALL_CAP (1u << 24)
+static unsigned long TurnCalls = 0;
+
+static int
+turnDrained(
+  void
+){
+  if (++TurnCalls > TURN_CALL_CAP) {
+    fprintf(stderr, "FATAL: turn drain runaway -- bkr94acsTurn returned"
+            " acts %lu times\n", TurnCalls);
+    abort();
+  }
+  return (1);
+}
+
 /*--------------------------------------------------------------------------*/
 /*  The configuration swept.  Small on purpose: the sweep is over the       */
 /*  FIELD SPACE, which is 0..255 whatever n is, so a larger cohort buys     */
@@ -547,7 +567,8 @@ driveCohort(
       nacts = bkr94acsRetryStep(a, &Cursor[p], Acts);
       qActs(Acts, nacts, (unsigned char)p);
       for (q = 0; q < CFG_N; ++q)
-        while ((nacts = bkr94acsTurn(a, (unsigned char)q, Acts))) {
+        while ((nacts = bkr94acsTurn(a, (unsigned char)q, Acts)) > 0
+            && turnDrained()) {
           qActs(Acts, nacts, (unsigned char)p);
           /*
            * Between two turns some BAs hold a decision and others do
@@ -618,17 +639,17 @@ driveFig1(
   f1mileTake("fresh");
 
   /* Initiator 1's INITIAL: Rule 1 echoes unconditionally. */
-  bracha87Fig1Input(F1, BRACHA87_INITIAL, 1, Aval[1], out);
+  bracha87Fig1Input(F1, BRACHA87_INITIAL, 1, Aval[1], 0, 1, out);
   f1mileTake("echoed");
 
   /* Three distinct echoes cross (n+t)/2 + 1 and send ready. */
   for (i = 0; i < 3; ++i)
-    bracha87Fig1Input(F1, BRACHA87_ECHO, (unsigned char)i, Aval[1], out);
+    bracha87Fig1Input(F1, BRACHA87_ECHO, (unsigned char)i, Aval[1], 0, 1, out);
   f1mileTake("ready sent");
 
   /* Three distinct readys are 2t+1: accept. */
   for (i = 0; i < 3; ++i)
-    bracha87Fig1Input(F1, BRACHA87_READY, (unsigned char)i, Aval[1], out);
+    bracha87Fig1Input(F1, BRACHA87_READY, (unsigned char)i, Aval[1], 0, 1, out);
   if (!(F1->flags & BRACHA87_F1_ACCEPTED)) {
     fprintf(stderr, "test_ingress: the bare Fig 1 did not accept -- the"
             " milestones below would not be the states they name\n");
@@ -887,8 +908,8 @@ sweepAcs(
       sprintf(Swhere, "bkr94acsBaEntered process=%u", i);
       fail("an out-of-range process did not read 0", Swhere);
     }
-    if (bkr94acsAcastAllEchoed(a, (unsigned char)i) && bad) {
-      sprintf(Swhere, "bkr94acsAcastAllEchoed process=%u", i);
+    if (bkr94acsAcastAllReadied(a, (unsigned char)i) && bad) {
+      sprintf(Swhere, "bkr94acsAcastAllReadied process=%u", i);
       fail("an out-of-range process did not read 0", Swhere);
     }
     if (bkr94acsTurnDuty(a, (unsigned char)i) != BKR94ACS_DUTY_HELD && bad) {
@@ -904,12 +925,12 @@ sweepAcs(
         fail("a borrowed value pointer is outside the image", Swhere);
       }
     }
-    if ((cp = bkr94acsAcastSkip(a, (unsigned char)i))) {
+    if ((cp = bkr94acsAcastReadied(a, (unsigned char)i))) {
       if (bad) {
-        sprintf(Swhere, "bkr94acsAcastSkip process=%u", i);
+        sprintf(Swhere, "bkr94acsAcastReadied process=%u", i);
         fail("an out-of-range process returned a mask", Swhere);
       } else if (!IN_IMAGE(cp, Img[SELF], ImgSz)) {
-        sprintf(Swhere, "bkr94acsAcastSkip process=%u", i);
+        sprintf(Swhere, "bkr94acsAcastReadied process=%u", i);
         fail("a borrowed mask pointer is outside the image", Swhere);
       }
     }
@@ -1338,6 +1359,32 @@ sweepFig1(
   }
   memcpy(F1, F1mile[F1cur], F1sz);
 
+  /* The two annotation arguments of bracha87Fig1Input are "non-zero
+   * iff carried" (bracha87.h): boolean by contract, every byte
+   * admitted, and read only on a READY -- on an ECHO every value
+   * leaves the image as a plain ECHO would. */
+  for (i = 0; i < 256 && !Fails; ++i) {
+    unsigned char *ref;
+
+    memcpy(F1, F1mile[F1cur], F1sz);
+    ++Calls;
+    (void)bracha87Fig1Input(F1, BRACHA87_ECHO, 2, Vbuf, 0, 1, Pacts);
+    if (!(ref = malloc(F1sz)))
+      break;
+    memcpy(ref, F1, F1sz);
+    memcpy(F1, F1mile[F1cur], F1sz);
+    ++Calls;
+    (void)bracha87Fig1Input(F1, BRACHA87_ECHO, 2, Vbuf, (unsigned char)i,
+                            (unsigned char)i, Pacts);
+    ++Admitted;
+    if (memcmp(F1, ref, F1sz)) {
+      sprintf(Swhere, "bracha87Fig1Input ECHO annotations=%u", i);
+      fail("an annotation was read on a non-READY", Swhere);
+    }
+    free(ref);
+  }
+  memcpy(F1, F1mile[F1cur], F1sz);
+
   /* The mask selector: anything that is not a retry act answers 0
    * ("0 for a null instance or non-retry act"). */
   for (i = 0; i < 256 && !Fails; ++i) {
@@ -1367,7 +1414,7 @@ sweepFig1(
   memcpy(F1, F1mile[F1cur], F1sz);
   memset(Pacts, POISON, sizeof (Pacts));
   Snacts = bracha87Fig1Input(F1, (unsigned char)Stype,
-                             (unsigned char)Sfrom, Vbuf, Pacts);
+                             (unsigned char)Sfrom, Vbuf, 0, 1, Pacts);
   ++Calls;
 
   if (Sexpect) {
@@ -1483,9 +1530,9 @@ sweepBare(
 
   Calls += 22;
   Refusals += 22;
-  if (bracha87Fig1Input(0, BRACHA87_ECHO, 0, Vbuf, out)
-   || bracha87Fig1Input(F1, BRACHA87_ECHO, 0, 0, out)
-   || bracha87Fig1Input(F1, BRACHA87_ECHO, 0, Vbuf, 0)
+  if (bracha87Fig1Input(0, BRACHA87_ECHO, 0, Vbuf, 0, 1, out)
+   || bracha87Fig1Input(F1, BRACHA87_ECHO, 0, 0, 0, 1, out)
+   || bracha87Fig1Input(F1, BRACHA87_ECHO, 0, Vbuf, 0, 1, 0)
    || bracha87Fig1Bpr(0, out)
    || bracha87Fig1Bpr(F1, 0)
    || bracha87Fig1AllEchoed(0)

@@ -118,9 +118,10 @@ Corroborated by the explorer, whose quiescent-terminal arm reads WHOSE
 evidence closed the gate: a locally-retired READY quiesces with a
 suppress mask short of all n.
 #ANCHOR
-    if (retryReady) {
+    readyMaskFull = fig1FromCnt(sk, B_N(b)) >= B_N(b);
 #WITH
-    if (retryReady && !(b->flags & BRACHA87_F1_ACCEPTED)) {
+    readyMaskFull = fig1FromCnt(sk, B_N(b)) >= B_N(b)
+                 || (b->flags & BRACHA87_F1_ACCEPTED);
 #END
 
 #MUTANT M02
@@ -140,9 +141,9 @@ it retired.  Under the mutation the three-accept call already retires,
 so the still-output check goes red.  Reachability is direct -- the arm
 sets the accepted bitmap through the public setter.
 #ANCHOR
-      if (fig1FromCnt(sk, B_N(b)) < B_N(b))
+    readyMaskFull = fig1FromCnt(sk, B_N(b)) >= B_N(b);
 #WITH
-      if (fig1FromCnt(sk, B_N(b)) < 2u * b->t + 1)
+    readyMaskFull = fig1FromCnt(sk, B_N(b)) >= 2u * b->t + 1;
 #END
 
 #MUTANT M03
@@ -164,14 +165,10 @@ moment ECHOED is set, so the first action becomes the echo retry and
 the check goes red.  Corroborated end to end by the silent-Byzantine
 convergence arm, the schedule this gate strands.
 #ANCHOR
-  if ((b->flags & BRACHA87_F1_INITIATOR)
-   && !(b->flags & BRACHA87_F1_ACCEPTED)
-   && fig1FromCnt(F1_ECFROM(b), B_N(b)) < B_N(b))
+  amInitiator   = (b->flags & BRACHA87_F1_INITIATOR) ? 1 : 0;
 #WITH
-  if ((b->flags & BRACHA87_F1_INITIATOR)
-   && !(b->flags & BRACHA87_F1_ECHOED)
-   && !(b->flags & BRACHA87_F1_ACCEPTED)
-   && fig1FromCnt(F1_ECFROM(b), B_N(b)) < B_N(b))
+  amInitiator   = (b->flags & BRACHA87_F1_INITIATOR)
+               && !(b->flags & BRACHA87_F1_ECHOED) ? 1 : 0;
 #END
 
 #MUTANT M04
@@ -191,12 +188,9 @@ accepted, and INITIAL_ALL is still output -- red on that call.  The two
 gates are independent, which is why removing one is visible while the
 other still holds.
 #ANCHOR
-  if ((b->flags & BRACHA87_F1_INITIATOR)
-   && !(b->flags & BRACHA87_F1_ACCEPTED)
-   && fig1FromCnt(F1_ECFROM(b), B_N(b)) < B_N(b))
+  allEchoed     = fig1FromCnt(F1_ECFROM(b), B_N(b)) >= B_N(b);
 #WITH
-  if ((b->flags & BRACHA87_F1_INITIATOR)
-   && !(b->flags & BRACHA87_F1_ACCEPTED))
+  allEchoed     = 0;
 #END
 
 #MUTANT M05
@@ -214,9 +208,11 @@ Under the mutation the echo retry is still output beside the ready, the
 count is two, and the check goes red.  Reachability is immediate: the
 arm constructs the state directly.
 #ANCHOR
-    if (retryEcho && !(b->flags & BRACHA87_F1_ACCEPTED))
+  if (retryEcho)
+    out[nout++] = BRACHA87_ECHO_ALL;
 #WITH
-    if (retryEcho)
+  if (haveEchoed)
+    out[nout++] = BRACHA87_ECHO_ALL;
 #END
 
 #MUTANT M06
@@ -350,9 +346,8 @@ because its dedup arm runs at the binary value: it feeds one sender's
 echo twice and requires the second to output nothing, and under the
 mutation the inflated count fires the rule on the repeat.
 #ANCHOR
-    if (BIT_TST(F1_ECFROM(b), from))
-      return (0);
-    fig1SetEc(b, from, value);
+    if (!BIT_TST(F1_ECFROM(b), from))
+      fig1SetEc(b, from, value);
 #WITH
     fig1SetEc(b, from, value);
 #END
@@ -372,9 +367,8 @@ count a real counter a repeat can inflate -- so the contract suite's
 dedup arm is the designated oracle: it feeds one sender's ready twice
 and requires the second to output nothing.
 #ANCHOR
-    if (BIT_TST(F1_RDFROM(b), from))
-      return (0);
-    fig1SetRd(b, from, value);
+    if (!BIT_TST(F1_RDFROM(b), from))
+      fig1SetRd(b, from, value);
 #WITH
     fig1SetRd(b, from, value);
 #END
@@ -442,9 +436,9 @@ requires the retry to stop outputting READY.  Under the mutation the
 mask is zero, coverage is zero, and READY is still output -- red on
 that call.
 #ANCHOR
-        sk[i] = ac[i] & ~am[i];
+      sk[i] = ac[i] & ~am[i];
 #WITH
-        sk[i] = ac[i] & am[i];
+      sk[i] = ac[i] & am[i];
 #END
 
 #MUTANT M16
@@ -459,9 +453,12 @@ accept.  Before this instance has accepted there is no accept to
 announce, so arming would un-suppress a process for an egress that has
 nothing to say and would re-arm on every subsequent ready.  The oracle
 drives an instance to RDSENT but not ACCEPTED, records one process's
-accept, then routes an unmarked READY from that same process, and
-requires it to remain suppressed.  Under the mutation the arm is
-recorded and the suppression is cleared -- red on that read.
+accept, then calls bracha87Fig1ProcessResend for that same process
+directly, and requires it to remain suppressed.  Direct, because the
+Input path cannot see this refusal: the dispatch's arm row refuses the
+same pre-accept arm before the setter is reached (BPR.md, Declared
+Invisible).  Under the mutation the arm is recorded and the
+suppression is cleared -- red on that read.
 #ANCHOR
   if (!b || from > b->n || !(b->flags & BRACHA87_F1_ACCEPTED))
     return;
@@ -704,9 +701,9 @@ and requires the classification to read TOLERANCE.  Under the mutation
 three is short of four, the classification reads HELD, and the check
 goes red.
 #ANCHOR
-  if (one >= N - a->t)
+    enabled = one >= N - a->t;
 #WITH
-  if (one >= N)
+    enabled = one >= N;
 #END
 
 #MUTANT M27
@@ -725,25 +722,30 @@ exactly n-t validated round-0 messages and requires TOLERANCE, then
 feeds the n-th and requires MET.  Under the mutation the first read
 already returns MET and the check goes red.
 #ANCHOR
-  if (bracha87Fig3ValidCount(f3, nextRound) >= A_N(a))
+      nothingLeft = enabled
+                 && bracha87Fig3ValidCount(f3, nextRound) >= A_N(a);
 #WITH
-  if (bracha87Fig3ValidCount(f3, nextRound) >= A_N(a) - a->t)
+      nothingLeft = enabled
+                 && bracha87Fig3ValidCount(f3, nextRound) >= A_N(a) - a->t;
 #END
 
 #MUTANT M28
-#FAMILY retry gate -- the decided-0 arm inverted
+#FAMILY retry gate -- the verdict rows inverted
 #FILE bkr94acs.c
 #ORACLE test_bkr94acs
 #LABEL BPR gate: process 1 (decided 1) IS retried (post-decide)
 #EXPECT KILLED
 #WHY
-The three-arm gate skips only an agreement that decided 0, whose
-process is excluded and whose enter has already been conveyed.  An
+The verdict gate -- bkr94acs.dtc's "walk A-Cast j" rows -- skips only
+an agreement that decided 0, whose process is excluded at every correct
+process by BA agreement.  An
 agreement that decided 1 must keep being retried: processes that have
 not yet seen the accept for that process still need this one's echoes
 and readys, or their own agreement stays undecided and can be driven to
 0 by the fanout, breaking cross-process agreement on the subset.
-Inverting the arms skips exactly the case that must continue.  The
+Inverting the arms -- here by feeding the row the decision byte
+inverted, decided 0 read as decided 1 and everything else as decided 0
+-- skips exactly the case that must continue.  The
 oracle writes a decided-1 outcome and requires the retry sweep to still
 visit that process.  Under the mutation the walk skips it and the check
 goes red.  The oracle drives the decision by direct write rather than
@@ -751,13 +753,12 @@ through the gate, so it is independent of the mutated line.
 Corroborated by the explorer at config 3a, outside the smoke run: its
 quiescent-terminal ending claim reds on a sent A-Cast whose RECEIVED
 mask is short of all n -- the decided-1 instance the inverted gate
-stopped serving while its READY was still owed.  The surface-2 smoke
-config (n = 2, t = 0) is insensitive to this defect: its counts do not
-move, nor do config 4's, the same shape at a 1,000,000-state ceiling.
+stopped serving while its READY was still owed.  The smoke run reds
+first at surface 2 on the same claim, before any count is compared.
 #ANCHOR
-  return (dec != 0);  /* 0xFF and 1 -> retry; 0 -> skip */
+      baDecision = bkr94acsDecision(a)[process];
 #WITH
-  return (dec != 1);
+      baDecision = bkr94acsDecision(a)[process] == 0 ? 1 : 0;
 #END
 
 #MUTANT M29
@@ -955,9 +956,9 @@ that reaches the comparison off the edge -- n=5, t=1 (n-t = 4,
 three meets 2t+1, the classification reads TOLERANCE, and the check
 goes red.
 #ANCHOR
-  if (one >= N - a->t)
+    enabled = one >= N - a->t;
 #WITH
-  if (one >= 2u * a->t + 1)
+    enabled = one >= 2u * a->t + 1;
 #END
 #MUTANT M36
 #FAMILY figure 1 rule chaining -- ready reads the echo flag as it arrived
@@ -1225,9 +1226,8 @@ announced; under the mutation the readied-but-not-yet-accepted
 processes appear in it and the unannounced count goes nonzero.
 
 What reds here does NOT depend on the forger.  The mutated setter is
-called on every announcement-carrying READY AND on every local
-self-accept, honest ones included, so the unearned bits appear in
-forger-free schedules too and this defect reds several lanes that have
+called on every announcement-carrying READY, a process's own hand-back
+included, so the unearned bits appear in forger-free schedules too and this defect reds several lanes that have
 no Byzantine process at all.  The lying process is what makes the
 arm's OTHER readings meaningful -- the containment question only
 exists if a lie is in flight -- but the credit here is for the
@@ -1251,7 +1251,7 @@ The laggard half does not red here, and the reason is narrower than
 instances, and after the heal it readies on every instance before it
 accepts, which is how it catches up.  What protects it is that the
 widening can only copy a readied bit into the accepted set at the
-moment an announcement or a self-accept arrives, and on the instances
+moment an announcement arrives, and on the instances
 the laggard lacks, no announcement-carrying READY arrives at an honest
 process between the laggard's READY and the laggard's own true
 announcement: the honest cohort is mutually suppressed on those
@@ -1262,8 +1262,9 @@ sentence carries no teeth from this entry, and none are claimed.
 
 Nor from any other.  The one anchored defect that DOES strand the
 laggard -- widening the marking to ALL n rather than to the readied
-set -- turns out to fire on the local self-accept call, filling the
-mask before any announcement arrives; that is the local-accept READY
+set -- turns out to fire on the first announcement-carrying READY an
+instance takes, its own hand-back among them, filling the mask before
+any other announcement arrives; that is the local-accept READY
 retire, Note 10's forbidden gate, and it is M01's class under a
 different anchor (its red set is a strict subset of M01's, forger-free
 lanes included).  A probe entry to that effect was built, graded
@@ -1387,16 +1388,15 @@ quiescence on a lowered count threshold, a different file and a
 different defect class -- produces a P3 signature identical to this
 one, check for check.  The white-box gate arm does not separate them
 either; both red it.  What does separate them in the recorded run is
-the explorer, which under this mutation additionally reaches "no
-schedule reached a QUIESCENT terminal" and under M02 does not.  That
+the explorer's third smoke config, which under this mutation reds on
+its frozen counts and under M02 on the readied set at the initiator
+being short of a correct process.  That
 reading is not this entry's designated credit; it is named here so the
 grade is not read for more than it carries.
 #ANCHOR
-      if (fig1FromCnt(sk, B_N(b)) < B_N(b))
-        out[nout++] = BRACHA87_READY_ALL;
+    readyMaskFull = fig1FromCnt(sk, B_N(b)) >= B_N(b);
 #WITH
-      if (fig1FromCnt(ac, B_N(b)) < B_N(b))
-        out[nout++] = BRACHA87_READY_ALL;
+    readyMaskFull = fig1FromCnt(ac, B_N(b)) >= B_N(b);
 #END
 
 #MUTANT M48
@@ -1522,29 +1522,12 @@ ONE-DIRECTIONAL.  It catches a bit being read that should not be; it
 cannot catch either documented bit going unread, and no entry here
 claims otherwise.
 #ANCHOR
-    if (annot & BKR94ACS_ACCEPTED)
-      bracha87Fig1ProcessAccepted(f1, from);
-    if (!(annot & BKR94ACS_RECEIVED))
-      bracha87Fig1ProcessResend(f1, from);
-  }
-
-  return (nact);
-}
-
-unsigned int
-bkr94acsBaInput(
+  nf1 = bracha87Fig1Input(f1, type, from, value, annot & BKR94ACS_ACCEPTED,
+                          annot & BKR94ACS_RECEIVED, f1out);
 #WITH
-    if (annot & (BKR94ACS_ACCEPTED | 0x40))
-      bracha87Fig1ProcessAccepted(f1, from);
-    if (!(annot & BKR94ACS_RECEIVED))
-      bracha87Fig1ProcessResend(f1, from);
-  }
-
-  return (nact);
-}
-
-unsigned int
-bkr94acsBaInput(
+  nf1 = bracha87Fig1Input(f1, type, from, value,
+                          annot & (BKR94ACS_ACCEPTED | 0x40),
+                          annot & BKR94ACS_RECEIVED, f1out);
 #END
 #MUTANT M52
 #FAMILY figure 4 step 1 -- the round transition's tie broken to 1
@@ -1854,6 +1837,259 @@ left it and the check goes red.
     b->value = b->coin(b->coinClosure, b->instance, ph);
 #END
 
+#MUTANT M64
+#FAMILY paired-payload retire -- the readied set read as the echoed set
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs_blackbox
+#LABEL Q1: every correct process is in the retire set at its initiator
+#EXPECT KILLED
+#WHY
+bkr94acsAcastReadied is the set a paired side channel retires on per
+process, and the header says why it is the READY set and not the ECHO
+set: ECHO is suppressed toward readied processes and retires at
+ACCEPTED, so a process whose first echo fires after the initiator's
+READY reached it is never recorded there, while READY is re-sent until
+that process's accept is recorded.  The oracle forces exactly that
+order -- one process takes no row of the initiator's A-Cast until the
+initiator has sent READY -- drives the annotation exchange to
+quiescence, and requires every correct process in the set at its
+initiator.  Under the mutation the entry hands back the INITIAL mask,
+the echoed set, which is short at one or more honest initiators in
+every lane -- in the lossless lanes at the held initiator alone, short
+of the held process; under loss at whichever initiators loss left
+short -- and the check goes red.  This is the defect the tree carried
+through f84b731: the two side-channel entries read the echoed set,
+which no convergence-reading arm sees, since nothing the protocol does
+to converge needs it to close.  The white-box readied-set arm in
+test_bkr94acs reds too.
+#ANCHOR
+  return (bracha87Fig1Skip(acastF1(a, process),
+                           BRACHA87_ECHO_ALL));
+#WITH
+  return (bracha87Fig1Skip(acastF1(a, process),
+                           BRACHA87_INITIAL_ALL));
+#END
+
+#MUTANT M65
+#FAMILY paired-payload retire -- the all-or-nothing stop read off the echoed set
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs_blackbox
+#LABEL Q1: the all-or-nothing stop reads 1 at quiescence
+#EXPECT KILLED
+#WHY
+The whole stop is the same set covering every other process.  Reading
+the echoed set instead is M64's defect at the stop: the late process's
+echo never arrives at the initiator, so the stop never reads 1 and a
+side channel pinned to it re-sends until the application abandons.
+The oracle's lanes quiesce with every process readied and require the
+stop to read 1; under the mutation it reads 0 at every initiator whose
+late process echoed after the READY, and the check goes red.  The
+silent-process lane is unaffected either way and does not discriminate.
+#ANCHOR
+  rd = bracha87Fig1Skip(acastF1(a, process), BRACHA87_ECHO_ALL);
+#WITH
+  rd = bracha87Fig1Skip(acastF1(a, process), BRACHA87_INITIAL_ALL);
+#END
+
+#MUTANT M66
+#FAMILY suppress mask -- ECHO suppressed toward echoed processes
+#FILE bracha87.c
+#ORACLE test_bkr94acs_blackbox
+#LABEL C7: silent Byzantine process -- honest processes converge
+#EXPECT KILLED
+#WHY
+The ECHO mask is the readied set, "not merely echoed, because an
+echoed-but-not-readied process still consumes echoes toward its ready
+threshold" (BPR.md, Suppression and the Announcements).  Widening it to
+the echoed set withholds echoes from processes still short of Rule 4.
+At n = 3t+1 with one silent process the (n+t)/2+1 threshold equals the
+honest count, so every honest echo must reach at least two honest
+processes for the first READYs to exist; a process that echoed on the
+INITIAL is then skipped by every later echo and stays one short, and
+with too few readiers nothing amplifies.  The oracle's silent-Byzantine
+lane requires the three honest processes to converge; under the
+mutation the run hits its iteration cap and the check goes red.  Also
+red, incidentally: the unit mask arms in both bracha87 suites, the
+readied-set arms in test_bkr94acs and in B8 and Q1 (the entries
+forward the same mask), H1's quiescence, and the explorer -- two smoke
+configs' frozen counts move, and s3's subset oracle reds because it
+reads rdFrom through the mutated accessor.
+#ANCHOR
+  case BRACHA87_ECHO_ALL:
+    return (F1_RDFROM(b));
+#WITH
+  case BRACHA87_ECHO_ALL:
+    return (F1_ECFROM(b));
+#END
+
+#MUTANT M67
+#FAMILY suppress mask -- INITIAL suppressed toward readied processes only
+#FILE bracha87.c
+#ORACLE test_bracha87
+#LABEL Skip INITIAL: bit 0 set (echoed)
+#EXPECT KILLED
+#WHY
+The INITIAL mask is the echoed set: "INITIAL is suppressed to processes
+that have echoed (nothing left to induce there)".  Narrowing it to the
+readied set under-suppresses -- an echoed-but-not-readied process is
+still sent an INITIAL it cannot consume.  The direction is harmless to
+the protocol: an extra INITIAL induces nothing at a process that has
+echoed, so no driven lane moves.  Measured: red in test_bracha87 and
+test_bracha87_blackbox at unit mask arms, and in the bkr94acs black-box
+suite only at Q2's harness witness, which reads the INITIAL mask
+through the mutated accessor; every convergence check green and the
+explorer's frozen counts unchanged on every smoke config.  The oracle
+feeds an
+echo from process 0 and requires its bit in the INITIAL mask; under the
+mutation the bit is read off rdFrom, process 0 has not readied, and the
+check goes red.  The harmful direction, over-suppressing INITIAL, has
+no entry here.
+#ANCHOR
+  case BRACHA87_INITIAL_ALL:
+    return (F1_ECFROM(b));
+#WITH
+  case BRACHA87_INITIAL_ALL:
+    return (F1_RDFROM(b));
+#END
+
+#MUTANT M68
+#FAMILY annotation exchange -- the arm output never applied
+#FILE bracha87.c
+#ORACLE test_bracha87
+#LABEL Annot: arm re-send = (ready, v) without RECEIVED, once accepted
+#EXPECT KILLED
+#WHY
+bracha87Fig1.dtc's "arm re-send to sender" row, applied by
+bracha87Fig1Input after the paper actions, arms one marked re-send toward the sender of an
+unmarked (ready, v) once this instance has accepted -- the half of the
+exchange that repairs a suppression taken before the announcement went
+out (BPR.md, Suppression and the Announcements).  The white-box row
+enumeration pre-announces the sender and requires its READY suppress
+bit clear after an unmarked (ready, v) at an accepted instance; under
+the mutation the bit stays set and the check goes red.  End to end the
+same defect is the strand the RECEIVED annotation exists to repair,
+which the H1 laggard shape and the P2 forgery lanes red on.
+#ANCHOR
+  if (armSender)
+    bracha87Fig1ProcessResend(b, from);
+#WITH
+  if (0)
+    bracha87Fig1ProcessResend(b, from);
+#END
+
+#MUTANT M69
+#FAMILY annotation exchange -- the announcement output never applied
+#FILE bracha87.c
+#ORACLE test_bracha87
+#LABEL Annot: record sender accepted = (ready, v) carrying ACCEPTED
+#EXPECT KILLED
+#WHY
+bracha87Fig1.dtc's "record sender accepted" row, applied by
+bracha87Fig1Input, records the sender of a (ready, v) carrying ACCEPTED
+as accepted, which drives the per-process READY suppression and the
+all-n retire.  With it dropped no announcement is ever recorded: every
+READY is re-sent to every process forever and nothing quiesces.  The
+white-box row enumeration feeds a marked (ready, v) and requires the
+sender in the RECEIVED mask; under the mutation it is absent and the
+check goes red.  H1 and the explorer's quiescent terminals red too.
+#ANCHOR
+  if (recordSender)
+    bracha87Fig1ProcessAccepted(b, from);
+#WITH
+  if (0)
+    bracha87Fig1ProcessAccepted(b, from);
+#END
+
+#MUTANT M70
+#FAMILY duty table -- the turn's MET cell does not fire
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs_blackbox
+#LABEL G3: MET turn fires
+#EXPECT KILLED
+#WHY
+bkr94acs.dtc's one asymmetry between the seams is what MET fires:
+the fanout's MET is an empty unentered set and is moot, the turn's is
+the full sample and firing is free.  Swapping the turn's MET cell to
+the fanout's reading leaves every TOLERANCE-fired round intact and
+refuses only the rounds that completed at all n -- which, at n=4 t=1
+with every process delivering, is most of them, so the caller that
+fires at MET is refused and the BA stalls.  The oracle builds a round
+complete at all n, reads MET, calls the turn and requires acts; under
+the mutation the turn returns 0 and the check goes red.  The MET cell
+is duplicated across the merged dispatch's leaves, so the defect is
+placed where the turn consumes the table's answer rather than in the
+generated snippet.
+#ANCHOR
+  bkr94acsDuty(a, BKR94ACS_SEAM_TURN, process, &fire);
+  if (!fire)
+    return (0);
+#WITH
+  bkr94acsDuty(a, BKR94ACS_SEAM_TURN, process, &fire);
+  if (!fire || bkr94acsDuty(a, BKR94ACS_SEAM_TURN, process, 0)
+              == BKR94ACS_DUTY_MET)
+    return (0);
+#END
+
+#MUTANT M71
+#FAMILY retry cursor -- the sweep counter advances only on an empty pass
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs_blackbox
+#LABEL H1: no pass cost more calls than bkr94acsFig1SentCount (plus the call that crosses the wrap)
+#EXPECT KILLED
+#WHY
+The cursor's `sweeps` is the pass boundary exactly (bkr94acs.h, the
+sweep-side banner: "CLOSING A SWEEP: read the cursor's `sweeps`
+counter, which the library advances on every wrap"), and every
+sweep-denominated policy -- the duty patience, the barren gate --
+counts it.  Advancing it only when a pass found nothing to output
+leaves a live run's clock stopped: a caller's patience never elapses
+and its abandon gate never fires while anything is still owed.  The
+oracle counts the calls each closed pass took against the sent-instance
+ceiling; under the mutation no pass closes while acts flow, the count
+runs past the ceiling, and the check goes red.  Also red: Q2's
+sweep-walk witness, which is bounded by the same ceiling precisely so
+that this defect reds rather than hangs the suite -- unbounded, the
+walk never ends against this machine, and only an alarm would.
+#ANCHOR
+      ++p->sweeps;
+      if (p->sweepActs == 0)
+        return (0);
+#WITH
+      if (p->sweepActs == 0) {
+        ++p->sweeps;
+        return (0);
+      }
+#END
+
+#MUTANT M72
+#FAMILY once-only accept -- the "have accepted" row fed clear
+#FILE bracha87.c
+#ORACLE test_bracha87_blackbox
+#LABEL PostAccept: every post-accept Input returns 0 actions
+#EXPECT KILLED
+#WHY
+"have accepted" is the input of the paper rules that Fig 1 does not
+write down (bracha87Fig1.dtc): a step program ends at accept(v), so a
+process accepts once, and once accepted the paper's outputs are
+finished with every later arrival: every arrival runs the dispatch,
+the row withholds accept(v), and the sent flags withhold the sends.
+Feeding the row clear at Input makes a
+post-accept (ready, v) that still meets 2t+1 fire accept(v) again, and
+one that meets t+1 with ready already sent fire nothing new -- but the
+first is enough: the oracle drives an instance to ACCEPT, then feeds
+every later message, and requires 0 actions from each.  Under the
+mutation the second accept is output and the check goes red.  Also
+red: the white-box "Rule 6: post-accept ignored" and test_ceiling's
+accepted-on-the-2t+1'th-ready read.  The explorer's smoke run stays
+green.
+#ANCHOR
+  haveAccepted  = (b->flags & BRACHA87_F1_ACCEPTED) ? 1 : 0;
+  ecGtHalfNT    = ec >= (B_N(b) + b->t) / 2 + 1;
+#WITH
+  haveAccepted  = 0;
+  ecGtHalfNT    = ec >= (B_N(b) + b->t) / 2 + 1;
+#END
+
 CATALOGUE_END
 
 # ---------------------------------------------------------------------
@@ -1861,7 +2097,8 @@ CATALOGUE_END
 # ---------------------------------------------------------------------
 
 sums() {
-  shasum -a 256 bracha87.c bkr94acs.c
+  shasum -a 256 bracha87.c bkr94acs.c bracha87Fig1Rules.c \
+    bkr94acsRules.c
 }
 
 # Run a command under an alarm.  No GNU timeout on this platform; perl

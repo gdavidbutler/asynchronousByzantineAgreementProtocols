@@ -64,6 +64,18 @@
 #   "output SubSet"                 { yes, no }
 #                                     - SubSet := { j : BA_j had output 1 }
 #                                       computed when this output fires
+#
+# Bracha Phase Retry (BPR) adds its inputs and outputs below, in
+# the sub-tables after Step 3: the retry's verdict gate and the
+# sweep-side duty trichotomy.  One dispatch serves every site
+# (bkr94acsAcastInput, bkr94acsTurn, the retry gate, the duty
+# site); each feeds the inputs its own outputs read from state
+# and the rest a fixed value, and discards the outputs it does
+# not read -- an undecided byte fed by fiat walks, a fanout seam
+# fed by fiat is HELD, and both are dropped.  Nothing a site reads
+# moves with a value it fed by fiat; that is a fact of the rows,
+# checked rather than derived: test_predicates enumerates every
+# site's input space against the snippet and requires it.
 
 # ================================================================
 # Step 1 - Input 1 to BA_j when Q(j) = 1
@@ -138,10 +150,11 @@ no,"BA_j outputs 1",
 # Out of the merged dispatch because its inputs (the n-t count,
 # the unentered set) appear in no other rule --
 # merging would duplicate its DAG at every leaf -- and patience
-# is deployment vocabulary, not paper vocabulary.  The enabling
-# predicate and the fanout loop (enter 0 where input is none) are
-# plain C in bkr94acsFanoutDuty / bkr94acsFanout, the same
-# treatment as the BPR retry gate below.
+# is deployment vocabulary, not paper vocabulary.  The trichotomy
+# and the firing decision are the BPR sub-tables at the end of this
+# file, shared with the round turn below; the enabling predicates
+# are plain C at the duty site (bkr94acsDuty in bkr94acs.c) and the
+# fanout loop (enter 0 where input is none) in bkr94acsFanout.
 
 # ================================================================
 # The BA round turn -- not a BKR94 rule; fired from the BPR sweep
@@ -171,11 +184,11 @@ no,"BA_j outputs 1",
 # store/validate/cascade -- Fig3 itself is deferral-shaped:
 # every message is stored and validity re-derived as prior rounds
 # grow).  bkr94acsTurnDuty classifies a BA's next round with the
-# shared trichotomy (HELD below n-t validated or round space
-# exhausted / TOLERANCE at >= n-t with the sample still growable /
-# MET at all n validated -- the full sample, firing is free), and
-# bkr94acsTurn computes one round under the same caller discipline
-# as the fanout.  BA_DECIDED / COMPLETE / BA_EXHAUSTED emerge from
+# shared trichotomy of the BPR sub-tables below (HELD below n-t validated or
+# round space exhausted / TOLERANCE at >= n-t with the sample still
+# growable / MET at all n validated -- the full sample, firing is
+# free), and bkr94acsTurn computes one round under the same caller
+# discipline as the fanout.  BA_DECIDED / COMPLETE / BA_EXHAUSTED emerge from
 # turns only; the Step 3 dispatch below rides the turn's decide.
 #
 # bracha87.[hc] carries the caller-shaped seam --
@@ -206,41 +219,121 @@ no,"BA_j outputs 1",no
 no,"BA_j outputs 0",no
 no,"Q(j) = 1",
 
-# Bracha Phase Retry (BPR) per-process retry gate -- not in
-# this dispatch.
+# ================================================================
+# Bracha Phase Retry (BPR) -- the composition's rules, as
+# sub-tables of this dispatch (BPR.md, The Composition Layer and
+# The Sweep-Side Decisions).  No paper behind them.
+# ================================================================
 #
 # Justification for BPR's placement at this layer: end-to-end
 # argument (Saltzer/Reed/Clark 1984; see SRC84.txt).  The
 # "still owed" predicate for A-Cast-Fig1 retry combines
-# Bracha's sent flags with this layer's per-process
-# BA-decided state (undecided / decided 0 / decided 1); both
-# live at the BKR endpoint, so the retire-or-retry decision is
-# made here rather than below.
+# Bracha's own retry state (the sent flags and the per-sender
+# bitmaps its gates read) with this layer's per-process
+# BA-decided state (undecided / decided 0 / decided 1 /
+# exhausted); both live at the BKR endpoint, so the retire-or-
+# retry decision is made here rather than below.
+#
+# ===== walk A-Cast j (the verdict gate) =====
 #
 # bkr94acsRetryStep walks per-process A-Cast Fig1 instances and
 # decides whether to output retries based on the local BA
-# decision state ({ undecided, decided 0, decided 1,
-# exhausted }):
-#   - undecided  -> retry  (Q(j)=1 may still be learned by
+# decision state:
+#   - undecided  -> walk  (Q(j)=1 may still be learned by
 #                          other honest processes; their Fig1(j)
 #                          needs our echoes / readys)
-#   - decided 0  -> skip  (j excluded from SubSet; Step 2's
-#                          fanout already conveyed our enter)
-#   - exhausted  -> retry  (no decision was made; other
+#   - decided 0  -> skip  (j excluded from SubSet at every correct
+#                          process, BA agreement, so nobody needs
+#                          its A-Cast; our own enter, 0 by Step 2
+#                          or 1 by Step 1, is spent)
+#   - exhausted  -> walk  (no decision was made; other
 #                          processes may still benefit from
 #                          earlier-round echoes / readys)
-#   - decided 1  -> retry  (Bracha post-decide continuation:
+#   - decided 1  -> walk  (Bracha post-decide continuation:
 #                          processes that have not yet observed
 #                          Fig1 ACCEPT for j still need our
 #                          echoes / readys, else their BA_j
 #                          stays undecided and may go to 0
 #                          via Step 2, violating cross-process
 #                          agreement on SubSet)
+# The BA Fig 1 walk is ungated; bracha87Fig1Bpr returns 0 on
+# unsent instances.
 #
-# Four-arm single-input single-output guard with no
-# interaction with the Rules 1-3 dispatch and no test ordering
-# to optimize; captured in C as a switch over the BA decision
-# byte rather than a sub-table (same call as the Fig1 initiator
-# INITIAL retry gate -- see bracha87Fig1.dtc BPR section).
-# The Note 1 (post-decide continuation) reasoning lives in
-# the comment at the bkr94acsRetryStep cursor site.
+# Inputs:
+#   "BA_j decision"          { undecided, decided 0, decided 1, exhausted }
+# Outputs:
+#   "walk A-Cast j"          { yes, no }
+@"walk A-Cast j","BA_j decision"
+yes,undecided
+no,"decided 0"
+yes,"decided 1"
+yes,exhausted
+
+# ===== the sweep-side duty trichotomy =====
+#
+# Both seams -- the Step 2 fanout above and the BA round turn --
+# take one decision shape, proceed without the tail, classified
+# from the seam's own two predicates, computed in C at the duty
+# site and bridged:
+#   "enabled"                  fanout: BA-output-1 count >= n-t
+#                                (the paper's 2t+1; Implementation
+#                                Note 15) -- below it entering 0 is
+#                                unsound, a mass of 0-inputs could
+#                                force SubSet empty;
+#                              turn: the BA's next round exists (the
+#                                round space is not exhausted) and is
+#                                complete at >= n-t validated.
+#   "nothing left to wait for" fanout: no BA is unentered -- the set
+#                                the firing empties, so once per
+#                                instance is structural;
+#                              turn: the next round has all n
+#                                validated -- the full sample, so
+#                                waiting buys nothing.  Only ever yes
+#                                with "enabled" yes.
+#
+# The classification:
+#   HELD       not enabled: firing now would be unsound or is
+#              impossible; elapsed time is irrelevant -- wait.
+#   TOLERANCE  enabled, and waiting could still improve the outcome:
+#              the caller counts sweeps against its patience and fires
+#              when it elapses.
+#   MET        nothing left to wait for.
+#
+# The seams differ in what MET means, and that is the one reachable
+# difference: the turn's MET is a full sample and the firing is free;
+# the fanout's MET is an empty unentered set and the firing is moot, so
+# it does not fire.  (The cell enabled = no with nothing left = yes is
+# MET for the fanout and HELD for the turn; the turn never reaches it.)
+# Everywhere else the firing follows the classification: at TOLERANCE
+# it fires (the caller decided WHEN by calling); at HELD it refuses,
+# having changed nothing.  The library holds the safety half; whether
+# to call while TOLERANCE holds is the caller's alone.
+#
+# For the fanout "nothing left to wait for" decides MET whatever the
+# count: a run whose every A-Cast enters 1 by step 1 before n-t BAs
+# decide goes from HELD to MET without ever reaching TOLERANCE.
+#
+# Inputs:
+#   "seam"                       { fanout, turn }
+#   "enabled"                    { yes, no }
+#   "nothing left to wait for"   { yes, no }
+# Outputs:
+#   "duty"                       { HELD, TOLERANCE, MET }
+#   "fire on call"               { yes, no }
+
+@"duty","seam","enabled","nothing left to wait for"
+MET,fanout,,yes
+TOLERANCE,fanout,yes,no
+HELD,fanout,no,no
+MET,turn,yes,yes
+TOLERANCE,turn,yes,no
+HELD,turn,no,
+
+# The fanout at MET has nothing to enter; the turn at MET consumes the
+# full sample.  Both refuse at HELD.
+@"fire on call","seam","enabled","nothing left to wait for"
+no,fanout,,yes
+yes,fanout,yes,no
+no,fanout,no,no
+yes,turn,yes,
+no,turn,no,

@@ -116,7 +116,7 @@ simFig1(
     unsigned int j;
     const unsigned char *cv;
 
-    nout = bracha87Fig1Input(inst[m->to], m->type, m->from, m->value, out);
+    nout = bracha87Fig1Input(inst[m->to], m->type, m->from, m->value, 0, 1, out);
 
     /* For each output action, enqueue messages */
     for (j = 0; j < nout; ++j) {
@@ -197,7 +197,7 @@ simFig1Equivoc(
     unsigned int j;
     const unsigned char *cv;
 
-    nout = bracha87Fig1Input(inst[m->to], m->type, m->from, m->value, out);
+    nout = bracha87Fig1Input(inst[m->to], m->type, m->from, m->value, 0, 1, out);
     for (j = 0; j < nout; ++j) {
       unsigned int k;
 
@@ -302,7 +302,7 @@ simFig1Shuffled(
     unsigned int oldTail;
 
     oldTail = Qtail;
-    nout = bracha87Fig1Input(inst[m->to], m->type, m->from, m->value, out);
+    nout = bracha87Fig1Input(inst[m->to], m->type, m->from, m->value, 0, 1, out);
 
     for (j = 0; j < nout; ++j) {
       unsigned int k;
@@ -459,7 +459,7 @@ testFig1Rules(
    */
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, 0, 1, out);
   printf("    Rule 1 (INITIAL)       : nout=%u out[0]=%u\n", nout, nout ? out[0] : 0);
   check("Rule 1: INITIAL -> ECHO_ALL", nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
   check("Rule 1: echoed set", (b->flags & BRACHA87_F1_ECHOED));
@@ -467,7 +467,7 @@ testFig1Rules(
         bracha87Fig1Value(b) && !memcmp(bracha87Fig1Value(b), val_A, VLEN));
 
   /* Rule 1: second INITIAL ignored */
-  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 1, val_B, out);
+  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 1, val_B, 0, 1, out);
   check("Rule 1: second INITIAL ignored", nout == 0);
   free(b);
 
@@ -479,19 +479,19 @@ testFig1Rules(
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
   /* First echo: count=1 < 3, no action */
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 0, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 0, val_A, 0, 1, out);
   check("Rule 2: 1 echo, no action", nout == 0);
   check("Rule 2: not echoed yet", !(b->flags & BRACHA87_F1_ECHOED));
 
   /* Second echo: count=2 < 3, no action */
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, 0, 1, out);
   check("Rule 2: 2 echoes, no action", nout == 0);
   check("Rule 2: still not echoed", !(b->flags & BRACHA87_F1_ECHOED));
 
   /* Third echo: count=3 >= 3.  Rule 2 fires, and Rule 4 chains off it
    * on the same message -- this process has not echoed, so the echo it
    * sends here is what satisfies Rule 4's "have echoed". */
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, 0, 1, out);
   printf("    Rule 2 (echo threshold)   : nout=%u out[0]=%u\n", nout, nout ? out[0] : 0);
   check("Rule 2: 3 echoes -> ECHO_ALL then READY_ALL",
         nout == 2 && out[0] == BRACHA87_ECHO_ALL
@@ -508,10 +508,10 @@ testFig1Rules(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, 0, 1, out);
   check("Rule 3: 1 ready, no action", nout == 0);
 
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 1, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 1, val_A, 0, 1, out);
   printf("    Rule 3 (ready amplify) : nout=%u out[0]=%u\n", nout, nout ? out[0] : 0);
   check("Rule 3: 2 readys -> ECHO_ALL", nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
   check("Rule 3: echoed set", (b->flags & BRACHA87_F1_ECHOED));
@@ -524,17 +524,17 @@ testFig1Rules(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, 0, 1, out);
   check("Rule 4 setup: echoed", (b->flags & BRACHA87_F1_ECHOED));
 
   /* Feed echoes for same value (need echo_count >= 3) */
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, 0, 1, out);
   check("Rule 4: 1 echo, no ready", nout == 0);
 
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, 0, 1, out);
   check("Rule 4: 2 echoes, no ready", nout == 0);
 
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_A, 0, 1, out);
   printf("    Rule 4 (echo->ready)   : nout=%u", nout);
   { unsigned int k; for (k = 0; k < nout; ++k) printf(" out[%u]=%u", k, out[k]); }
   printf("\n");
@@ -556,12 +556,12 @@ testFig1Rules(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, 0, 1, out);
 
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 1, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 1, val_A, 0, 1, out);
   check("Rule 5: 1 ready, no action", nout == 0);
 
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_A, 0, 1, out);
   printf("    Rule 5 (ready->ready)  : nout=%u", nout);
   { unsigned int k; for (k = 0; k < nout; ++k) printf(" out[%u]=%u", k, out[k]); }
   printf("\n");
@@ -582,25 +582,25 @@ testFig1Rules(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_A, out); /* triggers ready */
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_A, 0, 1, out); /* triggers ready */
   check("Rule 6 setup: rdSent", (b->flags & BRACHA87_F1_RDSENT));
 
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, 0, 1, out);
   check("Rule 6: 1 ready, no accept", nout == 0 || out[0] != BRACHA87_ACCEPT);
 
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 1, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 1, val_A, 0, 1, out);
   check("Rule 6: 2 readys, no accept", nout == 0 || out[0] != BRACHA87_ACCEPT);
 
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_A, 0, 1, out);
   printf("    Rule 6 (accept)        : nout=%u out[0]=%u\n", nout, nout ? out[0] : 0);
   check("Rule 6: 3 readys -> ACCEPT", nout == 1 && out[0] == BRACHA87_ACCEPT);
   check("Rule 6: accepted set", (b->flags & BRACHA87_F1_ACCEPTED));
 
   /* After accept, all messages ignored */
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 3, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 3, val_A, 0, 1, out);
   check("Rule 6: post-accept ignored", nout == 0);
   free(b);
 }
@@ -634,9 +634,9 @@ testFig1Cascade(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, 0, 1, out);
 
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 1, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 1, val_A, 0, 1, out);
   printf("    3->5 cascade           : nout=%u", nout);
   { unsigned int k; for (k = 0; k < nout; ++k) printf(" out[%u]=%u", k, out[k]); }
   printf("\n");
@@ -663,10 +663,10 @@ testFig1Cascade(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val_A, out); /* cascade 3->5 */
+  bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val_A, 0, 1, out); /* cascade 3->5 */
 
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_A, 0, 1, out);
   printf("    3->5->6 cascade        : nout=%u", nout);
   { unsigned int k; for (k = 0; k < nout; ++k) printf(" out[%u]=%u", k, out[k]); }
   printf("\n");
@@ -696,13 +696,13 @@ testFig1Dedup(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_ECHO, 0, val_A, out);
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 0, val_A, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 0, val_A, 0, 1, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 0, val_A, 0, 1, out);
   printf("    Echo dedup             : nout=%u\n", nout);
   check("Dedup: second echo from same sender ignored", nout == 0);
 
-  bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, out);
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, 0, 1, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 0, val_A, 0, 1, out);
   printf("    Ready dedup            : nout=%u\n", nout);
   check("Dedup: second ready from same sender ignored", nout == 0);
   free(b);
@@ -729,24 +729,24 @@ testFig1EdgeCases(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 4, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 4, val_A, 0, 1, out);
   printf("    from >= n              : nout=%u\n", nout);
   check("Edge: from >= n rejected", nout == 0);
 
-  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 255, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 255, val_A, 0, 1, out);
   check("Edge: from=255 rejected", nout == 0);
 
-  nout = bracha87Fig1Input(b, 99, 0, val_A, out);
+  nout = bracha87Fig1Input(b, 99, 0, val_A, 0, 1, out);
   printf("    bad type               : nout=%u\n", nout);
   check("Edge: bad type rejected", nout == 0);
 
-  nout = bracha87Fig1Input(0, BRACHA87_INITIAL, 0, val_A, out);
+  nout = bracha87Fig1Input(0, BRACHA87_INITIAL, 0, val_A, 0, 1, out);
   check("Edge: null instance rejected", nout == 0);
 
-  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, 0, out);
+  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, 0, 0, 1, out);
   check("Edge: null value rejected", nout == 0);
 
-  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, 0);
+  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, 0, 1, 0);
   check("Edge: null out rejected", nout == 0);
   free(b);
 }
@@ -778,10 +778,10 @@ testFig1Thresholds(
   bracha87Fig1Init(b, 6, 2, VLEN - 1);
 
   for (i = 0; i < 4; ++i)
-    bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val_A, out);
+    bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val_A, 0, 1, out);
   check("Threshold: 4 echoes, not echoed", !(b->flags & BRACHA87_F1_ECHOED));
 
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 4, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 4, val_A, 0, 1, out);
   printf("    Echo threshold (5)     : echoed=%u\n", !!(b->flags & BRACHA87_F1_ECHOED));
   check("Threshold: 5th echo -> echoed", (b->flags & BRACHA87_F1_ECHOED));
   check("Threshold: 5th echo -> ECHO_ALL", nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
@@ -794,10 +794,10 @@ testFig1Thresholds(
   bracha87Fig1Init(b, 6, 2, VLEN - 1);
 
   for (i = 0; i < 2; ++i)
-    bracha87Fig1Input(b, BRACHA87_READY, (unsigned char)i, val_A, out);
+    bracha87Fig1Input(b, BRACHA87_READY, (unsigned char)i, val_A, 0, 1, out);
   check("Threshold: 2 readys, not echoed", !(b->flags & BRACHA87_F1_ECHOED));
 
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_A, 0, 1, out);
   printf("    Ready amplify (3)      : echoed=%u\n", !!(b->flags & BRACHA87_F1_ECHOED));
   check("Threshold: 3rd ready -> echoed (rule 3)", (b->flags & BRACHA87_F1_ECHOED));
   free(b);
@@ -809,16 +809,16 @@ testFig1Thresholds(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 6, 2, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, 0, 1, out);
   for (i = 1; i < 6; ++i)
-    bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val_A, out);
+    bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val_A, 0, 1, out);
   check("Threshold: setup rdSent", (b->flags & BRACHA87_F1_RDSENT));
 
   for (i = 0; i < 4; ++i)
-    bracha87Fig1Input(b, BRACHA87_READY, (unsigned char)i, val_A, out);
+    bracha87Fig1Input(b, BRACHA87_READY, (unsigned char)i, val_A, 0, 1, out);
   check("Threshold: 4 readys, not accepted", !(b->flags & BRACHA87_F1_ACCEPTED));
 
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 4, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 4, val_A, 0, 1, out);
   printf("    Accept threshold (5)   : accepted=%u\n", !!(b->flags & BRACHA87_F1_ACCEPTED));
   check("Threshold: 5th ready -> accepted", (b->flags & BRACHA87_F1_ACCEPTED));
   check("Threshold: ACCEPT action", nout == 1 && out[0] == BRACHA87_ACCEPT);
@@ -856,18 +856,18 @@ testFig1Liveness(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, 0, 1, out);
   check("Liveness: echoed A", (b->flags & BRACHA87_F1_ECHOED)
         && bracha87Fig1Value(b)
         && !memcmp(bracha87Fig1Value(b), val_A, VLEN));
 
-  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_B, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_B, 0, 1, out);
   check("Liveness: 1 echo B, no ready yet", !(b->flags & BRACHA87_F1_RDSENT));
 
-  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_B, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_B, 0, 1, out);
   check("Liveness: 2 echoes B, no ready yet", !(b->flags & BRACHA87_F1_RDSENT));
 
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_B, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_B, 0, 1, out);
   printf("    Echoed A, 3 echoes B   : nout=%u rdSent=%u\n", nout, !!(b->flags & BRACHA87_F1_RDSENT));
   check("Liveness: 3 echoes B -> ready B (rule 4)", (b->flags & BRACHA87_F1_RDSENT));
   check("Liveness: value switched to B",
@@ -887,10 +887,10 @@ testFig1Liveness(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, 0, 1, out);
 
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val_B, out);
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_B, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val_B, 0, 1, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_B, 0, 1, out);
   printf("    Echoed A, 2 readys B   : nout=%u rdSent=%u\n", nout, !!(b->flags & BRACHA87_F1_RDSENT));
   check("Liveness: 2 readys B -> ready B (rule 5)", (b->flags & BRACHA87_F1_RDSENT));
   check("Liveness: value switched to B (rule 5)",
@@ -903,15 +903,15 @@ testFig1Liveness(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_A, out); /* rule 4 -> rdSent */
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_A, 0, 1, out); /* rule 4 -> rdSent */
   check("Liveness setup: rdSent for A", (b->flags & BRACHA87_F1_RDSENT));
 
-  bracha87Fig1Input(b, BRACHA87_READY, 0, val_B, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val_B, out);
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_B, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 0, val_B, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val_B, 0, 1, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val_B, 0, 1, out);
   printf("    rdSent A, 3 readys B   : nout=%u accepted=%u\n", nout, !!(b->flags & BRACHA87_F1_ACCEPTED));
   check("Liveness: 3 readys B -> accept B (rule 6)", (b->flags & BRACHA87_F1_ACCEPTED));
   check("Liveness: accepted value is B",
@@ -3126,7 +3126,7 @@ simComposed(
     st = &states[m->to];
     f1 = st->fig1[(unsigned int)m->round * n + m->initiator];
     oldTail = BQtail;
-    nout = bracha87Fig1Input(f1, m->type, m->from, &m->value, out);
+    nout = bracha87Fig1Input(f1, m->type, m->from, &m->value, 0, 1, out);
 
     for (k = 0; k < nout; ++k) {
       if (out[k] == BRACHA87_ACCEPT) {
@@ -3579,15 +3579,15 @@ testFig1ValueSwitch(
   valB = 1;
 
   /* Byzantine initial: echo A */
-  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, &valA, out);
+  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, &valA, 0, 1, out);
   check("ValSwitch: INITIAL echoes", nout >= 1);
   check("ValSwitch: sent to A",
         bracha87Fig1Value(b) && bracha87Fig1Value(b)[0] == valA);
 
   /* 3 echoes for B from honest processes: threshold = (4+1)/2+1 = 3 */
-  bracha87Fig1Input(b, BRACHA87_ECHO, 1, &valB, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 2, &valB, out);
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, &valB, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 1, &valB, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 2, &valB, 0, 1, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, &valB, 0, 1, out);
 
   /* Rule 4 fires for B: ready(B) */
   check("ValSwitch: rdSent", (b->flags & BRACHA87_F1_RDSENT));
@@ -3595,9 +3595,9 @@ testFig1ValueSwitch(
         bracha87Fig1Value(b) && bracha87Fig1Value(b)[0] == valB);
 
   /* 3 readys for B: threshold 2t+1 = 3 */
-  bracha87Fig1Input(b, BRACHA87_READY, 1, &valB, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 2, &valB, out);
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 3, &valB, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, &valB, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, &valB, 0, 1, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 3, &valB, 0, 1, out);
 
   check("ValSwitch: accepted", (b->flags & BRACHA87_F1_ACCEPTED));
   check("ValSwitch: accepted B",
@@ -3659,7 +3659,7 @@ testFig1Bpr(
    */
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
   check("BPR after Rule 1: ECHOED set", (b->flags & BRACHA87_F1_ECHOED));
   check("BPR after Rule 1: RDSENT clear", !(b->flags & BRACHA87_F1_RDSENT));
 
@@ -3686,9 +3686,9 @@ testFig1Bpr(
    */
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);
   check("BPR after Rule 5: ECHOED set", (b->flags & BRACHA87_F1_ECHOED));
   check("BPR after Rule 5: RDSENT set", (b->flags & BRACHA87_F1_RDSENT));
   check("BPR after Rule 5: not yet accepted",
@@ -3719,10 +3719,10 @@ testFig1Bpr(
    */
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 3, val, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 3, val, 0, 1, out);
   check("BPR after Rule 4: ECHOED set", (b->flags & BRACHA87_F1_ECHOED));
   check("BPR after Rule 4: RDSENT set", (b->flags & BRACHA87_F1_RDSENT));
   check("BPR after Rule 4: not yet accepted",
@@ -3748,10 +3748,10 @@ testFig1Bpr(
    */
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 3, val, 0, 1, out);
   check("BPR after Rule 6: ACCEPTED set",
         (b->flags & BRACHA87_F1_ACCEPTED));
 
@@ -3775,9 +3775,9 @@ testFig1Bpr(
    */
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);
   {
     const unsigned char *cv;
 
@@ -3797,10 +3797,10 @@ testFig1Bpr(
   free(b);
 
   /*
-   * Cross-talk discipline: bracha87Fig1Input now also computes
-   * the BPR retry outputs (the merged dispatch produces all
-   * five), but the wrapper discards them on the Input path so
-   * Bracha's output count is unaffected.  Verified directly
+   * Cross-talk discipline: bracha87Fig1Input also computes the
+   * BPR retry outputs (the one dispatch produces all eight), and
+   * discards them on the Input path so Bracha's output count is
+   * unaffected.  Verified directly
    * here for two cases: (a) Input call that fires a paper rule,
    * Bracha's action count is exactly the paper count - no stray
    * retry piggy-backed; (b) Input call after sent state
@@ -3812,13 +3812,13 @@ testFig1Bpr(
   /* (a) Rule 1 fires alone: pre-state echoed=0, BPR retry is
    * inhibited by its chained input "send (echo, v) = yes" - the
    * dispatch produces sendEcho=yes and retryEcho=no together. */
-  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
   check("BPR cross-talk: Rule 1 outputs exactly 1 action",
         nout == 1 && out[0] == BRACHA87_ECHO_ALL);
   /* (b) Subsequent ECHO from process 1 with no threshold met: no
    * Bracha rule fires.  BPR retry would say yes (echoed=1,
    * sendEcho=no), but the Input wrapper discards it. */
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 1, val, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 1, val, 0, 1, out);
   check("BPR cross-talk: non-firing Input outputs 0 actions",
         nout == 0);
   printf("    cross-talk discard   : Input outputs paper count, BPR retry ignored\n");
@@ -3836,15 +3836,15 @@ testFig1Bpr(
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
 
   bracha87Fig1Bpr(b, out);     /* fresh */
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);  /* Rule 1 */
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);  /* Rule 1 */
   bracha87Fig1Bpr(b, out);     /* echoed */
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
   bracha87Fig1Bpr(b, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);   /* Rule 5 */
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);   /* Rule 5 */
   check("BPR interleaved: RDSENT after 2nd READY",
         (b->flags & BRACHA87_F1_RDSENT));
   bracha87Fig1Bpr(b, out);     /* rdSent */
-  bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);   /* Rule 6 */
+  bracha87Fig1Input(b, BRACHA87_READY, 3, val, 0, 1, out);   /* Rule 6 */
   check("BPR interleaved: ACCEPTED after 3rd READY",
         (b->flags & BRACHA87_F1_ACCEPTED));
   check("BPR interleaved: value matches input",
@@ -3898,7 +3898,7 @@ testFig1Bpr(
   /* Now self-feed (loopback): Rule 1 fires, ECHOED gets set.
    * INITIAL retry continues (BPR rule, not gated by ECHOED) AND
    * ECHO retry starts. */
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
   check("BPR initiator post-loopback: ECHOED set",
         (b->flags & BRACHA87_F1_ECHOED));
   check("BPR initiator post-loopback: INITIATOR still set",
@@ -3927,9 +3927,9 @@ testFig1Bpr(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
   bracha87Fig1Initiator(b, val);
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);  /* Rule 1 -> ECHOED */
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);    /* Rule 5 -> RDSENT */
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);  /* Rule 1 -> ECHOED */
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);    /* Rule 5 -> RDSENT */
   check("BPR initiator+rdSent: INITIATOR set",
         (b->flags & BRACHA87_F1_INITIATOR));
   check("BPR initiator+rdSent: ECHOED set",
@@ -3958,10 +3958,10 @@ testFig1Bpr(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
   bracha87Fig1Initiator(b, val);
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);  /* Rule 1 -> ECHOED */
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);    /* Rule 5 -> RDSENT */
-  bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);    /* Rule 6 -> ACCEPTED */
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);  /* Rule 1 -> ECHOED */
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);    /* Rule 5 -> RDSENT */
+  bracha87Fig1Input(b, BRACHA87_READY, 3, val, 0, 1, out);    /* Rule 6 -> ACCEPTED */
   check("BPR initiator+accepted: INITIATOR set",
         (b->flags & BRACHA87_F1_INITIATOR));
   check("BPR initiator+accepted: ACCEPTED set",
@@ -3997,7 +3997,7 @@ testFig1Bpr(
   check("BPR all-echoed: 0 with no echoes", bracha87Fig1AllEchoed(b) == 0);
   /* Feed echoes one at a time; AllEchoed stays 0 until the n-th sender. */
   for (i = 0; i < 4; ++i) {
-    bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val, out);
+    bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val, 0, 1, out);
     if (i < 3)
       check("BPR all-echoed: 0 while echoSenders < n",
             bracha87Fig1AllEchoed(b) == 0);
@@ -4104,8 +4104,8 @@ testFig1SkipAccept(
         bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL) != 0);
 
   /* INITIAL skip = echoed processes (value-agnostic).  Echo from 0 and 2. */
-  bracha87Fig1Input(b, BRACHA87_ECHO, 0, val, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 0, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val, 0, 1, out);
   m = bracha87Fig1Skip(b, BRACHA87_INITIAL_ALL);
   check("Skip INITIAL: bit 0 set (echoed)", BRACHA87_SKIP_TST(m, 0));
   check("Skip INITIAL: bit 1 clear (no echo)", !BRACHA87_SKIP_TST(m, 1));
@@ -4119,8 +4119,8 @@ testFig1SkipAccept(
    */
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 3, val, 0, 1, out);
   m = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
   check("Skip ECHO: bit 1 clear (echoed-not-readied still consumes echo)",
         !BRACHA87_SKIP_TST(m, 1));
@@ -4131,7 +4131,7 @@ testFig1SkipAccept(
    * wire-silent; readied != accepted). */
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);
   m = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
   check("Skip READY: bit 2 clear (readied != accepted)", !BRACHA87_SKIP_TST(m, 2));
   bracha87Fig1ProcessAccepted(b, 2);
@@ -4157,9 +4157,9 @@ testFig1SkipAccept(
    */
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);  /* RDSENT via Rule 5 */
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);  /* RDSENT via Rule 5 */
   check("Quiescence setup: RDSENT, not accepted",
         (b->flags & BRACHA87_F1_RDSENT)
         && !(b->flags & BRACHA87_F1_ACCEPTED));
@@ -4196,9 +4196,10 @@ testFig1SkipAccept(
  * so the per-sender dedup and count writes continue past ACCEPT.  What
  * reads them stays live: bracha87Fig1AllEchoed, the INITIAL and ECHO
  * suppress masks, and the acFrom-subset-of-rdFrom property
- * bracha87Fig1ProcessAccepted documents.  The rule dispatch is not
- * reached, so every post-accept Input outputs 0 acts and ACCEPT is
- * output exactly once.  n=4 t=1, replayed at n=7 t=2.
+ * bracha87Fig1ProcessAccepted documents.  The dispatch runs on every
+ * post-accept Input; its "have accepted" row withholds accept(v) and
+ * the sent flags withhold the sends, so each outputs 0 acts and
+ * ACCEPT is output exactly once.  n=4 t=1, replayed at n=7 t=2.
  */
 static void
 testFig1PostAcceptRecord(
@@ -4229,9 +4230,9 @@ testFig1PostAcceptRecord(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
   bracha87Fig1Initiator(b, val);
-  bracha87Fig1Input(b, BRACHA87_READY, 0, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 0, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);
   sawAccept = 0;
   for (i = 0; i < nout; ++i)
     if (out[i] == BRACHA87_ACCEPT) sawAccept = 1;
@@ -4246,7 +4247,7 @@ testFig1PostAcceptRecord(
   acts = 0;
 
   for (i = 0; i < 3; ++i) {
-    nout = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val, out);
+    nout = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val, 0, 1, out);
     acts += nout;
     check("PostAccept n=4: post-accept echo outputs 0 acts", nout == 0);
   }
@@ -4254,13 +4255,13 @@ testFig1PostAcceptRecord(
         bracha87Fig1AllEchoed(b) == 0);
 
   /* Dedup survives accept: a repeat from 1 adds no echoer. */
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 1, other, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 1, other, 0, 1, out);
   acts += nout;
   check("PostAccept n=4: repeated echo outputs 0 acts", nout == 0);
   check("PostAccept n=4: repeated echo adds no echoer",
         bracha87Fig1AllEchoed(b) == 0);
 
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, val, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, val, 0, 1, out);
   acts += nout;
   check("PostAccept n=4: n-th post-accept echo outputs 0 acts", nout == 0);
   check("PostAccept n=4: all-echoed 1 at n echoers past accept",
@@ -4276,7 +4277,7 @@ testFig1PostAcceptRecord(
   m = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
   check("PostAccept n=4: ECHO mask clear for 3 before its ready",
         !BRACHA87_SKIP_TST(m, 3));
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 3, val, 0, 1, out);
   acts += nout;
   check("PostAccept n=4: post-accept ready outputs 0 acts", nout == 0);
   m = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
@@ -4284,9 +4285,9 @@ testFig1PostAcceptRecord(
         BRACHA87_SKIP_TST(m, 3));
 
   /* Duplicates and an INITIAL round out the flood. */
-  nout = bracha87Fig1Input(b, BRACHA87_READY, 0, val, out);
+  nout = bracha87Fig1Input(b, BRACHA87_READY, 0, val, 0, 1, out);
   acts += nout;
-  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
+  nout = bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
   acts += nout;
   check("PostAccept n=4: no act anywhere past accept", acts == 0);
   check("PostAccept n=4: flags unchanged by the flood",
@@ -4323,7 +4324,7 @@ testFig1PostAcceptRecord(
   bracha87Fig1Initiator(b, val);
   nout = 0;
   for (i = 0; i < 5; ++i)
-    nout = bracha87Fig1Input(b, BRACHA87_READY, (unsigned char)i, val, out);
+    nout = bracha87Fig1Input(b, BRACHA87_READY, (unsigned char)i, val, 0, 1, out);
   sawAccept = 0;
   for (i = 0; i < nout; ++i)
     if (out[i] == BRACHA87_ACCEPT) sawAccept = 1;
@@ -4333,7 +4334,7 @@ testFig1PostAcceptRecord(
 
   acts = 0;
   for (i = 0; i < 7; ++i) {
-    nout = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val, out);
+    nout = bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val, 0, 1, out);
     acts += nout;
     check("PostAccept n=7: post-accept echo outputs 0 acts", nout == 0);
     if (i < 6)
@@ -4393,15 +4394,15 @@ testFig1EvenNplusT(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 4, 1, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_ECHO, 0, val_A, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, out);
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 0, val_A, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, 0, 1, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, 0, 1, out);
   printf("    n=5 t=1: 3 echoes     : echoed=%u\n", !!(b->flags & BRACHA87_F1_ECHOED));
   check("EvenNT n=5: 3 echoes must NOT trigger echo (threshold=4)",
         !(b->flags & BRACHA87_F1_ECHOED) && nout == 0);
 
   /* 4th echo reaches threshold */
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_A, 0, 1, out);
   printf("    n=5 t=1: 4 echoes     : echoed=%u\n", !!(b->flags & BRACHA87_F1_ECHOED));
   check("EvenNT n=5: 4th echo triggers Rule 2",
         (b->flags & BRACHA87_F1_ECHOED) && nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
@@ -4414,16 +4415,16 @@ testFig1EvenNplusT(
   b = calloc(1, sz);
   bracha87Fig1Init(b, 4, 1, VLEN - 1);
 
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val_A, 0, 1, out);
   check("EvenNT Rule4 setup: echoed", (b->flags & BRACHA87_F1_ECHOED));
 
-  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, out);
-  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, out);
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_A, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 1, val_A, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_ECHO, 2, val_A, 0, 1, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 3, val_A, 0, 1, out);
   check("EvenNT n=5: 3 echoes after INITIAL, no ready",
         !(b->flags & BRACHA87_F1_RDSENT));
 
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 4, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 4, val_A, 0, 1, out);
   printf("    n=5 t=1: Rule 4 at 4  : rdSent=%u\n", !!(b->flags & BRACHA87_F1_RDSENT));
   check("EvenNT n=5: 4th echo triggers Rule 4",
         (b->flags & BRACHA87_F1_RDSENT));
@@ -4439,12 +4440,12 @@ testFig1EvenNplusT(
   {
     unsigned int i;
     for (i = 0; i < 5; ++i)
-      bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val_A, out);
+      bracha87Fig1Input(b, BRACHA87_ECHO, (unsigned char)i, val_A, 0, 1, out);
   }
   check("EvenNT n=8: 5 echoes must NOT trigger echo (threshold=6)",
         !(b->flags & BRACHA87_F1_ECHOED));
 
-  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 5, val_A, out);
+  nout = bracha87Fig1Input(b, BRACHA87_ECHO, 5, val_A, 0, 1, out);
   printf("    n=8 t=2: 6 echoes     : echoed=%u\n", !!(b->flags & BRACHA87_F1_ECHOED));
   check("EvenNT n=8: 6th echo triggers Rule 2",
         (b->flags & BRACHA87_F1_ECHOED) && nout >= 1 && out[0] == BRACHA87_ECHO_ALL);
@@ -4548,7 +4549,7 @@ testBprLargeN(
   /* Process 0 initiates and self-feeds its own INITIAL (Rule 1 -> ECHOED),
    * the realistic bootstrap; thereafter everything rides the BPR retry. */
   bracha87Fig1Initiator(f1[0], val);
-  bracha87Fig1Input(f1[0], BRACHA87_INITIAL, 0, val, out);
+  bracha87Fig1Input(f1[0], BRACHA87_INITIAL, 0, val, 0, 1, out);
 
   rng = 0xC0FFEEu;
   firstAcceptCnt = 0;
@@ -4590,7 +4591,7 @@ testBprLargeN(
           rng = rng * 1103515245u + 12345u;
           if ((rng >> 16) % 100u < dropPct)
             continue;                    /* dropped this delivery */
-          (void)bracha87Fig1Input(f1[j], type, (unsigned char)i, vi, dout);
+          (void)bracha87Fig1Input(f1[j], type, (unsigned char)i, vi, 0, 1, dout);
         }
       }
     }
@@ -4725,7 +4726,7 @@ testFig1ArrayRetry(
    * climbs to 2; a fresh-cursor sweep visits inst[1] before inst[2]
    * (pos walks forward in array order).
    */
-  bracha87Fig1Input(inst[1], BRACHA87_INITIAL, 0, val, tmpOut);
+  bracha87Fig1Input(inst[1], BRACHA87_INITIAL, 0, val, 0, 1, tmpOut);
   check("Fig1Retry: 2 sent",
         bracha87Fig1SentCount(array, 5) == 2);
 
@@ -4769,9 +4770,9 @@ testFig1ArrayRetry(
    * in a single RetryStep call -- the three-action path through
    * fan-out logic.
    */
-  bracha87Fig1Input(inst[0], BRACHA87_INITIAL, 0, val, tmpOut);
-  bracha87Fig1Input(inst[0], BRACHA87_READY, 1, val, tmpOut);
-  bracha87Fig1Input(inst[0], BRACHA87_READY, 2, val, tmpOut);
+  bracha87Fig1Input(inst[0], BRACHA87_INITIAL, 0, val, 0, 1, tmpOut);
+  bracha87Fig1Input(inst[0], BRACHA87_READY, 1, val, 0, 1, tmpOut);
+  bracha87Fig1Input(inst[0], BRACHA87_READY, 2, val, 0, 1, tmpOut);
   check("Fig1Retry rdSent setup: RDSENT",
         (inst[0]->flags & BRACHA87_F1_RDSENT));
 
@@ -4944,11 +4945,12 @@ waSweeps(
         if (ty == BRACHA87_INITIAL && q[k].from != 0)
           continue;
         f = inst[q[k].to];
-        nout = bracha87Fig1Input(f, ty, q[k].from, q[k].value, out);
-        if (ty == BRACHA87_READY && (q[k].type & WA_ACCEPTED))
-          bracha87Fig1ProcessAccepted(f, q[k].from);
-        if (ty == BRACHA87_READY && !(q[k].type & WA_RECEIVED))
-          bracha87Fig1ProcessResend(f, q[k].from);
+        /* The two wire bits ride Input, as the examples take it: self
+         * is announced by its own hand-back carrying ACCEPTED, never
+         * written here at the ACCEPT act. */
+        nout = bracha87Fig1Input(f, ty, q[k].from, q[k].value,
+                                 q[k].type & WA_ACCEPTED,
+                                 q[k].type & WA_RECEIVED, out);
         for (o = 0; o < nout; ++o) {
           const unsigned char *cv;
           const unsigned char *sk;
@@ -4956,10 +4958,8 @@ waSweeps(
 
           if (!(cv = bracha87Fig1Value(f)))
             continue;
-          if (out[o] == BRACHA87_ACCEPT) {
-            bracha87Fig1ProcessAccepted(f, q[k].to);
+          if (out[o] == BRACHA87_ACCEPT)
             continue;
-          }
           sk = bracha87Fig1Skip(f, out[o]);
           an = (out[o] == BRACHA87_READY_ALL)
                ? bracha87Fig1Received(f) : 0;
@@ -5048,9 +5048,9 @@ testFig1ResendReceived(
    */
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);   /* t+1 -> Rule 5 */
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);   /* t+1 -> Rule 5 */
   check("Resend: setup RDSENT, not accepted",
         (b->flags & BRACHA87_F1_RDSENT)
         && !(b->flags & BRACHA87_F1_ACCEPTED));
@@ -5072,10 +5072,10 @@ testFig1ResendReceived(
    */
   b = calloc(1, sz);
   bracha87Fig1Init(b, 3, 1, VLEN - 1);
-  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 1, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 2, val, out);
-  bracha87Fig1Input(b, BRACHA87_READY, 3, val, out);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 3, val, 0, 1, out);
   check("Resend: setup ACCEPTED", (b->flags & BRACHA87_F1_ACCEPTED) != 0);
   bracha87Fig1ProcessAccepted(b, 0);
   bracha87Fig1ProcessAccepted(b, 1);
@@ -5179,6 +5179,129 @@ testFig1ResendReceived(
 /*************************************************************************/
 /*  Main -- sequential test cases                                        */
 /*************************************************************************/
+
+/*
+ * The annotation rows of bracha87Fig1.dtc, white-box, through
+ * bracha87Fig1Input.
+ *
+ * The four inputs are swept in full (3 x 2 x 2 x 2 = 24 situations)
+ * and the two outputs read off the bitmaps: the sender's announced
+ * accept (Received) and the arm (an announced sender whose READY
+ * suppress bit is clear).  The sender is 2, n=4 t=1; "have accepted"
+ * is driven by three foreign readys.  The arm is observable only
+ * against an announced sender, so the sender is pre-announced in a
+ * second pass where the first cannot see it.  Self is then the
+ * sender: its own hand-back carrying ACCEPTED records it, behind its
+ * own ready record.  Refusals leave the image byte-identical.
+ */
+static void
+testFig1Annot(
+  void
+){
+  struct bracha87Fig1 *b;
+  unsigned char *snap;
+  unsigned long sz;
+  unsigned char out[3];
+  unsigned char val[VLEN];
+  unsigned int type;
+  unsigned int acc;
+  unsigned int rcv;
+  unsigned int haveAcc;
+  unsigned int pre;
+  const unsigned char *ac;
+  const unsigned char *sk;
+  const unsigned char *rd;
+  unsigned int expSender;
+  unsigned int expArm;
+  unsigned int rows;
+
+  printf("\n  Fig1 annotation-exchange rules (bracha87Fig1.dtc BPR sub-tables):\n");
+  memcpy(val, "ANNT", VLEN);
+  sz = bracha87Fig1Sz(3, VLEN - 1);
+  b = calloc(1, sz);
+  snap = calloc(1, sz);
+  rows = 0;
+  for (type = 0; type <= BRACHA87_READY; ++type)
+  for (acc = 0; acc < 2; ++acc)
+  for (rcv = 0; rcv < 2; ++rcv)
+  for (haveAcc = 0; haveAcc < 2; ++haveAcc)
+  for (pre = 0; pre < 2; ++pre) {
+    bracha87Fig1Init(b, 3, 1, VLEN - 1);
+    bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
+    if (haveAcc) {
+      bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
+      bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);
+      bracha87Fig1Input(b, BRACHA87_READY, 3, val, 0, 1, out);
+    }
+    if (pre)
+      bracha87Fig1ProcessAccepted(b, 2);
+    if (((b->flags & BRACHA87_F1_ACCEPTED) ? 1u : 0u) != haveAcc)
+      continue;                          /* setup cannot reach it */
+    ++rows;
+
+    /* The message itself, through Input: from 2, which the setup has
+     * already recorded where it accepted (a duplicate), or whose one
+     * echo / ready fires no paper rule where it did not. */
+    bracha87Fig1Input(b, (unsigned char)type, 2, val, (unsigned char)acc,
+                      (unsigned char)rcv, out);
+
+    expSender = (type == BRACHA87_READY && acc) ? 1 : 0;
+    expArm    = (type == BRACHA87_READY && !rcv && haveAcc) ? 1 : 0;
+    ac = bracha87Fig1Received(b);
+    sk = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+    if (!pre)
+      check("Annot: record sender accepted = (ready, v) carrying ACCEPTED",
+            (BRACHA87_SKIP_TST(ac, 2) ? 1u : 0u) == expSender);
+    else
+      check("Annot: arm re-send = (ready, v) without RECEIVED, once accepted",
+            (BRACHA87_SKIP_TST(sk, 2) ? 0u : 1u) == expArm);
+  }
+  check("Annot: every reachable row was driven", rows == 48);
+
+  /* Self as a sender, the hand-backs as the machine frames them:
+   * accepted on three foreign readys with its own READY still to hand
+   * back; the first hand-back after accept carries ACCEPTED but not
+   * RECEIVED (self is not yet in acFrom when the act is framed), so it
+   * records self behind its ready AND arms self; the next egress
+   * consumes the arm and hands back carrying both, which re-arms
+   * nothing. */
+  bracha87Fig1Init(b, 3, 1, VLEN - 1);
+  bracha87Fig1Input(b, BRACHA87_INITIAL, 0, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 1, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 2, val, 0, 1, out);
+  bracha87Fig1Input(b, BRACHA87_READY, 3, val, 0, 1, out);
+  ac = bracha87Fig1Received(b);
+  check("Annot self: not recorded before its own hand-back",
+        (b->flags & BRACHA87_F1_ACCEPTED) && !BRACHA87_SKIP_TST(ac, 0));
+  bracha87Fig1Input(b, BRACHA87_READY, 0, val, 1, 0, out);
+  ac = bracha87Fig1Received(b);
+  rd = bracha87Fig1Skip(b, BRACHA87_ECHO_ALL);
+  sk = bracha87Fig1Skip(b, BRACHA87_READY_ALL);
+  check("Annot self: the first hand-back records self behind its ready",
+        BRACHA87_SKIP_TST(ac, 0) && BRACHA87_SKIP_TST(rd, 0));
+  check("Annot self: and arms self, since it lacked RECEIVED",
+        !BRACHA87_SKIP_TST(sk, 0));
+  check("Annot self: the next egress consumes the arm and reaches self",
+        bracha87Fig1Bpr(b, out) > 0
+        && !BRACHA87_SKIP_TST(bracha87Fig1Skip(b, BRACHA87_READY_ALL), 0));
+  bracha87Fig1Input(b, BRACHA87_READY, 0, val, 1, 1, out);
+  check("Annot self: its hand-back, carrying both, re-arms nothing",
+        bracha87Fig1Bpr(b, out) > 0
+        && BRACHA87_SKIP_TST(bracha87Fig1Skip(b, BRACHA87_READY_ALL), 0));
+
+  /* Refusals: a type outside the three, an out-of-range from -- the
+   * annotations ride the refused call and land nowhere. */
+  memcpy(snap, b, sz);
+  check("Annot: a type outside the three is refused",
+        bracha87Fig1Input(b, 3, 2, val, 1, 0, out) == 0
+        && memcmp(snap, b, sz) == 0);
+  check("Annot: an out-of-range from is refused",
+        bracha87Fig1Input(b, BRACHA87_READY, 4, val, 1, 0, out) == 0
+        && memcmp(snap, b, sz) == 0);
+  printf("    24 situations x 2 passes, 48 rows, self's two hand-backs, 2 refusals\n");
+  free(snap);
+  free(b);
+}
 
 int
 main(
@@ -5466,6 +5589,7 @@ main(
   testFig1Bpr();
   testFig1SkipAccept();
   testFig1ResendReceived();
+  testFig1Annot();
   testFig1PostAcceptRecord();
   testBprLargeN();
 

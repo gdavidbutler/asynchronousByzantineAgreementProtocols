@@ -2,7 +2,9 @@
  * test/test_predicates.c -- subset-enumeration correspondence tests for the
  * three algorithmic predicates that sit below the .dtc layer in
  * bracha87.c: fig4Nfn (the protocol function N), fig3IsValid (the
- * VALID^k predicate), and the cascade in bracha87Fig3Accept.
+ * VALID^k predicate), and the cascade in bracha87Fig3Accept; and the
+ * site independence of the two dispatches that more than one C site
+ * reaches (bracha87Fig1Rules.c, bkr94acsRules.c).
  *
  * Audit chain:
  *   paper            <-> .dtc                   human, rule-by-rule comments
@@ -12,11 +14,17 @@
  *                                               enumeration vs a subset-
  *                                               enumeration reference at
  *                                               bounded inputs
+ *   one dispatch, many sites                    THIS FILE -- every input
+ *                                               combination of each snippet,
+ *                                               each site's reads constant
+ *                                               over what it feeds by fiat
  *
- * Scope: n=4, t=1 (smallest interesting Bracha config); duration ~1s.
+ * Scope: n=4, t=1 (smallest interesting Bracha config); well under a
+ * second.
  *
- * White-box: this file #include's bracha87.c directly so the file-local
- * fig3IsValid and fig4Nfn are visible.  Built without bracha87.o.
+ * White-box: this file #include's bracha87.c and bkr94acs.c directly so
+ * the file-local fig3IsValid and fig4Nfn and the dispatch snippets'
+ * file-local constants are visible.  Built without the .o files.
  */
 
 #include <stdio.h>
@@ -24,6 +32,7 @@
 #include <string.h>
 
 #include "../bracha87.c"
+#include "../bkr94acs.c"
 
 #define NN 4
 #define TT 1
@@ -673,6 +682,370 @@ testCascadeCorrespondence(void) {
         agreed == total);
 }
 
+/* ----------------------------------------------------------------
+ * Site independence.  bracha87Fig1.dtc and bkr94acs.dtc each compile
+ * to one snippet reached from more than one C site.  A site feeds
+ * from state the inputs its own outputs read and a fixed value to the
+ * rest -- what the .dtc text calls feeding by fiat -- and discards
+ * the outputs it does not read, which may fire on the fiat values
+ * (an un-echoed initiator's tick fires Rule 1; an undecided byte fed
+ * by fiat walks).  That is sound only if nothing a site reads moves
+ * with a value it fed by fiat.  Table structure alone does not give
+ * that: the echo and ready retries chain on the send rules, which read the kind
+ * of message Bpr feeds by fiat, and what keeps them constant is row
+ * content (a retry is "no" whenever its send fires, and a send fires
+ * only with the flag the retry also needs clear).  So it is checked,
+ * not derived: this enumerates every input combination of each
+ * snippet, requires every output assigned on every path, and for
+ * each site requires the outputs it reads to equal those of the same
+ * combination with the site's fiat inputs at the site's fiat values.
+ * The sites and their feeds are read off bracha87.c and bkr94acs.c.
+ */
+
+/* bracha87Fig1Rules.c: the twelve inputs in bridge order, eight
+ * outputs.  Evaluated by the snippet itself. */
+#define F1_IN 12
+#define F1_OUT 8
+static const unsigned char F1Card[F1_IN] = {
+  3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2
+};
+static const char *F1InName[F1_IN] = {
+  "type", "haveEchoed", "haveSentReady", "ecGtHalfNT", "rdGeTPlus1",
+  "rdGe2TPlus1", "haveAccepted", "amInitiator", "allEchoed",
+  "readyMaskFull", "annAccepted", "annReceived"
+};
+static const char *F1OutName[F1_OUT] = {
+  "sendEcho", "sendReady", "acceptV", "retryInitial", "retryEcho",
+  "retryReady", "recordSender", "armSender"
+};
+
+static void
+fig1Eval(const unsigned char *in, unsigned char *o) {
+  unsigned char type;
+  unsigned char haveEchoed;
+  unsigned char haveSentReady;
+  unsigned char ecGtHalfNT;
+  unsigned char rdGeTPlus1;
+  unsigned char rdGe2TPlus1;
+  unsigned char haveAccepted;
+  unsigned char amInitiator;
+  unsigned char allEchoed;
+  unsigned char readyMaskFull;
+  unsigned char annAccepted;
+  unsigned char annReceived;
+  unsigned char sendEcho;
+  unsigned char sendReady;
+  unsigned char acceptV;
+  unsigned char retryInitial;
+  unsigned char retryEcho;
+  unsigned char retryReady;
+  unsigned char recordSender;
+  unsigned char armSender;
+
+  type          = in[0] == 0 ? BRACHA87_INITIAL
+                : in[0] == 1 ? BRACHA87_ECHO : BRACHA87_READY;
+  haveEchoed    = in[1];
+  haveSentReady = in[2];
+  ecGtHalfNT    = in[3];
+  rdGeTPlus1    = in[4];
+  rdGe2TPlus1   = in[5];
+  haveAccepted  = in[6];
+  amInitiator   = in[7];
+  allEchoed     = in[8];
+  readyMaskFull = in[9];
+  annAccepted   = in[10];
+  annReceived   = in[11];
+  sendEcho = sendReady = acceptV = 0xAA;
+  retryInitial = retryEcho = retryReady = 0xAA;
+  recordSender = armSender = 0xAA;
+#include "../bracha87Fig1Rules.c"
+  o[0] = sendEcho;
+  o[1] = sendReady;
+  o[2] = acceptV;
+  o[3] = retryInitial;
+  o[4] = retryEcho;
+  o[5] = retryReady;
+  o[6] = recordSender;
+  o[7] = armSender;
+}
+
+/* bkr94acsRules.c: seven inputs, five outputs. */
+#define ACS_IN 7
+#define ACS_OUT 5
+static const unsigned char AcsCard[ACS_IN] = { 3, 3, 2, 4, 2, 2, 2 };
+static const char *AcsInName[ACS_IN] = {
+  "acsEvent", "inputToBAj", "postCountAllN", "baDecision", "seam",
+  "enabled", "nothingLeft"
+};
+static const char *AcsOutName[ACS_OUT] = {
+  "doInput1", "doOutputSubset", "walk", "duty", "fire"
+};
+
+static void
+acsEval(const unsigned char *in, unsigned char *o) {
+  unsigned char acsEvent;
+  unsigned char inputToBAj;
+  unsigned char postCountAllN;
+  unsigned char baDecision;
+  unsigned char seam;
+  unsigned char enabled;
+  unsigned char nothingLeft;
+  unsigned char doInput1;
+  unsigned char doOutputSubset;
+  unsigned char walk;
+  unsigned char duty;
+  unsigned char fire;
+
+  acsEvent      = in[0] == 0 ? BKR94ACS_ACS_EVENT_Q
+                : in[0] == 1 ? BKR94ACS_ACS_EVENT_BA0
+                : BKR94ACS_ACS_EVENT_BA1;
+  inputToBAj    = in[1] == 0 ? BKR94ACS_ENTER_NONE
+                : in[1] == 1 ? BKR94ACS_ENTER_ZERO : BKR94ACS_ENTER_ONE;
+  postCountAllN = in[2];
+  baDecision    = in[3] == 0 ? 0xFF : in[3] == 1 ? 0
+                : in[3] == 2 ? 1 : 0xFE;
+  seam          = in[4] ? BKR94ACS_SEAM_TURN : BKR94ACS_SEAM_FANOUT;
+  enabled       = in[5];
+  nothingLeft   = in[6];
+  doInput1 = doOutputSubset = walk = duty = fire = 0xAA;
+#include "../bkr94acsRules.c"
+  o[0] = doInput1;
+  o[1] = doOutputSubset;
+  o[2] = walk;
+  o[3] = duty;
+  o[4] = fire;
+}
+
+/* One site: the inputs it feeds by fiat (value, or 0xFF for a
+ * state-fed input), the subspace it runs in (an input the site
+ * reaches only at one value and feeds from state there -- the kind
+ * of message at Input's three branches, the event class at the two
+ * ACS event sites; 0xFF for unconstrained), and the outputs it
+ * reads.  An input fed a fixed value by the site, the kind of
+ * message at Bpr among them, is fiat, not pin. */
+struct site {
+  const char *name;
+  const unsigned char *fiat;
+  const unsigned char *pin;
+  const unsigned char *reads;
+};
+
+static void
+siteIndependence(const char *what, unsigned int nIn, unsigned int nOut,
+                 const unsigned char *card, const char *const *inName,
+                 const char *const *outName,
+                 void (*eval)(const unsigned char *, unsigned char *),
+                 const struct site *sites, unsigned int nSites) {
+  unsigned char in[F1_IN];       /* the wider of the two tables */
+  unsigned char alt[F1_IN];
+  unsigned char o[F1_OUT];
+  unsigned char oAlt[F1_OUT];
+  unsigned int combos;
+  unsigned int unassigned;
+  unsigned int i, j, k, x;
+  int ok;
+
+  combos = 0;
+  unassigned = 0;
+  memset(in, 0, sizeof (in));
+  for (;;) {
+    ++combos;
+    eval(in, o);
+    for (j = 0; j < nOut; ++j)
+      if (o[j] == 0xAA) {
+        if (!unassigned) {
+          printf("    %s: %s unassigned at", what, outName[j]);
+          for (x = 0; x < nIn; ++x)
+            printf(" %s=%u", inName[x], in[x]);
+          printf("\n");
+        }
+        ++unassigned;
+      }
+    /* advance the mixed-radix counter */
+    for (i = 0; i < nIn && ++in[i] == card[i]; ++i)
+      in[i] = 0;
+    if (i == nIn)
+      break;
+  }
+  printf("  %s: %u input combinations enumerated\n", what, combos);
+  check("every output assigned on every path", unassigned == 0);
+
+  for (k = 0; k < nSites; ++k) {
+    const struct site *st;
+    unsigned int checked;
+    unsigned int moved;
+
+    st = &sites[k];
+    checked = 0;
+    moved = 0;
+    memset(in, 0, sizeof (in));
+    for (;;) {
+      ok = 1;
+      for (i = 0; i < nIn; ++i)
+        if (st->pin[i] != 0xFF && in[i] != st->pin[i])
+          ok = 0;
+      if (ok) {
+        for (i = 0; i < nIn; ++i)
+          alt[i] = st->fiat[i] == 0xFF ? in[i] : st->fiat[i];
+        eval(in, o);
+        eval(alt, oAlt);
+        ++checked;
+        for (j = 0; j < nOut; ++j)
+          if (st->reads[j] && o[j] != oAlt[j]) {
+            if (!moved) {
+              printf("    %s site %s: %s moves with a fiat input at",
+                     what, st->name, outName[j]);
+              for (x = 0; x < nIn; ++x)
+                printf(" %s=%u", inName[x], in[x]);
+              printf("\n");
+            }
+            ++moved;
+          }
+      }
+      for (i = 0; i < nIn && ++in[i] == card[i]; ++i)
+        in[i] = 0;
+      if (i == nIn)
+        break;
+    }
+    printf("    site %s: %u combinations, reads constant over its fiat"
+           " inputs: %s\n", st->name, checked, moved ? "NO" : "yes");
+    check("a site's reads are a function of what it feeds from state",
+          moved == 0 && checked > 0);
+  }
+}
+
+static void
+testSiteIndependence(void) {
+  /* bracha87.c: Input feeds the three retire inputs 0 and, on each
+   * kind of message, the thresholds of the counts that kind cannot
+   * fire 0 (ec is computed on the echo branch, rd on the ready
+   * branch, neither on initial); it reads the paper and annotation
+   * outputs.  Bpr feeds kind (initial, v), the thresholds 0 and the
+   * annotations (0, 1), and reads the three retries. */
+  static const unsigned char InputFiat[F1_IN] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0xFF
+  };
+  static const unsigned char InitialFiat[F1_IN] = {
+    0xFF, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0, 0, 0, 0xFF, 0xFF
+  };
+  static const unsigned char EchoFiat[F1_IN] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0xFF, 0, 0, 0, 0xFF, 0xFF
+  };
+  static const unsigned char ReadyFiat[F1_IN] = {
+    0xFF, 0xFF, 0xFF, 0, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0xFF
+  };
+  static const unsigned char InitialPin[F1_IN] = {
+    0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+  };
+  static const unsigned char EchoPin[F1_IN] = {
+    1, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+  };
+  static const unsigned char ReadyPin[F1_IN] = {
+    2, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+  };
+  static const unsigned char NoPinF1[F1_IN] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+  };
+  static const unsigned char InputReads[F1_OUT] = {
+    1, 1, 1, 0, 0, 0, 1, 1
+  };
+  static const unsigned char BprFiat[F1_IN] = {
+    0, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 1
+  };
+  static const unsigned char BprReads[F1_OUT] = {
+    0, 0, 0, 1, 1, 1, 0, 0
+  };
+  static const struct site Fig1Sites[] = {
+    { "bracha87Fig1Input",              InputFiat,   NoPinF1,    InputReads },
+    { "bracha87Fig1Input (initial, v)", InitialFiat, InitialPin, InputReads },
+    { "bracha87Fig1Input (echo, v)",    EchoFiat,    EchoPin,    InputReads },
+    { "bracha87Fig1Input (ready, v)",   ReadyFiat,   ReadyPin,   InputReads },
+    { "bracha87Fig1Bpr",                BprFiat,     NoPinF1,    BprReads }
+  };
+  /* bkr94acs.c: AcastInput on a Q event feeds the count 0 and the
+   * BPR groups (undecided, fanout, 0, 0), reads doInput1; Turn on a
+   * BA-output event feeds the same BPR groups, reads doOutputSubset;
+   * the retry gate feeds (Q, one, 0) and the duty groups, reads
+   * walk; the duty site feeds (Q, one, 0, undecided), reads duty
+   * and fire. */
+  static const unsigned char AcastFiat[ACS_IN] = {
+    0xFF, 0xFF, 0, 0, 0, 0, 0
+  };
+  static const unsigned char AcastPin[ACS_IN] = {
+    0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+  };
+  static const unsigned char AcastReads[ACS_OUT] = { 1, 0, 0, 0, 0 };
+  static const unsigned char TurnFiat[ACS_IN] = {
+    0xFF, 0xFF, 0xFF, 0, 0, 0, 0
+  };
+  static const unsigned char Turn0Pin[ACS_IN] = {
+    1, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+  };
+  static const unsigned char Turn1Pin[ACS_IN] = {
+    2, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+  };
+  static const unsigned char TurnReads[ACS_OUT] = { 0, 1, 0, 0, 0 };
+  static const unsigned char GateFiat[ACS_IN] = { 0, 2, 0, 0xFF, 0, 0, 0 };
+  static const unsigned char GateReads[ACS_OUT] = { 0, 0, 1, 0, 0 };
+  static const unsigned char DutyFiat[ACS_IN] = {
+    0, 2, 0, 0, 0xFF, 0xFF, 0xFF
+  };
+  static const unsigned char DutyReads[ACS_OUT] = { 0, 0, 0, 1, 1 };
+  static const unsigned char NoPin[ACS_IN] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+  };
+  static const struct site AcsSites[] = {
+    { "bkr94acsAcastInput",       AcastFiat, AcastPin, AcastReads },
+    { "bkr94acsTurn (BA_j = 0)",  TurnFiat,  Turn0Pin, TurnReads },
+    { "bkr94acsTurn (BA_j = 1)",  TurnFiat,  Turn1Pin, TurnReads },
+    { "bkr94acsRetryStep (the verdict gate)", GateFiat, NoPin, GateReads },
+    { "bkr94acsDuty",             DutyFiat,  NoPin,    DutyReads }
+  };
+
+  unsigned char in[F1_IN];
+  unsigned char o[F1_OUT];
+  unsigned int i;
+  unsigned int cells;
+  unsigned int armed;
+
+  printf("\n[Site independence of the merged dispatches]\n");
+  siteIndependence("bracha87Fig1Rules.c", F1_IN, F1_OUT, F1Card, F1InName,
+                   F1OutName, fig1Eval, Fig1Sites,
+                   sizeof (Fig1Sites) / sizeof (Fig1Sites[0]));
+  siteIndependence("bkr94acsRules.c", ACS_IN, ACS_OUT, AcsCard, AcsInName,
+                   AcsOutName, acsEval, AcsSites,
+                   sizeof (AcsSites) / sizeof (AcsSites[0]));
+
+  /* The arm rule's pre-accept cell (bracha87Fig1.dtc, "arm re-send
+   * to sender"): a (ready, v) without RECEIVED at an instance that
+   * has not accepted, and does not accept on it, arms nothing.
+   * Through bracha87Fig1Input the cell is invisible -- the setter
+   * refuses the same arm (BPR.md, Declared Invisible) -- so the row
+   * is held here on the snippet, over every combination of the
+   * other inputs. */
+  cells = 0;
+  armed = 0;
+  memset(in, 0, sizeof (in));
+  for (;;) {
+    if (in[0] == 2 && in[11] == 0 && in[6] == 0) {
+      fig1Eval(in, o);
+      if (!o[2]) {
+        ++cells;
+        if (o[7])
+          ++armed;
+      }
+    }
+    for (i = 0; i < F1_IN && ++in[i] == F1Card[i]; ++i)
+      in[i] = 0;
+    if (i == F1_IN)
+      break;
+  }
+  printf("  arm rule, pre-accept cell: %u combinations, %u armed\n", cells,
+         armed);
+  check("an unmarked (ready, v) before accept arms nothing",
+        cells > 0 && armed == 0);
+}
+
 int
 main(void) {
   printf("=================================================\n");
@@ -682,6 +1055,7 @@ main(void) {
   testFig4NfnCorrespondence();
   testFig3IsValidCorrespondence();
   testCascadeCorrespondence();
+  testSiteIndependence();
 
   printf("\n=================================================\n");
   printf("Pass: %u  Fail: %u\n", Pass, Fail);

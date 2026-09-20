@@ -92,6 +92,10 @@
 #define BKR94ACS_ACS_EVENT_BA0 1
 #define BKR94ACS_ACS_EVENT_BA1 2
 
+/* The two sweep-side seams, bkr94acs.dtc's "seam" input. */
+#define BKR94ACS_SEAM_FANOUT 0
+#define BKR94ACS_SEAM_TURN   1
+
 /*
  * All layout helpers take const struct bkr94acs * -- they only read
  * the header fields n/vLen/maxPhases to compute offsets.  Callers
@@ -371,12 +375,13 @@ bkr94acsEnter(
    * Initial broadcast of our BA input.  Mark the corresponding
    * (process, round=0, initiator=self) BA Fig1 as the
    * initiator and store the value, so bkr94acsRetryStep's BPR walk
-   * keeps outputting BKR94ACS_ACT_BA_SEND with .type=INITIAL for
-   * as long as F1_INITIATOR is set on that Fig1 (Implementation
-   * Note 11); once F1_ECHOED is set, BA_SEND/ECHO joins the
-   * stream alongside it, and once F1_RDSENT is set, BA_SEND/
-   * READY joins too -- all three streams retry independently
-   * while their flags hold.  BA Fig1s are vLen=0 (binary
+   * outputs BKR94ACS_ACT_BA_SEND with .type=INITIAL until that
+   * INITIAL retires (ACCEPTED, or all-echoed), BA_SEND/ECHO once
+   * F1_ECHOED is set until ECHO retires (ACCEPTED), and BA_SEND/READY
+   * once F1_RDSENT is set until the READY suppress mask covers all n
+   * -- the three retires of bracha87.h's retry banner, each its own;
+   * the flags themselves are never cleared and are not the retry
+   * condition (bkr94acs.h at bkr94acsAcast).  BA Fig1s are vLen=0 (binary
    * value), so we pass the raw enter byte (0 or 1), not the
    * BKR94ACS_ENTER_* encoding stored in entered[].
    */
@@ -418,8 +423,15 @@ bkr94acsAcastInput(
   unsigned char acsEvent;
   unsigned char inputToBAj;
   unsigned char postCountAllN;
+  unsigned char baDecision;
+  unsigned char seam;
+  unsigned char enabled;
+  unsigned char nothingLeft;
   unsigned char doInput1;
   unsigned char doOutputSubset;
+  unsigned char walk;
+  unsigned char duty;
+  unsigned char fire;
 
   /*
    * Encoded: a->n = actual_N - 1, so valid process indices are
@@ -460,7 +472,8 @@ bkr94acsAcastInput(
     return (0);
 
   f1 = acastF1(a, process);
-  nf1 = bracha87Fig1Input(f1, type, from, value, f1out);
+  nf1 = bracha87Fig1Input(f1, type, from, value, annot & BKR94ACS_ACCEPTED,
+                          annot & BKR94ACS_RECEIVED, f1out);
   nact = 0;
 
   for (k = 0; k < nf1; ++k) {
@@ -481,14 +494,6 @@ bkr94acsAcastInput(
       ++nact;
     } else if (f1out[k] == BRACHA87_ACCEPT) {
       /*
-       * Self-accept: record our own accept in the A-Cast Fig1's
-       * acFrom so the READY quiescence count can reach n (the Fig1
-       * does not know self; bkr94acs routes by it).  Processes' accepts
-       * reach the same place from this entry's annot argument, routed
-       * after this loop.
-       */
-      bracha87Fig1ProcessAccepted(f1, a->self);
-      /*
        * BKR94 Step 1: "For each Pj for whom you know that Q(j) = 1,
        * participate in BA_j with input 1."  Q(j) = 1 is carried by
        * Fig1 ACCEPT for process j (Bracha87 Lemma 3 gives BKR94's Q
@@ -502,30 +507,28 @@ bkr94acsAcastInput(
       acsEvent = BKR94ACS_ACS_EVENT_Q;
       inputToBAj = bkr94acsEnterd(a)[process];
       postCountAllN = 0;
+      /* The BPR groups this site does not read (bkr94acs.dtc, one
+       * dispatch, every site): undecided walks, a fanout seam not
+       * enabled is HELD; both outputs discarded. */
+      baDecision = 0xFF;
+      seam = BKR94ACS_SEAM_FANOUT;
+      enabled = 0;
+      nothingLeft = 0;
       doInput1 = 0;
       doOutputSubset = 0;
+      walk = 0;
+      duty = BKR94ACS_DUTY_HELD;
+      fire = 0;
 #include "bkr94acsRules.c"
       /* Step 3's output is unreachable on a Q event; the dispatch
        * still resolves it to 0 at every leaf. */
       (void)doOutputSubset;
+      (void)walk;
+      (void)duty;
+      (void)fire;
       if (doInput1)
         nact += bkr94acsEnter(a, process, 1, &out[nact]);
     }
-  }
-
-  /*
-   * Annotation ingress, both halves of the READY retire, in the only
-   * sound order: after bracha87Fig1Input recorded this sender's ready
-   * (acFrom stays a subset of rdFrom) and after any accept this same
-   * message caused.  Runs whether or not the Fig 1 produced actions --
-   * an unmarked re-send is a duplicate (ready, v) that Input dedups to
-   * zero, and it is exactly the message whose arm must not be lost.
-   */
-  if (type == BRACHA87_READY) {
-    if (annot & BKR94ACS_ACCEPTED)
-      bracha87Fig1ProcessAccepted(f1, from);
-    if (!(annot & BKR94ACS_RECEIVED))
-      bracha87Fig1ProcessResend(f1, from);
   }
 
   return (nact);
@@ -602,7 +605,8 @@ bkr94acsBaInput(
   f3 = &f4->fig3;
   nact = 0;
 
-  nf1 = bracha87Fig1Input(f1, type, from, &value, f1out);
+  nf1 = bracha87Fig1Input(f1, type, from, &value, annot & BKR94ACS_ACCEPTED,
+                          annot & BKR94ACS_RECEIVED, f1out);
 
   for (k = 0; k < nf1; ++k) {
     if (f1out[k] == BRACHA87_ACCEPT) {
@@ -611,14 +615,6 @@ bkr94acsBaInput(
       cv = bracha87Fig1Value(f1);
       if (!cv)
         continue;
-
-      /*
-       * Self-accept: record our own accept in this BA Fig1's
-       * acFrom (round, initiator) so its READY quiescence count can
-       * reach n.  Processes' accepts arrive on this entry's annot
-       * argument, routed after this loop.
-       */
-      bracha87Fig1ProcessAccepted(f1, a->self);
 
       /*
        * Fig3 sender is the initiator (whose broadcast was accepted).
@@ -662,21 +658,6 @@ bkr94acsBaInput(
                          && (f1->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
       ++nact;
     }
-  }
-
-  /*
-   * Annotation ingress, both halves of the READY retire, in the only
-   * sound order: after bracha87Fig1Input recorded this sender's ready
-   * (acFrom stays a subset of rdFrom) and after any accept this same
-   * message caused.  Runs whether or not the Fig 1 produced actions --
-   * an unmarked re-send is a duplicate (ready, v) that Input dedups to
-   * zero, and it is exactly the message whose arm must not be lost.
-   */
-  if (type == BRACHA87_READY) {
-    if (annot & BKR94ACS_ACCEPTED)
-      bracha87Fig1ProcessAccepted(f1, from);
-    if (!(annot & BKR94ACS_RECEIVED))
-      bracha87Fig1ProcessResend(f1, from);
   }
 
   return (nact);
@@ -750,13 +731,12 @@ bkr94acsAcast(
    * Rule 1 still fires from bkr94acsAcastInput receiving
    * (initial, v) via the network loopback).
    *
-   * Thereafter bkr94acsRetryStep keeps outputting BKR94ACS_ACT_
-   * ACAST_SEND with .type=INITIAL for as long as F1_INITIATOR
-   * is set (Implementation Note 11); once F1_ECHOED is set
-   * by loopback or process echoes, ACAST_SEND/ECHO outputs
-   * alongside it, and once F1_RDSENT is set, ACAST_SEND/
-   * READY joins too -- all three streams retry independently
-   * while their flags hold.
+   * Thereafter bkr94acsRetryStep outputs ACAST_SEND/INITIAL until
+   * that INITIAL retires, ACAST_SEND/ECHO once F1_ECHOED is set by
+   * loopback or process echoes until ECHO retires, and ACAST_SEND/
+   * READY once F1_RDSENT is set until the READY mask covers all n --
+   * the three gates the header states at bkr94acsAcast; the flags are
+   * never cleared and are not the retry condition.
    */
   bracha87Fig1Initiator(acastF1(a, a->self), value);
 
@@ -787,41 +767,14 @@ bkr94acsAcast(
  *            sweep must reach ahead-round Fig1s that a faster
  *            process's INITIAL already drove to ECHOED).
  *
- * Per-process retry-gate (see bkr94acs.dtc BPR section) trims
- * the A-Cast walk for BAs that have decided 0 (excluded
- * from SubSet); the BA walk is unconditional, with
+ * Per-process verdict gate (see bkr94acs.dtc BPR section), in the
+ * walker below, trims the A-Cast walk for BAs that have decided 0
+ * (excluded from SubSet); the BA walk is unconditional, with
  * Fig1Bpr returning 0 on unsent instances.
  *
  * Internal helpers fold each cursor advance step into the
- * walker.  Plain-C three-arm switch over BA decision is the
- * BPR gate (see bkr94acs.dtc BPR documentation block); the
- * Note 1 reasoning is captured in the .dtc, the C
- * implementation is the trivial mechanical guard.
+ * walker.
  */
-static int
-bkr94acsRetryProcessGate(
-  const struct bkr94acs *a
- ,unsigned int process
-){
-  unsigned char dec;
-
-  /*
-   * BA decision states:
-   *   0xFF -> undecided    -> retry (Q(j)=1 may still be
-   *                                 learned by other processes)
-   *   0    -> decided 0    -> skip (j excluded; Step 2's
-   *                                 fanout already conveyed
-   *                                 our enter)
-   *   1    -> decided 1    -> retry (Bracha post-decide
-   *                                 continuation: processes that
-   *                                 have not yet observed
-   *                                 Fig1 ACCEPT for j still
-   *                                 need our echoes/readys)
-   */
-  dec = bkr94acsDecision(a)[process];
-  return (dec != 0);  /* 0xFF and 1 -> retry; 0 -> skip */
-}
-
 static unsigned int
 bkr94acsRetryOutputAcast(
   struct bkr94acs *a
@@ -953,9 +906,45 @@ bkr94acsRetryStep(
     nact = 0;
     if (idx < N) {
       unsigned char process;
+      unsigned char acsEvent;
+      unsigned char inputToBAj;
+      unsigned char postCountAllN;
+      unsigned char baDecision;
+      unsigned char seam;
+      unsigned char enabled;
+      unsigned char nothingLeft;
+      unsigned char doInput1;
+      unsigned char doOutputSubset;
+      unsigned char walk;
+      unsigned char duty;
+      unsigned char fire;
 
       process = idx;
-      if (bkr94acsRetryProcessGate(a, process))
+      /*
+       * The verdict gate, bkr94acs.dtc's "walk A-Cast j" row (where
+       * the Note 1 reasoning is recorded): the BA decision byte as
+       * bkr94acsBaDecision answers it (0xFF undecided, 0 / 1 decided,
+       * 0xFE exhausted), everything else fed the value that makes its
+       * outputs "no" and discarded.
+       */
+      acsEvent = BKR94ACS_ACS_EVENT_Q;
+      inputToBAj = BKR94ACS_ENTER_ONE;
+      postCountAllN = 0;
+      baDecision = bkr94acsDecision(a)[process];
+      seam = BKR94ACS_SEAM_FANOUT;
+      enabled = 0;
+      nothingLeft = 0;
+      doInput1 = 0;
+      doOutputSubset = 0;
+      walk = 0;
+      duty = BKR94ACS_DUTY_HELD;
+      fire = 0;
+#include "bkr94acsRules.c"
+      (void)doInput1;
+      (void)doOutputSubset;
+      (void)duty;
+      (void)fire;
+      if (walk)
         nact = bkr94acsRetryOutputAcast(a, process, out);
     } else {
       unsigned int rel;
@@ -980,16 +969,22 @@ bkr94acsRetryStep(
 /*--------------------------------------------------------------------------*/
 /*  The sweep-side decisions -- BKR94 step 2 and the BA round turn          */
 /*                                                                          */
-/*  See the bkr94acs.dtc Step 2 and round-turn sections.  A rule's          */
-/*  "upon" / "wait until" names the evidence that enables an action, not    */
-/*  a moment; both decisions consume evidence that is still growing when    */
-/*  it first suffices, so the caller paces each from its sweep tick,        */
+/*  The trichotomy and each seam's firing are bkr94acs.dtc's BPR sub-tables; */
+/*  the two seams' own text is its Step 2 and round-turn sections.  A       */
+/*  rule's "upon" / "wait until" names the evidence that enables an action, */
+/*  not a moment; both decisions consume evidence that is still growing     */
+/*  when it first suffices, so the caller paces each from its sweep tick,   */
 /*  counting sweeps against its patience while TOLERANCE holds.             */
 /*  Zero patience is not a firing at enabling (BPR.md, The Sweep-Side       */
 /*  Decisions).                                                             */
 /*--------------------------------------------------------------------------*/
 
 /*
+ * The duty site of bkr94acs.dtc's trichotomy: the seam's two predicates
+ * computed here, the classification and the firing decision read off
+ * the table's BPR sub-tables.  Reached by both duty queries and both
+ * firings.
+ *
  * Lemma 2 Part A case (i) requires Step 2's enabling count to be
  * BA decides of 1 -- baDecision[] entries == 1 -- never Q(j)=1
  * events or Fig1 accepts; firing on the Q count is the wrong
@@ -997,35 +992,96 @@ bkr94acsRetryStep(
  * are derived by scan, never stored (the same wrap discipline as
  * bkr94acsTurn's nDecided).
  */
+static unsigned char
+bkr94acsDuty(
+  const struct bkr94acs *a
+ ,unsigned char seam
+ ,unsigned char process
+ ,unsigned char *fireOut
+){
+  unsigned char acsEvent;
+  unsigned char inputToBAj;
+  unsigned char postCountAllN;
+  unsigned char baDecision;
+  unsigned char enabled;
+  unsigned char nothingLeft;
+  unsigned char doInput1;
+  unsigned char doOutputSubset;
+  unsigned char walk;
+  unsigned char duty;
+  unsigned char fire;
+
+  if (seam == BKR94ACS_SEAM_FANOUT) {
+    const unsigned char *entered;
+    const unsigned char *dec;
+    unsigned int N;
+    unsigned int j;
+    unsigned int one;
+    unsigned int unentered;
+
+    entered = bkr94acsEnterd(a);
+    dec = bkr94acsDecision(a);
+    N = A_N(a);
+    one = 0;
+    unentered = 0;
+    for (j = 0; j < N; ++j) {
+      if (dec[j] == 1)
+        ++one;
+      if (entered[j] == BKR94ACS_ENTER_NONE)
+        ++unentered;
+    }
+    enabled = one >= N - a->t;
+    nothingLeft = !unentered;
+  } else {
+    struct bracha87Fig3 *f3;
+    unsigned char nextRound;
+
+    nextRound = bkr94acsNextRound(a)[process];
+    if (nextRound >= maxRounds(a)) {
+      enabled = 0;
+      nothingLeft = 0;
+    } else {
+      f3 = &baF4(a, process)->fig3;
+      enabled = bracha87Fig3RoundComplete(f3, nextRound) ? 1 : 0;
+      /*
+       * Count only -- the sample itself is materialized by the turn.
+       * A paced caller queries this N times per sweep, so it must not
+       * pay GetValid's O(n) set walk or its 2x256-byte scratch.
+       */
+      nothingLeft = enabled
+                 && bracha87Fig3ValidCount(f3, nextRound) >= A_N(a);
+    }
+  }
+  /* The rest of the dispatch, fed fixed values and discarded: a Q
+   * event on an entered BA fires nothing, an undecided byte walks. */
+  acsEvent = BKR94ACS_ACS_EVENT_Q;
+  inputToBAj = BKR94ACS_ENTER_ONE;
+  postCountAllN = 0;
+  baDecision = 0xFF;
+  doInput1 = 0;
+  doOutputSubset = 0;
+  walk = 0;
+  duty = BKR94ACS_DUTY_HELD;
+  fire = 0;
+
+#include "bkr94acsRules.c"
+
+  (void)doInput1;
+  (void)doOutputSubset;
+  (void)walk;
+
+  if (fireOut)
+    *fireOut = fire;
+  return (duty);
+}
+
 unsigned char
 bkr94acsFanoutDuty(
   const struct bkr94acs *a
 ){
-  const unsigned char *entered;
-  const unsigned char *dec;
-  unsigned int N;
-  unsigned int j;
-  unsigned int one;
-  unsigned int unentered;
-
   if (!a)
     return (BKR94ACS_DUTY_HELD);
-  entered = bkr94acsEnterd(a);
-  dec = bkr94acsDecision(a);
-  N = A_N(a);
-  one = 0;
-  unentered = 0;
-  for (j = 0; j < N; ++j) {
-    if (dec[j] == 1)
-      ++one;
-    if (entered[j] == BKR94ACS_ENTER_NONE)
-      ++unentered;
-  }
-  if (!unentered)
-    return (BKR94ACS_DUTY_MET);
-  if (one >= N - a->t)
-    return (BKR94ACS_DUTY_TOLERANCE);
-  return (BKR94ACS_DUTY_HELD);
+  return (bkr94acsDuty(a, BKR94ACS_SEAM_FANOUT, 0, 0));
 }
 
 unsigned int
@@ -1036,19 +1092,15 @@ bkr94acsFanout(
   unsigned int N;
   unsigned int j;
   unsigned int nact;
+  unsigned char fire;
 
   if (!a || !out)
     return (0);
-  /*
-   * The TOLERANCE guard is the floor: below the n-t BA-output-1
-   * count (the paper's is 2t+1, Implementation Note 15), entering 0
-   * is unsound (a mass of 0-inputs could force SubSet empty).  At
-   * MET nothing is unentered and the loop below would output
-   * nothing; returning early keeps the call cheap for a caller that
-   * calls unconditionally each sweep.  WHEN to call while the duty
-   * is TOLERANCE is the caller's, read off bkr94acsFanoutDuty.
-   */
-  if (bkr94acsFanoutDuty(a) != BKR94ACS_DUTY_TOLERANCE)
+  /* The firing decision is the table's (bkr94acs.dtc): the fanout
+   * fires at TOLERANCE only.  WHEN to call while the duty is TOLERANCE
+   * is the caller's, read off bkr94acsFanoutDuty. */
+  bkr94acsDuty(a, BKR94ACS_SEAM_FANOUT, 0, &fire);
+  if (!fire)
     return (0);
   N = A_N(a);
   nact = 0;
@@ -1062,27 +1114,9 @@ bkr94acsTurnDuty(
   const struct bkr94acs *a
  ,unsigned char process
 ){
-  struct bracha87Fig4 *f4;
-  struct bracha87Fig3 *f3;
-  unsigned char nextRound;
-
   if (!a || process > a->n)
     return (BKR94ACS_DUTY_HELD);
-  nextRound = bkr94acsNextRound(a)[process];
-  if (nextRound >= maxRounds(a))
-    return (BKR94ACS_DUTY_HELD);
-  f4 = baF4(a, process);
-  f3 = &f4->fig3;
-  if (!bracha87Fig3RoundComplete(f3, nextRound))
-    return (BKR94ACS_DUTY_HELD);
-  /*
-   * Count only -- the sample itself is materialized by the turn.  A
-   * paced caller queries this N times per sweep, so it must not pay
-   * GetValid's O(n) set walk or its 2x256-byte scratch.
-   */
-  if (bracha87Fig3ValidCount(f3, nextRound) >= A_N(a))
-    return (BKR94ACS_DUTY_MET);
-  return (BKR94ACS_DUTY_TOLERANCE);
+  return (bkr94acsDuty(a, BKR94ACS_SEAM_TURN, process, 0));
 }
 
 unsigned int
@@ -1102,12 +1136,22 @@ bkr94acsTurn(
   unsigned char acsEvent;
   unsigned char inputToBAj;
   unsigned char postCountAllN;
+  unsigned char baDecision;
+  unsigned char seam;
+  unsigned char enabled;
+  unsigned char nothingLeft;
   unsigned char doInput1;
   unsigned char doOutputSubset;
+  unsigned char walk;
+  unsigned char duty;
+  unsigned char fire;
 
   if (!a || process > a->n || !out)
     return (0);
-  if (bkr94acsTurnDuty(a, process) == BKR94ACS_DUTY_HELD)
+  /* The firing decision is the table's (bkr94acs.dtc): the turn
+   * fires at TOLERANCE and at MET. */
+  bkr94acsDuty(a, BKR94ACS_SEAM_TURN, process, &fire);
+  if (!fire)
     return (0);
 
   mr = maxRounds(a);
@@ -1178,12 +1222,24 @@ bkr94acsTurn(
       : BKR94ACS_ACS_EVENT_BA0;
     inputToBAj = bkr94acsEnterd(a)[process];
     postCountAllN = nDecided >= A_N(a);
+    baDecision = 0xFF;
+    seam = BKR94ACS_SEAM_FANOUT;
+    enabled = 0;
+    nothingLeft = 0;
     doInput1 = 0;
     doOutputSubset = 0;
+    walk = 0;
+    duty = BKR94ACS_DUTY_HELD;
+    fire = 0;
 #include "bkr94acsRules.c"
     /* Step 1 is unreachable on a BA-output event; the dispatch
-     * still resolves doInput1 to 0 at every leaf. */
+     * still resolves doInput1 to 0 at every leaf.  The BPR groups
+     * were fed neutral above; this site's firing decision was taken
+     * at bkr94acsDuty before the round was computed. */
     (void)doInput1;
+    (void)walk;
+    (void)duty;
+    (void)fire;
     if (doOutputSubset) {
       a->complete = 1;
       out[nact].value = 0;
@@ -1207,11 +1263,11 @@ bkr94acsTurn(
      * (self is initiator).  Mark the corresponding
      * (process, round=*nextRound, initiator=self)
      * BA Fig1 as the initiator and store the
-     * value so bkr94acsRetryStep keeps retrying this INITIAL
-     * on subsequent ticks while F1_INITIATOR is set, plus
-     * BA_SEND/ECHO and BA_SEND/READY once F1_ECHOED /
-     * F1_RDSENT join (Implementation Note 11).  Same
-     * pattern as the round-0 case in bkr94acsEnter.
+     * value so bkr94acsRetryStep retries this INITIAL on
+     * subsequent ticks until it retires, plus BA_SEND/ECHO and
+     * BA_SEND/READY once F1_ECHOED / F1_RDSENT join, each until
+     * its own gate (Implementation Note 11).  Same pattern as the
+     * round-0 case in bkr94acsEnter.
      */
     {
       unsigned char binary;
@@ -1333,24 +1389,31 @@ bkr94acsBaGetValid(
 }
 
 unsigned int
-bkr94acsAcastAllEchoed(
+bkr94acsAcastAllReadied(
   const struct bkr94acs *a
  ,unsigned char process
 ){
+  const unsigned char *rd;
+  unsigned int p;
+
   if (!a || process > a->n)
     return (0);
-  return (bracha87Fig1AllEchoed(acastF1(a, process)));
+  rd = bracha87Fig1Skip(acastF1(a, process), BRACHA87_ECHO_ALL);
+  for (p = 0; p < A_N(a); ++p)
+    if (!BRACHA87_SKIP_TST(rd, p))
+      return (0);
+  return (1);
 }
 
 const unsigned char *
-bkr94acsAcastSkip(
+bkr94acsAcastReadied(
   const struct bkr94acs *a
  ,unsigned char process
 ){
   if (!a || process > a->n)
     return (0);
   return (bracha87Fig1Skip(acastF1(a, process),
-                           BRACHA87_INITIAL_ALL));
+                           BRACHA87_ECHO_ALL));
 }
 
 const struct bracha87Fig1 *
@@ -1435,4 +1498,3 @@ bkr94acsFig1SentCount(
 
   return (count);
 }
-

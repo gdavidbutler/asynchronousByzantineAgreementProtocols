@@ -42,6 +42,26 @@
 #include <string.h>
 #include "bkr94acs.h"
 
+/* The one turn drain here is `while (bkr94acsTurn(...) > 0 &&
+ * turnDrained())`: a drain ends because the turn advances or refuses,
+ * and a machine that emitted acts without advancing would spin it.
+ * Counted against a ceiling no correct run approaches; abort past it,
+ * announced, never a silent hang. */
+#define TURN_CALL_CAP (1u << 24)
+static unsigned long TurnCalls = 0;
+
+static int
+turnDrained(
+  void
+){
+  if (++TurnCalls > TURN_CALL_CAP) {
+    fprintf(stderr, "FATAL: turn drain runaway -- bkr94acsTurn returned"
+            " acts %lu times\n", TurnCalls);
+    abort();
+  }
+  return (1);
+}
+
 #define N_ENC 255   /* actual process count = 256 */
 #define N_ACT 256
 #define T     85    /* 256 > 3 * 85 */
@@ -152,7 +172,7 @@ main(
       check("Fig1: INITIAL still owed at 255 echo senders", seen);
       check("Fig1: not all echoed at 255", !bracha87Fig1AllEchoed(f1));
     }
-    (void)bracha87Fig1Input(f1, BRACHA87_ECHO, s, &value,
+    (void)bracha87Fig1Input(f1, BRACHA87_ECHO, s, &value, 0, 1,
              acts);
   }
   check("Fig1: all echoed at 256", bracha87Fig1AllEchoed(f1));
@@ -165,7 +185,7 @@ main(
 
   seen = 0;
   for (s = 0; s < N_ACT; ++s) {
-    nact = bracha87Fig1Input(f1, BRACHA87_READY, s, &value,
+    nact = bracha87Fig1Input(f1, BRACHA87_READY, s, &value, 0, 1,
              acts);
     for (i = 0; i < nact; ++i)
       if (acts[i] == BRACHA87_ACCEPT)
@@ -316,7 +336,7 @@ main(
       }
       if (p == N_ACT - 1 && r == 2)
         check("ACS: not complete at 255 decided", !a->complete);
-      while ((nact = bkr94acsTurn(a, p, tout)) > 0)
+      while ((nact = bkr94acsTurn(a, p, tout)) > 0 && turnDrained())
         for (j = 0; j < nact; ++j) {
           if (tout[j].act == BKR94ACS_ACT_BA_DECIDED && tout[j].baValue == 1)
             ++decided;
