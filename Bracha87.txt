@@ -191,30 +191,43 @@ process. This is a separate module from Figure 1 -- it wraps Accept with
 a recursive conformance check.
 
 Figure 4 -- The consensus protocol. A specific instantiation of Figure 3's
-pattern. Three rounds per phase, with specific N functions.  The scan
-writes the round tags bare ("3i+1-messages"); the parentheses below
-are this transcription's, for legibility:
+pattern. Three rounds per phase, with specific N functions.  Read off the
+page in full, so the round tags below are the paper's own BARE form: an
+earlier rendering here added parentheses ("(3i+1)-messages") for
+legibility and that hedge is retired.  Case (ii) of step 3 is likewise
+read, not inferred -- the threshold letter is t, which neither machine
+rendering could recover ("more than r" in the text layer, "more than /"
+in the OCR):
 
-  Phase(i) by process p:
+  Phase(i): (by process p)
 
   1. Broadcast(p, 3i+1, value_p).
-     Wait until validate n - t (3i+1)-messages.
+     Wait until validate n - t 3i+1-messages.
      value_p := majority value of the n - t validated messages.
 
   2. Broadcast(p, 3i+2, value_p).
-     Wait until validate n - t (3i+2)-messages.
+     Wait until validate n - t 3i+2-messages.
      (i)  If more than n/2 of the messages have the same value v,
-          then value_p := (d, v)
-     (ii) Otherwise, value_p := value_p
+          then value_p = (d, v)
+     (ii) Otherwise, value_p := value_p.
 
   3. Broadcast(p, 3i+3, value_p).
-     Wait until validate n - t (3i+3)-messages.
+     Wait until validate n - t 3i+3-messages.
      (i)   If validated more than 2t messages with value (d, v)
            then decision_p := value_p := v
      (ii)  If validated more than t messages with value (d, v)
-           then value_p := v
-     (iii) Otherwise, value_p := coin-toss (0 or 1 with probability 1/2).
+           then value_p := v.
+     (iii) Otherwise, value_p := coin_toss (0 or 1 with probability 1/2).
      Go to round 1 of phase i+1
+
+A TYPO IN THE ORIGINAL, left exactly as the paper prints it.  Step 2
+case (i) above reads "value_p = (d, v)", a bare equals, where every
+other assignment in the figure -- seven of them, including case (ii) on
+the very next line -- reads ":=".  Read off the page and then
+double-checked.  Do NOT normalize it: this file quotes the paper, and
+the oddity is the paper's.  The code is unaffected -- an
+assignment is an assignment, and bracha87.c writes the (d, v) at step 2
+like any other value update.
 
 Parameterized by coin -- the application supplies randomness.
 
