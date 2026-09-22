@@ -143,13 +143,17 @@ Three paths into echo (step 1), two paths into ready (step 2), one path
 to accept (step 3). No VALID -- that is a separate abstraction.
 
 NOTE: The figure states the echo threshold as a bare quantity --
-"(n+t)/2 (echo,v) messages", carrying no relation symbol at all (the
-scan of the figure is heavily garbled: "(n +r)i2 (echo ,Y )", so the
-rendering here is reconstructed; that it carries no relation symbol
-is legible). The proofs supply the relation, and it is strict: Lemma
-1's uses "more than (n + t)/2", and the pigeonhole argument needs it
-strict. The code follows the proofs: threshold = (n+t)/2 + 1 in
-integer arithmetic.
+"(n+t)/2 (echo,v) messages", carrying no relation symbol at all.  This
+is not a reading of one garbled scan: the PDF's text layer renders the
+figure "(n +r)i2 (echo ,Y )", a fresh OCR of the page images renders it
+"(n+t)/2 (echo,v)", and the page was read directly -- all three agree
+the figure prints the thresholds bare, and agree on "or" between the
+three step-1 conditions.  The proofs supply the relation, and it is
+strict: Lemma 1's uses "more than (n + t)/2", and the pigeonhole
+argument needs it strict; Lemma 4's "n - t > (n + t)/2" is strict too.
+The code follows the proofs: threshold = (n+t)/2 + 1 in integer
+arithmetic.  The figure is incomplete, not wrong -- it carries no
+relation to contradict.
 
 Figure 2 -- Not a protocol. The abstract form of ANY asynchronous
 protocol round:
@@ -174,6 +178,12 @@ Broadcast/Validate. Defines VALID sets recursively:
   For k > 1:
   (q, k, v) in VALID^k_p if (q, k, v) is accepted, and there exist n - t
   messages m1 ... m_{n-t} in VALID^{k-1}_p such that v = N(k-1, {m1 ... m_{n-t}})
+
+Both cases above are checked against the page (p. 136) and are the
+paper's own, including the two conjuncts in the k > 1 case: membership
+is acceptance AND the n-t witness, never acceptance alone.  That second
+conjunct is what makes Lemma 6 a claim about two processes' sets
+agreeing rather than a restatement of Theorem 1.
 
 Parameterized by N -- the protocol function. The application supplies N.
 A message is validated only if it COULD have been sent by a correct
@@ -225,7 +235,11 @@ before calling the library." It is a recursive structure that the library
 maintains across rounds -- tracking what messages COULD have been
 legitimately produced. That is real protocol logic, not application logic.
 
-Key properties from the paper:
+Key properties from the paper.  THIS LIST IS A SUMMARY, not paper text.
+Lemmas 1-8 are quoted verbatim, with their proofs, in the Sections 2.2
+and 3 block below; Lemmas 9 and 10 and Theorem 2 in the Section 5 block
+after it.  Where a statement here and the verbatim text below differ,
+the verbatim text is the paper:
 
   Lemma 1: If two correct processes send (ready, v) and (ready, u),
            then u = v.
@@ -237,13 +251,11 @@ Key properties from the paper:
   Lemma 5: If two correct processes validate (r, k, v) and (r, k, u),
            then u = v.
   Lemma 6: If a correct process validates a k-message m, every other
-           correct process validates m (VALID sets are eventually equal).
+           correct process validates m, i.e. VALID^k_p = VALID^k_q.
   Lemma 7: If a correct process broadcasts a k-message m, every
            correct process eventually validates m.
   Lemma 8: If a correct process p is at round i, then p will eventually
-           progress to round i + 1 (Section 5, no deadlock: by choice of
-           the first blocked round, all correct processes have broadcast
-           there, and by Lemma 7 those messages are eventually validated).
+           progress to round i + 1 (Section 5, no deadlock).
   Lemma 9: If all correct processes start a phase with the same value v,
            they all decide v at that phase.
   Lemma 10: If at phase r, two correct processes validate messages with
@@ -259,6 +271,137 @@ Key properties from the paper:
 
   Termination: proved in the Theorem 2 termination paragraph quoted
   below.
+
+Sections 2.2 and 3 proofs -- Lemmas 1 through 8, statements and
+proofs (pp. 134-138, verbatim).  Recovered from three independent
+readings of the paper, reconciled: the PDF's embedded text layer
+(itself an OCR product -- it reads "t < n/S" in the abstract), a fresh
+2x rasterization read by Vision with language correction off, and the
+page read directly.  The two machine readings fail in opposite
+directions, which is what makes the reconciliation possible: the text
+layer resolves italic t, which the OCR reads as the digit 1 ("n - 1"
+for "n - t", "21 + 1" for "2t + 1"); the OCR resolves italic v, which
+the text layer reads as u, o, Y or 21.
+
+Corrections applied, and from which reading: t restored from the text
+layer wherever the OCR read 1; v restored from the OCR wherever the
+text layer read u, o, Y or 21; "If" for the text layer's "Zf";
+"Proof." for its "Proof:", "ProofY", "ProoJ", "Proqf:" -- the paper
+prints "Proof.", read off the page, so every "Proof:" in the text
+layer is that rendering's artifact; "two" for "twu"; "every" for
+"ever)'"; "correct" for the OCR's "correci"; "3r + 3" for "3r -t- 3".
+End-of-proof marks dropped, as elsewhere in this file: the mark is a
+solid filled rectangle, the height of the type and the width of an
+'n'.  The text layer read it variously as "1", "[", "B" and "b", and
+the OCR as a bullet or as nothing -- six renderings of one mark, not
+six marks, and no proof below is missing anything at its end.
+
+Every comparator below was read off the page; none is inferred.  The
+two machines split on four of them and there is no pattern to it --
+three went the OCR's way, one the text layer's -- so each one needed a
+reading:
+  Lemma 3  "(2t + 1 <= n - t)"   text layer had "<",  OCR right
+  Lemma 4  "(n - t >= 2t + 1)"   text layer had ">",  OCR right
+  Lemma 4  "n - t > (n + t)/2"   strict; all three readings agree
+  Lemma 6  "for some k >= 1"     OCR had ">",         text layer right
+  Lemma 7  "1 <= i <= n - t"     text layer had "<",  OCR right
+The two non-strict readings in Lemmas 3 and 4 are the only ones true at
+n = 3t+1, where n - t and 2t + 1 are equal -- the boundary this library
+lives on.
+
+One assignment below is editorial, not recovered: in Lemma 1's proof
+both machine readings give the SAME letter to the two echo counts.
+They are assigned by the sense of the proof -- q sent (ready, v) so q
+counted (echo, v); r sent (ready, u) so r counted (echo, u) -- and that
+has not been read off the page.
+
+  LEMMA 1. If two correct processes s and t send (ready, v) and
+  (ready, u) messages, respectively, then u = v.
+  Proof. Suppose not; let q be the first process that sends a
+  (ready, v) message, and let r be the first process that sends a
+  (ready, u) message. Process q must have received more than
+  (n + t)/2 (echo, v) messages, and process r must have received more
+  than (n + t)/2 (echo, u) messages. Therefore, some correct process
+  must have sent both (echo, u) and (echo, v) messages. But correct
+  processes send only one message of each type during a broadcast, and
+  hence a contradiction.
+
+  LEMMA 2. If two correct processes, q and r, accept the values v and
+  u, respectively, then u = v.
+  Proof. If q accepts the value v then it must have received (2t + 1)
+  (ready, v) messages, and therefore at least (t + 1) (ready, v)
+  messages from correct processes. Similarly, r must have received at
+  least (t + 1) (ready, u) messages from correct processes. By
+  Lemma 1, u = v.
+
+  LEMMA 3. If a correct process q accepts the value v then every other
+  correct process will eventually accept v.
+  Proof. If q accepts the value v then q received (2t + 1) (ready, v)
+  messages. At least t + 1 of these messages were sent by correct
+  processes. Therefore, every other process receives at least (t + 1)
+  (ready, v) messages, and sends its own (ready, v) message. Note that
+  by Lemma 1 it is impossible for a correct process to send a different
+  ready message. Thus, at least n - t processes send (ready, v)
+  messages. Every correct process r eventually receives at least
+  (2t + 1 <= n - t) (ready, v) messages and accepts v.
+
+  LEMMA 4. If a correct process p broadcasts v then all correct
+  processes accept v.
+  Proof. Suppose that p is correct and broadcasts v. Every correct
+  process q receives an (initial, v) message and responds by sending
+  (echo, v) messages. Every correct process q will receive
+  (n - t > (n + t)/2) (echo, v) messages from the correct processes,
+  and possibly t < (n + t)/2 different messages from the faulty
+  processes. Therefore, q will send a (ready, v) message. In step 3,
+  every correct process q will receive (n - t >= 2t + 1) (ready, v)
+  messages, and possibly t different ready messages from the faulty
+  processes. Therefore q will accept v.
+
+  LEMMA 5. If two correct processes, p and q, validate (r, k, v) and
+  (r, k, u) messages, respectively, then u = v.
+  Proof. If p(q) validates (r, k, v) (resp. (r, k, u)) then it must
+  accept it. By Theorem 1, u = v.
+
+  LEMMA 6. If a correct process p validates a k-message m, then every
+  other correct process q validates m, i.e., if p and q are correct
+  then VALID^k_p = VALID^k_q.
+  Proof. The proof is by induction on k. If k = 1, then by Theorem 1,
+  if m is accepted by p then m will be accepted by q, and we are done.
+  Let us assume that the statement of the lemma holds for some k >= 1.
+  Let m = (r, k+1, v) in VALID^{k+1}_p. Therefore, there are n - t
+  messages m_1, ..., m_{n-t} in VALID^k_p such that
+  v = N(k, {m_1, ..., m_{n-t}}). By our induction hypothesis,
+  m_1, ..., m_{n-t} in VALID^k_q. By Theorem 1, q will eventually
+  accept m. Therefore, by definition, m in VALID^{k+1}_q.
+
+  LEMMA 7. If a correct process p broadcasts a k-message m, then every
+  correct process q eventually validates m.
+  Proof. The proof is by induction on k. If k = 1, then, by Theorem 1,
+  we are done. Suppose that the statement of the lemma holds for round
+  k. Since p is correct, it can send m = (p, k+1, v) only if there
+  exist n - t messages, m_1, ..., m_{n-t} in VALID^k_p, such that
+  v = N(k, {m_1, ..., m_{n-t}}). By Lemma 6, for every correct process
+  q and for each m_i, 1 <= i <= n - t, eventually m_i in VALID^k_q.
+  Also, since p is correct, by Theorem 1, every other correct process
+  q will accept m. Therefore, eventually m in VALID^{k+1}_q for every
+  correct process.
+
+  LEMMA 8. If a correct process p is at round i, then p will eventually
+  progress to round i + 1.
+  Proof. Suppose not; then some correct processes are forever blocked.
+  Let r be the first round in which some correct process p is forever
+  blocked. By choice of r, all correct processes have already broadcast
+  messages at that round. By Lemma 7, all these messages are eventually
+  validated. Therefore, p is not blocked at round r, a contradiction.
+
+Lemma 8 is the one passage all three readings give word for word, down
+to "Proof."; only the end-of-proof mark differs between the machines.
+It is the load-bearing citation at bracha87Fig4Round in bracha87.h --
+"all correct processes have already broadcast messages at that round"
+is the paper's own sentence, not a paraphrase of it.  Its statement
+indexes the round i and its proof indexes it r, and it supposes "some
+correct processes" blocked (plural) while concluding about the single
+p; both are the paper's.
 
 Section 5 proofs -- Lemma 9, Lemma 10, and Theorem 2 with its
 statement and proof (pp. 138-140, verbatim, checked

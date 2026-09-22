@@ -1003,9 +1003,11 @@ bkr94acsBaEntered(
  *
  * A VALID set is one process's own -- the paper's VALID^k_p.  A
  * message validated here is validated at every correct process
- * EVENTUALLY (Bracha87 Lemma 6, "VALID sets are eventually equal"),
- * never at the instant of this call, and nothing about another
- * process's set is readable from this one.
+ * EVENTUALLY, never at the instant of this call, and nothing about
+ * another process's set is readable from this one.  Bracha87 Lemma 6
+ * states the equality itself -- "if p and q are correct then
+ * VALID^k_p = VALID^k_q" -- and it is the LEMMA 6 PROOF, and Lemma 7,
+ * that supply the eventually: q "will eventually accept m".
  *
  * Returns 0 on null state, out-of-range process, or a null senders[]
  * or values[].

@@ -2090,6 +2090,97 @@ green.
   ecGtHalfNT    = ec >= (B_N(b) + b->t) / 2 + 1;
 #END
 
+#MUTANT M73
+#FAMILY figure 4 -- post-decide continuation halted at the decision
+#FILE bracha87.c
+#ORACLE test_bracha87_blackbox
+#LABEL figure-unchanged arm: a decided process keeps broadcasting to the end of the phase space
+#EXPECT KILLED
+#WHY
+Section 4 carries one unproved clause -- "For notational convenience,
+the protocol in Fig. 4 does not terminate once a decision is made.
+However, this can be easily accomplished." -- and this mutation is that
+clause implemented the obvious way: a decided process issues no further
+round.  Figure 4 has no such case; every arm of step 3 ends "Go to
+round 1 of phase i+1", and Lemma 8's no-deadlock argument takes every
+correct process to have broadcast at the first blocked round.  A
+process that halts here cannot be told apart from a slow one, so to
+every peer it is a faulty transmitter budgeted against t, and a peer
+still short of n-t has no recourse the model admits.  Theorem 2's
+Agreement proof consumes the withheld message directly: a correct q
+that adopted v at case (ii) decides at phase r+1 on 2t+1 (d, v)
+messages, the decided processes' among them.  The contract suite plays
+a decided instance through two further phases and requires a broadcast
+from each; under the mutation the first post-decide round returns no
+action -- red on that label.
+#ANCHOR
+    if (haveDecided) {
+      /* Post-decide continuation: the figure never halts, and the
+       * value it carries into phase i+1 is the one the dispatch just
+       * wrote, as at any other phase (Lemma 9 makes it the decision). */
+      if (ph + 1 >= b->maxPhases)
+        return (0);
+      b->phase = (ph + 1);
+      b->subRound = 0;
+      return (BRACHA87_BROADCAST);
+    }
+#WITH
+    if (haveDecided)
+      return (0);
+#END
+
+#MUTANT M74
+#FAMILY figure 4 -- post-decide continuation cut one phase past the decision
+#FILE bracha87.c
+#ORACLE test_bracha87_blackbox
+#LABEL figure-unchanged arm: a decided process keeps broadcasting to the end of the phase space
+#EXPECT KILLED
+#WHY
+Not the naive halt of M73 but the bounded one, registered because the
+bound is the plausible mistake.  Theorem 2's Agreement paragraph is
+phase-indexed -- a correct process deciding at phase r forces every
+correct process to hold v at the beginning of phase r+1, and by Lemma
+9 all decide at the end of it -- which invites the reading that phase
+r+2 onward is dead traffic.  It does not follow.  No correct process
+NEEDING a phase r+2 message is not the same as none CONSUMING one:
+step 3 case (i) sets decision_p and still ends "Go to round 1 of phase
+i+1", so a decided process waits on phase r+2 by construction.  And
+the bound is stated in Fig 4's units while the saving would be taken
+in Fig 1's: Lemma 3's proof turns on "at least n - t processes send
+(ready, v) messages", so a correct process that has stopped withholds
+a ready the accept amplification counts on.  Two processes that decide
+at phase r and complete their last round on DIFFERENT n-t sets A and B
+leave only A cap B acceptable everywhere, and |A cap B| >= 2(n-t) - n
+= t+1, strictly below n-t for t >= 1; at n=4, t=1 that is 2 of the 3
+readys accept needs, and a third correct process blocks in phase r+1 --
+inside the bound, not past it.  Nor can the stop be confined to Fig 4:
+a process still relaying Fig 1 echoes and readys has not stopped, and
+can never know when those obligations are discharged, a message not
+sent being indistinguishable from a slow one.  The cut here is written
+against the phase CEILING rather than the deciding phase, because the
+Fig 4 instance records a decided flag and not the phase it decided in;
+the oracle arm decides in phase 0 at maxPhases 3 (bracha87Fig4Init(...,
+3, ...) and rounds 3..8), so "ph + 2 >= maxPhases" is exactly one phase
+past the decision there and nothing more general.  Note what reds and
+what does not: the contract arm's figure-fidelity label alone, with no
+agreement or liveness arm moving, because no arm in this battery
+staggers a decision -- the multi-phase arms decide in lockstep too.
+#ANCHOR
+      if (ph + 1 >= b->maxPhases)
+        return (0);
+      b->phase = (ph + 1);
+      b->subRound = 0;
+      return (BRACHA87_BROADCAST);
+    }
+#WITH
+      if (ph + 2 >= b->maxPhases)
+        return (0);
+      b->phase = (ph + 1);
+      b->subRound = 0;
+      return (BRACHA87_BROADCAST);
+    }
+#END
+
 CATALOGUE_END
 
 # ---------------------------------------------------------------------
