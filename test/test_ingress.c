@@ -214,13 +214,35 @@
 #include "bracha87.h"
 #include "bkr94acs.h"
 
-/* The one turn drain here is `while (bkr94acsTurn(...) > 0 &&
+/* The one turn drain here is `while (turnRev(...) > 0 &&
  * turnDrained())`: a drain ends because the turn advances or refuses,
  * and a machine that emitted acts without advancing would spin it.
  * Counted against a ceiling no correct run approaches; abort past it,
  * announced, never a silent hang. */
 #define TURN_CALL_CAP (1u << 24)
 static unsigned long TurnCalls = 0;
+
+/*
+ * A turn followed at once by the reveal of anything it held -- the
+ * pair drain bkr94acs.h gives a holding caller (at bkr94acsTurn).
+ * Under hold 0 nothing is held and the reveal adds nothing, and a
+ * turn writes at most three acts; under hold 1 revealing at once is
+ * the papers' model, and a holding turn writes at most two and the
+ * reveal one.  Either way three entries hold the pair.  This suite
+ * runs hold 0 only; the hold is under test in test_bkr94acs's reveal
+ * arms and test_bkr94acs_blackbox Section R.
+ */
+static unsigned int
+turnRev(
+  struct bkr94acs *a
+ ,unsigned char p
+ ,struct bkr94acsAct *out
+){
+  unsigned int n;
+
+  n = bkr94acsTurn(a, p, out);
+  return (n + bkr94acsBaReveal(a, p, out + n));
+}
 
 static int
 turnDrained(
@@ -491,7 +513,7 @@ driveCohort(
     }
     if (!bkr94acsInit((struct bkr94acs *)Img[i], CFG_N - 1, CFG_T,
                       CFG_VLEN - 1, CFG_PHASES, (unsigned char)i,
-                      demoCoin, 0)) {
+                      demoCoin, 0, 0)) {
       fprintf(stderr, "test_ingress: bkr94acsInit refused the"
               " configuration\n");
       exit(2);
@@ -567,7 +589,7 @@ driveCohort(
       nacts = bkr94acsRetryStep(a, &Cursor[p], Acts);
       qActs(Acts, nacts, (unsigned char)p);
       for (q = 0; q < CFG_N; ++q)
-        while ((nacts = bkr94acsTurn(a, (unsigned char)q, Acts)) > 0
+        while ((nacts = turnRev(a, (unsigned char)q, Acts)) > 0
             && turnDrained()) {
           qActs(Acts, nacts, (unsigned char)p);
           /*
@@ -987,7 +1009,7 @@ sweepAcs(
     memcpy(Img[SELF], Mile[Cur], ImgSz);
     memset(Acts, POISON, sizeof (Acts));
     ++Calls;
-    Snacts = bkr94acsTurn(a, (unsigned char)i, Acts);
+    Snacts = turnRev(a, (unsigned char)i, Acts);
     if (i >= CFG_N) {
       ++Refusals;
       if (Snacts) {

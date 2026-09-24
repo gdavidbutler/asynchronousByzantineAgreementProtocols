@@ -156,6 +156,7 @@
 #define BRACHA87_F1_RDSENT   0x02
 #define BRACHA87_F1_ACCEPTED 0x04
 #define BRACHA87_F1_INITIATOR   0x08  /* this process is the broadcast initiator */
+#define BRACHA87_F1_HELD        0x10  /* initiator whose (initial, v) is withheld */
 
 /*
  * Figure 1 state.
@@ -175,7 +176,7 @@ struct bracha87Fig1 {
   unsigned char n;        /* process count encoding: actual = n + 1 */
   unsigned char t;        /* max Byzantine (n + 1 > 3t) */
   unsigned char vLen;     /* value length encoding: actual = vLen + 1 */
-  unsigned char flags;    /* BRACHA87_F1_ECHOED/RDSENT/ACCEPTED/INITIATOR */
+  unsigned char flags;    /* BRACHA87_F1_ECHOED/RDSENT/ACCEPTED/INITIATOR/HELD */
   unsigned char data[1];  /* variable: see bracha87Fig1Sz */
 };
 
@@ -246,6 +247,60 @@ void
 bracha87Fig1Initiator(
   struct bracha87Fig1 *
  ,const unsigned char *    /* value: vLen + 1 bytes */
+);
+
+/*
+ * Withhold the initiator's (initial, v) until released.
+ *
+ * A held instance is an initiator (bracha87Fig1Initiator has run, the
+ * value is stored) whose broadcast has not gone out: bracha87Fig1Bpr
+ * outputs no BRACHA87_INITIAL_ALL for it -- the "held" input of the
+ * retry (initial, v) row in bracha87Fig1.dtc -- and the caller sends
+ * nothing.  Nothing else changes: an (echo, v) or (ready, v) arriving
+ * for the instance is recorded and counted as ever (a Byzantine
+ * process may echo a broadcast that was never sent; it stays below
+ * every threshold on its own), and the instance's own send rules are
+ * untouched.  bracha87Fig1Release clears the hold and returns 1 iff it
+ * was held; the caller then sends (initial, v) to all and relies on
+ * BPR thereafter, as bracha87Fig1Initiator describes.
+ *
+ * WHAT IT IS FOR.  A Fig 4 process's step-1 broadcast of a phase it did
+ * not decide carries its coin, and under a LOCAL coin -- one no other
+ * process can name before it is revealed -- a process that reveals its
+ * coin while another correct process's step-3 turn is still pending
+ * hands the adversary -- the scheduler of the papers' model, a faulty
+ * process's own timing in a deployment -- the choice of forcing that
+ * turn (Fig 4 step 3 case (ii): t+1 d-messages, the faulty's own among
+ * them) or letting it toss.  Bracha's model has no time in which to
+ * say "wait", so the papers do not; a deployment that declares a
+ * delivery bound can hold the reveal past every correct turn
+ * (bkr94acs.h, at bkr94acsBaReveal; README, What the caller
+ * provides).  The hold is the library's half; when to release is the
+ * caller's, like every pacing decision in this tree, and what a hold
+ * can and cannot cost is BPR.md's (The Sweep-Side Decisions, the
+ * hold).
+ *
+ * The stored value survives the hold: the echoed-value slot it sits in
+ * is rewritten only when a send or accept rule fires, and with the
+ * (initial, v) unsent no correct process echoes or readies this
+ * instance, so the counts the
+ * rules need -- more than (n+t)/2 echoes, t+1 readies, both above what
+ * t faulty processes can supply alone -- are out of reach until the
+ * release.  (A forged (initial, v') is the caller's to drop: the
+ * INITIAL sender obligation at bracha87Fig1Input.)
+ *
+ * Hold is refused (returns 0) on a null instance or one that is not an
+ * initiator; on an instance already accepted it is pointless but
+ * harmless, and honored.  Both entries are idempotent.
+ */
+unsigned int
+bracha87Fig1Hold(
+  struct bracha87Fig1 *
+);
+
+unsigned int
+bracha87Fig1Release(
+  struct bracha87Fig1 *
 );
 
 /*
@@ -371,7 +426,9 @@ bracha87Fig1Value(
  *     been observed from every process (echoSenders == n).  INITIAL
  *     only induces echoes, so all-echoed leaves nothing to induce;
  *     ACCEPTED witnesses t+1 correct readys, after which ready-
- *     amplification needs no initial.
+ *     amplification needs no initial.  Silent, not retired, while
+ *     the initiator HOLDS it (bracha87Fig1Hold): nothing has been
+ *     sent to re-send, and the release reopens the row.
  *   ECHO (echoed): retires at ACCEPTED, for the same amplification
  *     reason -- past t+1 correct readys no process consumes an echo.
  *   READY (rdSent): never retires on LOCAL state.  It is exactly
@@ -941,8 +998,8 @@ bracha87Fig3RoundComplete(
  * randomness comes from there: the dealer, before the run.  A
  * construction that instead GENERATES fresh randomness by agreement
  * inside the run gives up what the local coin keeps: BKR94 records
- * that its secret-sharing route carries "an
- * exponentially small but non zero probability of not terminating",
+ * that at n <= 4t any t-resilient asynchronous verifiable secret
+ * sharing "must have some probability qA > 0 of not terminating",
  * against "the asynchronous Byzantine Agreement problem where the
  * randomized protocol terminates with probability 1".  It would be
  * circular here besides -- the exchange needs a reliable broadcast, and

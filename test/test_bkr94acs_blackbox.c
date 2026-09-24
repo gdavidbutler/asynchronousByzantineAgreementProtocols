@@ -129,7 +129,7 @@ static const char *CurTest = "<none>";
 
 #define BANNER(name) do { CurTest = (name); } while (0)
 
-/* Every turn drain in this file is `while ((n = bkr94acsTurn(...)) > 0
+/* Every turn drain in this file is `while ((n = turnRev(...)) > 0
  * && turnDrained())`.  A drain ends because the turn advances the
  * round it computed or refuses at HELD; a machine that emitted acts
  * without advancing would spin it.  This counts every turn call that
@@ -140,6 +140,26 @@ static const char *CurTest = "<none>";
  * hang. */
 #define TURN_CALL_CAP (1u << 24)
 static unsigned long TurnCalls = 0;
+
+/*
+ * A turn followed at once by the reveal of anything it held -- the
+ * pair drain bkr94acs.h gives a holding caller (at bkr94acsTurn).
+ * Under hold 0 nothing is held and the reveal adds nothing, and a
+ * turn writes at most three acts; under hold 1 revealing at once is
+ * the papers' model, and a holding turn writes at most two and the
+ * reveal one.  Either way three entries hold the pair.
+ */
+static unsigned int
+turnRev(
+  struct bkr94acs *a
+ ,unsigned char p
+ ,struct bkr94acsAct *out
+){
+  unsigned int n;
+
+  n = bkr94acsTurn(a, p, out);
+  return (n + bkr94acsBaReveal(a, p, out + n));
+}
 
 static int
 turnDrained(
@@ -462,7 +482,7 @@ drainTurns(
   unsigned int b, n;
 
   for (b = 0; b < nAct; ++b)
-    while ((n = bkr94acsTurn(process, (unsigned char)b, out)) > 0 && turnDrained()) {
+    while ((n = turnRev(process, (unsigned char)b, out)) > 0 && turnDrained()) {
       CHECK(n <= 3, "turn outputs at most 3 acts");
       observeAndOutput(obs, self, nAct, out, n, vBytes, dropPercent,
                      silentProcess);
@@ -671,7 +691,7 @@ allocCluster(
                  (unsigned char)vLenEnc,
                  (unsigned char)maxPhases,
                  (unsigned char)i,
-                 testCoin, 0);
+                 testCoin, 0, 0);
   }
   return (0);
 }
@@ -882,7 +902,7 @@ feedBAAccept(
   FeedLastActs = n;
   total += n;
   if (turned)
-    while ((n = bkr94acsTurn(a, process, out)) > 0 && turnDrained()) {
+    while ((n = turnRev(a, process, out)) > 0 && turnDrained()) {
       for (k = 0; k < n; ++k)
         if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED
          && out[k].process == process)
@@ -900,7 +920,7 @@ feedBAAccept(
     FeedLastActs = n;
     total += n;
     if (turned)
-      while ((n = bkr94acsTurn(a, process, out)) > 0 && turnDrained()) {
+      while ((n = turnRev(a, process, out)) > 0 && turnDrained()) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED
            && out[k].process == process)
@@ -1212,7 +1232,7 @@ fbDrive(
 
       decidedTick = 0;
       for (b = 0; b < 4; ++b)
-        while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out))
+        while ((n = turnRev(processes[p], (unsigned char)b, out))
                > 0 && turnDrained()) {
           for (j = 0; j < n; ++j)
             if (out[j].act == BKR94ACS_ACT_BA_DECIDED) {
@@ -1375,7 +1395,7 @@ jDrive(
       prevBarren[p] = pol[p].barren;
 
       for (b = 0; b < 4; ++b)
-        while ((n = bkr94acsTurn(processes[p], (unsigned char)b,
+        while ((n = turnRev(processes[p], (unsigned char)b,
                                  out)) > 0 && turnDrained()) {
           for (k = 0; k < n; ++k)
             if (out[k].act == BKR94ACS_ACT_BA_DECIDED
@@ -1477,7 +1497,7 @@ iTick(
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
+      while ((n = turnRev(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_DECIDED
            || out[k].act == BKR94ACS_ACT_COMPLETE)
@@ -1551,7 +1571,7 @@ oTick(
     observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < nAct; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0 && turnDrained())
+      while ((n = turnRev(processes[p], (unsigned char)b, out)) > 0 && turnDrained())
         observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
     n = bkr94acsFanout(processes[p], out);
     observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
@@ -1709,7 +1729,7 @@ kTick(
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, vBytes, 0, -1);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
+      while ((n = turnRev(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_DECIDED
            || out[k].act == BKR94ACS_ACT_COMPLETE)
@@ -1801,7 +1821,7 @@ lTick(
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, silent);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
+      while ((n = turnRev(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_DECIDED
            || out[k].act == BKR94ACS_ACT_COMPLETE)
@@ -1891,7 +1911,7 @@ mTick(
     observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < 4; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
+      while ((n = turnRev(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_DECIDED
            || out[k].act == BKR94ACS_ACT_COMPLETE)
@@ -2003,7 +2023,7 @@ nDrive(
       sweepDone = spTick(&pol[p], cursors[p].sweeps, 0);
 
       for (b = 0; b < 4; ++b)
-        while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
+        while ((n = turnRev(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
           for (j = 0; j < n; ++j)
             if (out[j].act == BKR94ACS_ACT_BA_DECIDED
              || out[j].act == BKR94ACS_ACT_COMPLETE)
@@ -2379,7 +2399,7 @@ pTick(
     observeAndOutput(&obs[p], (unsigned char)p, nAct, out, n, 1, 0, -1);
     spTick(&pol[p], cursors[p].sweeps, 0);
     for (b = 0; b < nAct; ++b)
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
+      while ((n = turnRev(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
         for (k = 0; k < n; ++k)
           if (out[k].act == BKR94ACS_ACT_BA_DECIDED
            || out[k].act == BKR94ACS_ACT_COMPLETE)
@@ -2394,6 +2414,286 @@ pTick(
 /* ================================================================== */
 /*  main                                                              */
 /* ================================================================== */
+
+
+/* ------------------------------------------------------------------ */
+/*  Section R plumbing -- the hold across processes.                  */
+/*                                                                    */
+/*  A coin that SPLITS: a per-process pseudo-random bit, deterministic */
+/*  per seed, counted through its closure so a lane can prove the     */
+/*  coin was reached.  The file's testCoin is parity, the same at     */
+/*  every process, which never exercises case (iii) across a cluster. */
+/* ------------------------------------------------------------------ */
+
+struct rCoin {
+  unsigned int self;
+  unsigned int seed;
+  unsigned int calls;
+  unsigned int instance;   /* of the last toss */
+  unsigned int phase;      /* of the last toss */
+};
+
+static unsigned char
+rCoinFn(
+  void *closure
+ ,unsigned char instance
+ ,unsigned char phase
+){
+  struct rCoin *c = closure;
+  unsigned int x;
+
+  ++c->calls;
+  c->instance = instance;
+  c->phase = phase;
+  x = c->seed * 2654435761u + c->self * 40503u + instance * 9973u + phase * 7919u;
+  x ^= x >> 13;
+  x *= 0x5bd1e995u;
+  x ^= x >> 15;
+  return (x & 1);
+}
+
+#define R_NEVER 0xFFFFu
+
+/* ------------------------------------------------------------------ */
+/*  Section R driver.  n = 4, t = 1, BA 3 entered 0 by processes 0    */
+/*  and 1 and 1 by processes 2 and 3 -- a two-two split that only the  */
+/*  fanout's timing can produce: a Fig 1 accepted at one correct      */
+/*  process is accepted at every other within a hop (Lemma 3), so     */
+/*  entries differ only by which side of the fanout's firing each     */
+/*  process's accept of A-Cast 3 lands on.  The schedule: A-Casts 0,  */
+/*  1 and 2 go                                                        */
+/*  out and are drained with turns at every process but the fanout    */
+/*  called at 0 and 1 ONLY, so those two enter 0 in BA 3 once BAs 0-2 */
+/*  decide; then A-Cast 3 goes out, every process accepts it, and 2   */
+/*  and 3 -- whose fanout was never called -- enter 1.  From there    */
+/*  the cluster ticks: drain the wire                                 */
+/*  in a seeded random order, one retry step, bare bkr94acsTurn        */
+/*  drains (never turnRev: the reveal is the thing under test), the   */
+/*  fanout at zero patience, and each process's reveal of what it     */
+/*  holds once the hold's age reaches its delay (R_NEVER: never).     */
+/*  Ages are in the driver's ticks, one retry step each -- not the    */
+/*  sweep a deployment counts its hold in (BPR.md): the lanes need an */
+/*  order of releases, not a unit.                                    */
+/*  With delivery order random, the step-1 samples of BA 3 differ     */
+/*  across processes and case (iii) is reached at some seeds; the     */
+/*  lanes search seeds for one that reaches the coin.                 */
+/*                                                                    */
+/*  crashAfterCoin: process 1 goes silent (wires to and from it       */
+/*  dropped, never ticked) from the first tick at which every live    */
+/*  process has tossed, which is after the split has reached the coin */
+/*  and before phase 1's step 1 can complete.                         */
+/*                                                                    */
+/*  After every live process has completed the driver ticks on until */
+/*  every release the delays promise has happened, so a late reveal   */
+/*  reaches receivers that turned the round without it -- the delayed */
+/*  message of the seam's argument -- and the lanes can require that  */
+/*  it changed nothing.  Each reveal act is inspected: one BA_SEND,   */
+/*  INITIAL, a phase-opening round, initiator self; revealed[p]       */
+/*  counts them per process.                                          */
+/*                                                                    */
+/*  The tick cap is a harness guard: a lane that expects a block      */
+/*  reads it as the ending, one that expects completion reads it as   */
+/*  failure.  Returns the tick of completion of every live process,   */
+/*  or R_NEVER.                                                        */
+/* ------------------------------------------------------------------ */
+
+static unsigned int
+rDrive(
+  struct bkr94acs **processes
+ ,struct processObs *obs
+ ,struct rCoin *coins
+ ,unsigned int seed
+ ,const unsigned int *delay       /* per process, ticks a hold lasts; R_NEVER */
+ ,int crashAfterCoin
+ ,unsigned int maxTicks
+ ,unsigned int *coinTick          /* out: first tick every live process had tossed */
+ ,unsigned int *revealed          /* out: per process, reveals made */
+){
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(3)];
+  struct bkr94acsAct acastOut[1];
+  struct bracha87Retry cursors[4];
+  struct wire stash[16];       /* BA 3's round-0 INITIALs from 0 and 1, to all */
+  unsigned int heldSince[4][4];
+  unsigned int nStash;
+  struct wire w;
+  unsigned char acast[4];
+  unsigned int n, p, b, tick, live;
+  unsigned int doneAt;
+  int crashed;
+  int done;
+  int pending;
+
+  qReset();
+  rngSeed(seed);
+  nStash = 0;
+  doneAt = R_NEVER;
+  for (p = 0; p < 4; ++p) {
+    bracha87RetryInit(&cursors[p]);
+    coins[p].self = p;
+    coins[p].seed = seed;
+    coins[p].calls = 0;
+    acast[p] = (unsigned char)(0xA0 + p);
+    for (b = 0; b < 4; ++b)
+      heldSince[p][b] = R_NEVER;
+  }
+  crashed = 0;
+  *coinTick = R_NEVER;
+
+  /* A-Casts 0-2, drained with turns at 0 and 1 only, then their fanout */
+  for (p = 0; p < 3; ++p) {
+    n = bkr94acsAcast(processes[p], &acast[p], acastOut);
+    observeAndOutput(&obs[p], (unsigned char)p, 4, acastOut, n, 1, 0, -1);
+  }
+  for (tick = 0; tick < 64; ++tick) {
+    while (qSize() > 0) {
+      qPopHead(&w);
+      /* BA 3's round-0 INITIALs from the fanout are held aside: they
+       * join the randomized queue with 2's and 3's, so a process's
+       * first n-t of the four is any three -- the split. */
+      if (w.cls == BKR94ACS_CLS_BA && w.process == 3 && w.round == 0
+       && w.type == BRACHA87_INITIAL && nStash < 16) {
+        stash[nStash++] = w;
+        continue;
+      }
+      if (w.cls == BKR94ACS_CLS_ACAST)
+        n = bkr94acsAcastInput(processes[w.to], w.process, w.type, wireAnnot(&w),
+                               w.from, w.value, out);
+      else
+        n = bkr94acsBaInput(processes[w.to], w.process, w.round, w.initiator,
+                            w.type, wireAnnot(&w), w.from, w.baValue, out);
+      observeAndOutput(&obs[w.to], w.to, 4, out, n, 1, 0, -1);
+    }
+    for (p = 0; p < 4; ++p) {
+      for (b = 0; b < 4; ++b)
+        while ((n = turnRev(processes[p], (unsigned char)b, out)) > 0 && turnDrained())
+          observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
+      if (p < 2) {
+        n = bkr94acsFanout(processes[p], out);
+        observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
+      }
+    }
+    if (bkr94acsBaEntered(processes[0], 3) && bkr94acsBaEntered(processes[1], 3)
+     && qSize() == 0)
+      break;
+  }
+  CHECK(bkr94acsBaEntered(processes[0], 3) && bkr94acsBaEntered(processes[1], 3),
+        "R: processes 0 and 1 entered BA 3 by the fanout");
+  CHECK(!bkr94acsBaEntered(processes[2], 3) && !bkr94acsBaEntered(processes[3], 3),
+        "R: processes 2 and 3 have not entered BA 3");
+
+  /* A-Cast 3: everyone accepts it; 2 and 3 enter 1 */
+  n = bkr94acsAcast(processes[3], &acast[3], acastOut);
+  observeAndOutput(&obs[3], 3, 4, acastOut, n, 1, 0, -1);
+  while (qSize() > 0) {
+    qPopHead(&w);
+    if (w.cls == BKR94ACS_CLS_BA && w.process == 3 && w.round == 0
+     && w.type == BRACHA87_INITIAL && nStash < 16) {
+      stash[nStash++] = w;
+      continue;
+    }
+    if (w.cls == BKR94ACS_CLS_ACAST)
+      n = bkr94acsAcastInput(processes[w.to], w.process, w.type, wireAnnot(&w),
+                             w.from, w.value, out);
+    else
+      n = bkr94acsBaInput(processes[w.to], w.process, w.round, w.initiator,
+                          w.type, wireAnnot(&w), w.from, w.baValue, out);
+    observeAndOutput(&obs[w.to], w.to, 4, out, n, 1, 0, -1);
+  }
+  CHECK(bkr94acsBaEntered(processes[2], 3) && bkr94acsBaEntered(processes[3], 3),
+        "R: processes 2 and 3 entered BA 3 by step 1");
+  CHECK(obs[0].selfInputValue[3] == 0 && obs[1].selfInputValue[3] == 0
+     && obs[2].selfInputValue[3] == 1 && obs[3].selfInputValue[3] == 1,
+        "R: BA 3's inputs are split two-two");
+
+  CHECK(nStash == 16, "R: the sixteen round-0 INITIALs of BA 3 were held aside");
+  for (p = 0; p < nStash; ++p)
+    qPush(&stash[p]);
+
+  for (p = 0; p < 4; ++p)
+    revealed[p] = 0;
+
+  /* the cluster ticks, and on past completion until every promised
+   * release has happened */
+  done = 0;
+  pending = 1;
+  for (tick = 0; tick < maxTicks && !(done && !pending); ++tick) {
+    while (qSize() > 0) {
+      qPopRandom(&w);
+      if (crashed && (w.to == 1 || w.from == 1))
+        continue;
+      if (w.cls == BKR94ACS_CLS_ACAST)
+        n = bkr94acsAcastInput(processes[w.to], w.process, w.type, wireAnnot(&w),
+                               w.from, w.value, out);
+      else
+        n = bkr94acsBaInput(processes[w.to], w.process, w.round, w.initiator,
+                            w.type, wireAnnot(&w), w.from, w.baValue, out);
+      observeAndOutput(&obs[w.to], w.to, 4, out, n, 1, 0, crashed ? 1 : -1);
+      /* turns at enabling, so a round's sample is the first n-t
+       * validated in this delivery order and differs across
+       * processes: the split that reaches the coin */
+      for (b = 0; b < 4; ++b)
+        while ((n = bkr94acsTurn(processes[w.to], (unsigned char)b, out)) > 0 && turnDrained())
+          observeAndOutput(&obs[w.to], w.to, 4, out, n, 1, 0, crashed ? 1 : -1);
+    }
+    for (p = 0; p < 4; ++p) {
+      if (crashed && p == 1)
+        continue;
+      n = bkr94acsRetryStep(processes[p], &cursors[p], out);
+      observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, crashed ? 1 : -1);
+      for (b = 0; b < 4; ++b)
+        while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0 && turnDrained())
+          observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, crashed ? 1 : -1);
+      n = bkr94acsFanout(processes[p], out);
+      observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, crashed ? 1 : -1);
+      for (b = 0; b < 4; ++b) {
+        if (!bkr94acsBaHeld(processes[p], (unsigned char)b)) {
+          heldSince[p][b] = R_NEVER;
+          continue;
+        }
+        if (heldSince[p][b] == R_NEVER)
+          heldSince[p][b] = tick;
+        if (delay[p] != R_NEVER && tick - heldSince[p][b] >= delay[p]) {
+          n = bkr94acsBaReveal(processes[p], (unsigned char)b, out);
+          CHECK(n == 1, "R: a due reveal releases one INITIAL");
+          CHECK(n == 1 && out[0].act == BKR94ACS_ACT_BA_SEND
+             && out[0].type == BRACHA87_INITIAL
+             && out[0].round % BRACHA87_ROUNDS_PER_PHASE == 0 && out[0].round > 0
+             && out[0].initiator == p && out[0].process == b,
+                "R: the reveal is this process's own phase-opening INITIAL");
+          ++revealed[p];
+          observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, crashed ? 1 : -1);
+          heldSince[p][b] = bkr94acsBaHeld(processes[p], (unsigned char)b) ? tick : R_NEVER;
+        }
+      }
+    }
+    if (*coinTick == R_NEVER) {
+      live = 0;
+      for (p = 0; p < 4; ++p)
+        if (coins[p].calls)
+          ++live;
+      if (live == 4) {
+        *coinTick = tick;
+        if (crashAfterCoin)
+          crashed = 1;
+      }
+    }
+    done = 1;
+    for (p = 0; p < 4; ++p)
+      if (!(crashed && p == 1) && !processes[p]->complete)
+        done = 0;
+    if (done && doneAt == R_NEVER)
+      doneAt = tick;
+    /* a release still promised: a hold at a live process whose delay
+     * is finite */
+    pending = 0;
+    for (p = 0; p < 4; ++p)
+      if (!(crashed && p == 1) && delay[p] != R_NEVER)
+        for (b = 0; b < 4; ++b)
+          if (bkr94acsBaHeld(processes[p], (unsigned char)b))
+            pending = 1;
+  }
+  return (doneAt);
+}
 
 int
 main(
@@ -2431,7 +2731,7 @@ main(
     CHECK(a != 0, "alloc cluster");
     if (!a) goto a1_done;
 
-    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0, 0);
 
     CHECK(a->complete == 0,
           "fresh: complete clear");
@@ -2450,7 +2750,7 @@ main(
     for (j = 0; j < 4; ++j) {
       CHECK(bkr94acsTurnDuty(a, (unsigned char)j) == BKR94ACS_DUTY_HELD,
             "fresh: TurnDuty == HELD");
-      CHECK(bkr94acsTurn(a, (unsigned char)j, out) == 0,
+      CHECK(turnRev(a, (unsigned char)j, out) == 0,
             "fresh: Turn at HELD outputs nothing");
     }
     CHECK(bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_HELD,
@@ -2509,16 +2809,19 @@ main(
       if ((probe = malloc(guard)) != 0) {
         memset(probe, 0xAA, guard);
         CHECK(bkr94acsInit((struct bkr94acs *)probe, 3, 1, 0, 0, 0,
-                           testCoin, 0) == 0,
+                           testCoin, 0, 0) == 0,
               "Init returns 0 when maxPhases is refused");
         CHECK(bkr94acsInit((struct bkr94acs *)probe, 2, 1, 0, 4, 0,
-                           testCoin, 0) == 0,
+                           testCoin, 0, 0) == 0,
               "Init refuses N = 3 with t = 1 (N == 3t)");
-        CHECK(bkr94acsInit(0, 3, 1, 0, 4, 0, testCoin, 0) == 0,
+        CHECK(bkr94acsInit(0, 3, 1, 0, 4, 0, testCoin, 0, 0) == 0,
               "Init refuses a null instance");
         CHECK(bkr94acsInit((struct bkr94acs *)probe, 3, 1, 0, 4, 9,
-                           testCoin, 0) == 0,
+                           testCoin, 0, 0) == 0,
               "Init refuses self outside 0..n");
+        CHECK(bkr94acsInit((struct bkr94acs *)probe, 3, 1, 0, 4, 0,
+                           testCoin, 0, 2) == 0,
+              "Init refuses hold other than 0 or 1");
         intact = 1;
         for (j = 0; j < guard; ++j)
           if (probe[j] != 0xAA)
@@ -2544,7 +2847,7 @@ main(
     sz = bkr94acsSz(3, 0, 10);
     a = calloc(1, sz);
     if (!a) goto a2_done;
-    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0, 0);
 
     v1[0] = 0xAB;
     n = bkr94acsAcast(a, v1, out);
@@ -2603,7 +2906,7 @@ main(
     sz = bkr94acsSz(3, 0, 10);
     a = calloc(1, sz);
     if (!a) goto a4_done;
-    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0, 0);
 
     CHECK(bkr94acsBaDecision(a, 4) == 0xFF,
           "BaDecision(process == n): 0xFF");
@@ -2613,8 +2916,8 @@ main(
           "TurnDuty(process == n): HELD");
     CHECK(bkr94acsTurnDuty(a, 255) == BKR94ACS_DUTY_HELD,
           "TurnDuty(process 255): HELD");
-    CHECK(bkr94acsTurn(a, 4, dout) == 0, "Turn(process == n): 0");
-    CHECK(bkr94acsTurn(a, 255, dout) == 0, "Turn(process 255): 0");
+    CHECK(turnRev(a, 4, dout) == 0, "Turn(process == n): 0");
+    CHECK(turnRev(a, 255, dout) == 0, "Turn(process 255): 0");
 
     CHECK(bkr94acsSubset(0, procs) == 0, "Subset(NULL): 0");
     CHECK(bkr94acsAcastValue(0, 0) == 0, "AcastValue(NULL): null");
@@ -2652,7 +2955,7 @@ main(
     sz = bkr94acsSz(3, 0, 10);
     a = calloc(1, sz);
     if (!a) goto a5_done;
-    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0, 0);
 
     v[0] = 0x42;
 
@@ -2884,7 +3187,7 @@ main(
     p0 = calloc(1, sz);
     if (!p0) goto b6_done;
     bkr94acsInit(p0, (unsigned char)(nAct - 1), 1, (unsigned char)(vLen - 1),
-                 (unsigned char)mp, 0, testCoin, 0);
+                 (unsigned char)mp, 0, testCoin, 0, 0);
 
     /* Process 0 -- process 0 acasts, then synthesizes the all-honest
      * cascade locally (INITIAL from process 0; ECHO from 0/1/2/3;
@@ -3142,7 +3445,7 @@ main(
     sz = bkr94acsSz(3, 0, 4);
     a = calloc(1, sz);
     if (!a) goto b8_done;
-    bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0, 0);
     v[0] = 1;
 
     bkr94acsAcastInput(a, 0, BRACHA87_INITIAL, ANNOT_NO_ARM, 0, v, out);
@@ -3213,7 +3516,7 @@ main(
     sz = bkr94acsSz(nAct - 1, vLen - 1, mp);
     p0 = calloc(1, sz);
     if (!p0) goto b9_done;
-    bkr94acsInit(p0, nAct - 1, t, vLen - 1, mp, 0, testCoin, 0);
+    bkr94acsInit(p0, nAct - 1, t, vLen - 1, mp, 0, testCoin, 0, 0);
 
     /* Defensive guards, both accessors. */
     CHECK(bkr94acsBaEntered(0, 0) == 0, "B9: BaEntered NULL -> 0");
@@ -3377,7 +3680,7 @@ main(
     sz = bkr94acsSz(3, 0, 10);
     a = calloc(1, sz);
     if (!a) goto c1_done;
-    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0, 0);
 
     bracha87RetryInit(&cursor);
     /* Walk well past the cursor space (A-Cast Fig1s + every owned
@@ -3412,7 +3715,7 @@ main(
     sz = bkr94acsSz(3, 0, 10);
     a = calloc(1, sz);
     if (!a) goto c2_done;
-    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0, 0);
 
     bkr94acsAcast(a, &val, acastOut);
     bracha87RetryInit(&cursor);
@@ -3493,7 +3796,7 @@ main(
     sz = bkr94acsSz(3, 0, 10);
     a = calloc(1, sz);
     if (!a) goto c5_done;
-    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 10, 0, testCoin, 0, 0);
 
     bracha87RetryInit(&cursor);
     for (j = 0; j < 256; ++j) {
@@ -3764,7 +4067,7 @@ main(
     sz = bkr94acsSz(3, 0, 1);   /* n=4, vLen=1, maxPhases=1 */
     a = calloc(1, sz);
     if (!a) goto d1_done;
-    bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0, 0);
 
     /* Drive every (round, initiator) Fig1 in phase 0 to ACCEPT
      * with a value that splits 2/2 across initiators per round. */
@@ -3789,7 +4092,7 @@ main(
     for (k = 0; k < n; ++k)
       if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
         ++exhaustedSeen;
-    while ((n = bkr94acsTurn(a, 0, out)) > 0 && turnDrained())
+    while ((n = turnRev(a, 0, out)) > 0 && turnDrained())
       for (k = 0; k < n; ++k)
         if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
           ++exhaustedSeen;
@@ -3820,7 +4123,7 @@ main(
     sz = bkr94acsSz(3, 0, 1);
     a = calloc(1, sz);
     if (!a) goto d2_done;
-    bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0, 0);
 
     /* Set up an EXHAUSTED state same as D1. */
     for (round = 0; round < 3; ++round)
@@ -4199,7 +4502,7 @@ main(
             observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
           }
           for (b = 0; b < 4; ++b)
-            while ((n = bkr94acsTurn(processes[p], (unsigned char)b,
+            while ((n = turnRev(processes[p], (unsigned char)b,
                                      out)) > 0 && turnDrained()) {
               if (quiesced[p]) {
                 quiesced[p] = 0;
@@ -4559,7 +4862,7 @@ main(
     sz = bkr94acsSz(3, 0, 8);
     a = calloc(1, sz);
     if (!a) goto g2_done;
-    bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0, 0);
 
     for (k = 0; k < 3; ++k)
       feedBAAccept(a, 0, 0, (unsigned char)k, 1, out, 0, &dummy);
@@ -4576,7 +4879,7 @@ main(
     CHECK(bkr94acsBaDecision(a, 0) == 0xFF, "G2: BA_0 still undecided");
     CHECK(a->complete == 0, "G2: not complete");
 
-    n = bkr94acsTurn(a, 0, out);
+    n = turnRev(a, 0, out);
     CHECK(n > 0, "G2: turn fires at TOLERANCE when called");
     CHECK(n <= 3, "G2: turn outputs at most 3 acts");
     for (k = 0; k < n; ++k)
@@ -4608,14 +4911,14 @@ main(
     sz = bkr94acsSz(3, 0, 8);
     a = calloc(1, sz);
     if (!a) goto g3_done;
-    bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0, 0);
 
     for (k = 0; k < 4; ++k)
       feedBAAccept(a, 0, 0, (unsigned char)k, 1, out, 0, &dummy);
 
     CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_MET,
           "G3: duty MET with all n validated");
-    n = bkr94acsTurn(a, 0, out);
+    n = turnRev(a, 0, out);
     CHECK(n > 0, "G3: MET turn fires");
     CHECK(n <= 3, "G3: turn outputs at most 3 acts");
 
@@ -4623,7 +4926,7 @@ main(
      * back to HELD and a second call outputs nothing. */
     CHECK(bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_HELD,
           "G3: next round incomplete -- duty back to HELD");
-    CHECK(bkr94acsTurn(a, 0, out) == 0,
+    CHECK(turnRev(a, 0, out) == 0,
           "G3: nothing left to turn");
 
     free(a);
@@ -4663,7 +4966,7 @@ main(
           CHECK(bkr94acsTurnDuty(processes[p], (unsigned char)b)
                 == BKR94ACS_DUTY_HELD,
                 "G4: every TurnDuty HELD at quiescence");
-          CHECK(bkr94acsTurn(processes[p], (unsigned char)b, out) == 0,
+          CHECK(turnRev(processes[p], (unsigned char)b, out) == 0,
                 "G4: re-calling Turn outputs nothing");
         }
       }
@@ -4793,7 +5096,7 @@ main(
             observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, drop, -1);
           }
           for (b = 0; b < 4; ++b)
-            while ((n = bkr94acsTurn(processes[p], (unsigned char)b,
+            while ((n = turnRev(processes[p], (unsigned char)b,
                                      out)) > 0 && turnDrained()) {
               if (quiesced[p]) {
                 quiesced[p] = 0;
@@ -4938,7 +5241,7 @@ main(
             observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
           }
           for (b = 0; b < 4; ++b)
-            while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
+            while ((n = turnRev(processes[p], (unsigned char)b, out)) > 0 && turnDrained()) {
               if (quiesced[p]) {
                 quiesced[p] = 0;
                 --nQuiesced;
@@ -6473,7 +6776,7 @@ main(
     sz = bkr94acsSz(3, 0, 8);
     a = calloc(1, sz);
     if (!a) goto n2_done;
-    bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0, 0);
 
     for (b = 0; b < 2; ++b)
       feedBAAccept(a, 0, 0, (unsigned char)b, 1, out, 0, &dummy);
@@ -6500,7 +6803,7 @@ main(
     /* -- FanoutDuty, the same form ---------------------------------- */
     a = calloc(1, sz);
     if (!a) goto n2_done;
-    bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
+    bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0, 0);
 
     for (j = 0; j < 3; ++j) {
       for (r = 0; r < 3; ++r)
@@ -6526,7 +6829,7 @@ main(
     for (ki = 0; ki < sizeof (ks) / sizeof (ks[0]); ++ki) {
       a = calloc(1, sz);
       if (!a) goto n2_done;
-      bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0);
+      bkr94acsInit(a, 3, 1, 0, 8, 0, testCoin, 0, 0);
 
       /* A deliberately mixed mid-run state, where no BA's verdict is
        * forced: BA_0 at n-t validated, BA_1 below it, BA_2 and BA_3
@@ -7495,7 +7798,7 @@ main(
                              lanes[li].drop, lanes[li].silent);
           }
           for (b = 0; b < N; ++b)
-            while ((n = bkr94acsTurn(processes[p], (unsigned char)b,
+            while ((n = turnRev(processes[p], (unsigned char)b,
                                      out)) > 0 && turnDrained()) {
               if (quiesced[p]) {
                 quiesced[p] = 0;
@@ -7664,7 +7967,7 @@ main(
           n = bkr94acsRetryStep(processes[p], &cursors[p], out);
           observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
           for (b = 0; b < 4; ++b)
-            while ((n = bkr94acsTurn(processes[p], (unsigned char)b, out)) > 0 && turnDrained())
+            while ((n = turnRev(processes[p], (unsigned char)b, out)) > 0 && turnDrained())
               observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
           n = bkr94acsFanout(processes[p], out);
           observeAndOutput(&obs[p], (unsigned char)p, 4, out, n, 1, 0, -1);
@@ -7839,6 +8142,155 @@ main(
                                 : "hold at Input",
              lanes[li].holders, completeAt,
              li == 2 ? ", then the late payload quiesced all four" : "");
+      freeCluster(processes, 4);
+    }
+  }
+
+
+  /* ---------------------------------------------------------------- */
+  /*  Section R -- the hold across processes.                         */
+  /*                                                                  */
+  /*  The third seam's claim (BPR.md, The Sweep-Side Decisions, the   */
+  /*  hold): a held phase-opening INITIAL costs liveness only.  R1     */
+  /*  releases at staggered ages and requires agreement and           */
+  /*  completion through a phase the coin decided; R2 never releases  */
+  /*  at one process and crashes another after the coin, and requires */
+  /*  the block the contract states (the holder is silent at that     */
+  /*  round, the crash spends the other t); R3 is R2's control, the   */
+  /*  never-releasing process alone, and requires completion.  The    */
+  /*  pair is what makes the lane say something: without the crash    */
+  /*  the never-release costs nothing at t = 1.                       */
+  /* ---------------------------------------------------------------- */
+
+  /* ---------------------------------------------------------------- */
+  BANNER("R1: staggered releases through a coin phase agree and complete");
+  /* ---------------------------------------------------------------- */
+  {
+    static const unsigned int Delays[4] = { 0, 1, 3, 7 };
+    struct rCoin coins[4];
+    unsigned char sub[4][MAX_PROCESSES];
+    unsigned int cnt[4];
+    unsigned int revealed[4];
+    unsigned int seed, seedFound, at, coinTick, p, j;
+    int agree;
+
+    seedFound = 0;
+    at = R_NEVER;
+    coinTick = R_NEVER;
+    for (seed = 1; seed <= 64 && !seedFound; ++seed) {
+      unsigned long sz;
+
+      sz = bkr94acsSz(3, 0, 12);
+      for (p = 0; p < 4; ++p) {
+        processes[p] = calloc(1, sz);
+        obsInit(&obs[p]);
+      }
+      if (!processes[0] || !processes[1] || !processes[2] || !processes[3])
+        break;
+      for (p = 0; p < 4; ++p) {
+        bkr94acsInit(processes[p], 3, 1, 0, 12, (unsigned char)p, rCoinFn, &coins[p], 1);
+      }
+      at = rDrive(processes, obs, coins, seed, Delays, 0, 400, &coinTick, revealed);
+      if (at != R_NEVER && coinTick != R_NEVER) {
+        seedFound = seed;
+        break;
+      }
+      freeCluster(processes, 4);
+    }
+    CHECK(seedFound != 0, "R1: a seed reaches the coin and completes");
+    if (seedFound) {
+      agree = 1;
+      for (p = 0; p < 4; ++p) {
+        cnt[p] = bkr94acsSubset(processes[p], sub[p]);
+        CHECK(processes[p]->complete, "R1: every process completes");
+        CHECK(coins[p].calls == 1 && coins[p].instance == 3 && coins[p].phase == 0,
+              "R1: one toss at every process, BA 3's, in phase 0");
+        CHECK(!obs[p].exhaustedCount[3], "R1: BA 3 did not exhaust");
+        CHECK(revealed[p] >= 1, "R1: every process revealed, the late ones after completion");
+        CHECK(obs[p].baDecidedCount[3] == 1, "R1: BA 3 decided once, the late reveals changed nothing");
+        CHECK(bkr94acsBaHeld(processes[p], 3) == 0, "R1: no hold left at the end");
+        if (cnt[p] != cnt[0])
+          agree = 0;
+        else
+          for (j = 0; j < cnt[p]; ++j)
+            if (sub[p][j] != sub[0][j])
+              agree = 0;
+      }
+      CHECK(agree, "R1: the subsets agree");
+      for (p = 1; p < 4; ++p)
+        CHECK(bkr94acsBaDecision(processes[p], 3) == bkr94acsBaDecision(processes[0], 3),
+              "R1: BA 3 decided the same value everywhere");
+      printf("      R1: seed %u, coin reached at tick %u, all complete at tick %u,"
+             " BA 3 = %u, reveals %u/%u/%u/%u under delays 0/1/3/7\n",
+             seedFound, coinTick, at, (unsigned)bkr94acsBaDecision(processes[0], 3),
+             revealed[0], revealed[1], revealed[2], revealed[3]);
+      freeCluster(processes, 4);
+    }
+
+    /* ------------------------------------------------------------ */
+    BANNER("R2: never releasing plus one crash after the coin blocks the phase");
+    /* ------------------------------------------------------------ */
+    if (seedFound) {
+      static unsigned int Never0[4] = { R_NEVER, 0, 0, 0 };
+      unsigned long sz;
+
+      sz = bkr94acsSz(3, 0, 12);
+      for (p = 0; p < 4; ++p) {
+        processes[p] = calloc(1, sz);
+        obsInit(&obs[p]);
+        bkr94acsInit(processes[p], 3, 1, 0, 12, (unsigned char)p, rCoinFn, &coins[p], 1);
+      }
+      at = rDrive(processes, obs, coins, seedFound, Never0, 1, 400, &coinTick, revealed);
+      CHECK(coinTick != R_NEVER, "R2: the same seed reaches the coin");
+      CHECK(coins[0].instance == 3 && coins[0].phase == 0, "R2: the crash lands after phase 0's toss");
+      CHECK(at == R_NEVER, "R2: no live process completes");
+      for (p = 0; p < 4; ++p) {
+        if (p == 1)
+          continue;
+        CHECK(!processes[p]->complete, "R2: process not complete at the cap");
+        CHECK(bkr94acsBaDecision(processes[p], 3) == 0xFF,
+              "R2: BA 3 stays undecided at every live process");
+      }
+      CHECK(bkr94acsBaHeld(processes[0], 3) == 1,
+            "R2: process 0 still holds exactly the phase-opening INITIAL the block sits on");
+      printf("      R2: seed %u, coin at tick %u, process 1 silent from there; at the cap"
+             " BA 3 = %u/-/%u/%u, holds at 0 = %u\n",
+             seedFound, coinTick, (unsigned)bkr94acsBaDecision(processes[0], 3),
+             (unsigned)bkr94acsBaDecision(processes[2], 3),
+             (unsigned)bkr94acsBaDecision(processes[3], 3),
+             bkr94acsBaHeld(processes[0], 3));
+      freeCluster(processes, 4);
+    }
+
+    /* ------------------------------------------------------------ */
+    BANNER("R3: never releasing alone costs nothing at t = 1");
+    /* ------------------------------------------------------------ */
+    if (seedFound) {
+      static unsigned int Never0[4] = { R_NEVER, 0, 0, 0 };
+      unsigned long sz;
+
+      sz = bkr94acsSz(3, 0, 12);
+      for (p = 0; p < 4; ++p) {
+        processes[p] = calloc(1, sz);
+        obsInit(&obs[p]);
+        bkr94acsInit(processes[p], 3, 1, 0, 12, (unsigned char)p, rCoinFn, &coins[p], 1);
+      }
+      at = rDrive(processes, obs, coins, seedFound, Never0, 0, 400, &coinTick, revealed);
+      CHECK(at != R_NEVER, "R3: every process completes");
+      agree = 1;
+      for (p = 0; p < 4; ++p) {
+        cnt[p] = bkr94acsSubset(processes[p], sub[p]);
+        if (cnt[p] != cnt[0])
+          agree = 0;
+        else
+          for (j = 0; j < cnt[p]; ++j)
+            if (sub[p][j] != sub[0][j])
+              agree = 0;
+      }
+      CHECK(agree, "R3: the subsets agree");
+      CHECK(bkr94acsBaHeld(processes[0], 3) >= 1, "R3: process 0 never revealed");
+      printf("      R3: seed %u, complete at tick %u with process 0's hold unreleased\n",
+             seedFound, at);
       freeCluster(processes, 4);
     }
   }

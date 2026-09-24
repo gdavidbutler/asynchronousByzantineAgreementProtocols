@@ -4068,6 +4068,59 @@ testFig1Bpr(
 /* Bit test on a returned suppress mask (process j skipped iff bit j set). */
 
 /*
+ * The hold: an initiator whose (initial, v) is withheld
+ * (bracha87Fig1Hold) retries nothing until released, and a Byzantine
+ * echo for the unsent broadcast neither reopens the retry nor
+ * overwrites the stored value.
+ */
+static void
+testFig1Hold(
+  void
+){
+  struct bracha87Fig1 *b;
+  unsigned long sz;
+  unsigned char out[3];
+  unsigned char v[1];
+  unsigned int n;
+
+  printf("\n  Fig1 hold (a withheld initiator):\n");
+  sz = bracha87Fig1Sz(3, 0);
+  if (!(b = calloc(1, sz))) {
+    check("testFig1Hold alloc", 0);
+    return;
+  }
+  bracha87Fig1Init(b, 3, 1, 0);
+
+  check("hold refused on a non-initiator", bracha87Fig1Hold(b) == 0);
+  check("release on an unheld instance returns 0", bracha87Fig1Release(b) == 0);
+  v[0] = 1;
+  bracha87Fig1Initiator(b, v);
+  n = bracha87Fig1Bpr(b, out);
+  check("an initiator retries INITIAL", n == 1 && out[0] == BRACHA87_INITIAL_ALL);
+  check("hold honored on an initiator", bracha87Fig1Hold(b) == 1);
+  check("held flag set", (b->flags & BRACHA87_F1_HELD) != 0);
+  n = bracha87Fig1Bpr(b, out);
+  check("no INITIAL retry while held", n == 0);
+  v[0] = 0;
+  n = bracha87Fig1Input(b, BRACHA87_ECHO, 1, v, 0, 1, out);
+  v[0] = 1;
+  /* one echo is below every threshold, held or not: this is the
+   * setup for the two checks after it, not a test of the hold */
+  check("a lone stray echo fires nothing", n == 0);
+  check("the stored value survives a stray echo of another value",
+        bracha87Fig1Value(b) && bracha87Fig1Value(b)[0] == 1);
+  n = bracha87Fig1Bpr(b, out);
+  check("still no retry after a stray echo while held", n == 0);
+  check("hold is idempotent", bracha87Fig1Hold(b) == 1);
+  check("release returns 1", bracha87Fig1Release(b) == 1);
+  check("release is once", bracha87Fig1Release(b) == 0);
+  check("held flag clear after release", (b->flags & BRACHA87_F1_HELD) == 0);
+  n = bracha87Fig1Bpr(b, out);
+  check("INITIAL retry resumes after release", n == 1 && out[0] == BRACHA87_INITIAL_ALL);
+  free(b);
+}
+
+/*
  * Per-process BPR suppression: bracha87Fig1Skip masks +
  * bracha87Fig1ProcessAccepted + the all-accepted READY quiescence gate.
  *
@@ -5587,6 +5640,7 @@ main(
   testPostDecideMultiPhase();
   testFig1ValueSwitch();
   testFig1Bpr();
+  testFig1Hold();
   testFig1SkipAccept();
   testFig1ResendReceived();
   testFig1Annot();

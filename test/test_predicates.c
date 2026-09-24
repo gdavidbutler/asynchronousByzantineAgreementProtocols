@@ -702,16 +702,16 @@ testCascadeCorrespondence(void) {
  * The sites and their feeds are read off bracha87.c and bkr94acs.c.
  */
 
-/* bracha87Fig1Rules.c: the twelve inputs in bridge order, eight
+/* bracha87Fig1Rules.c: the thirteen inputs in bridge order, eight
  * outputs.  Evaluated by the snippet itself. */
-#define F1_IN 12
+#define F1_IN 13
 #define F1_OUT 8
 static const unsigned char F1Card[F1_IN] = {
-  3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2
+  3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2
 };
 static const char *F1InName[F1_IN] = {
   "type", "haveEchoed", "haveSentReady", "ecGtHalfNT", "rdGeTPlus1",
-  "rdGe2TPlus1", "haveAccepted", "amInitiator", "allEchoed",
+  "rdGe2TPlus1", "haveAccepted", "amInitiator", "held", "allEchoed",
   "readyMaskFull", "annAccepted", "annReceived"
 };
 static const char *F1OutName[F1_OUT] = {
@@ -729,6 +729,7 @@ fig1Eval(const unsigned char *in, unsigned char *o) {
   unsigned char rdGe2TPlus1;
   unsigned char haveAccepted;
   unsigned char amInitiator;
+  unsigned char held;
   unsigned char allEchoed;
   unsigned char readyMaskFull;
   unsigned char annAccepted;
@@ -751,10 +752,11 @@ fig1Eval(const unsigned char *in, unsigned char *o) {
   rdGe2TPlus1   = in[5];
   haveAccepted  = in[6];
   amInitiator   = in[7];
-  allEchoed     = in[8];
-  readyMaskFull = in[9];
-  annAccepted   = in[10];
-  annReceived   = in[11];
+  held          = in[8];
+  allEchoed     = in[9];
+  readyMaskFull = in[10];
+  annAccepted   = in[11];
+  annReceived   = in[12];
   sendEcho = sendReady = acceptV = 0xAA;
   retryInitial = retryEcho = retryReady = 0xAA;
   recordSender = armSender = 0xAA;
@@ -916,41 +918,41 @@ siteIndependence(const char *what, unsigned int nIn, unsigned int nOut,
 
 static void
 testSiteIndependence(void) {
-  /* bracha87.c: Input feeds the three retire inputs 0 and, on each
+  /* bracha87.c: Input feeds the three retire inputs and the hold 0 and, on each
    * kind of message, the thresholds of the counts that kind cannot
    * fire 0 (ec is computed on the echo branch, rd on the ready
    * branch, neither on initial); it reads the paper and annotation
    * outputs.  Bpr feeds kind (initial, v), the thresholds 0 and the
    * annotations (0, 1), and reads the three retries. */
   static const unsigned char InputFiat[F1_IN] = {
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0xFF
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0xFF, 0xFF
   };
   static const unsigned char InitialFiat[F1_IN] = {
-    0xFF, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0, 0, 0, 0xFF, 0xFF
+    0xFF, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0, 0, 0, 0, 0xFF, 0xFF
   };
   static const unsigned char EchoFiat[F1_IN] = {
-    0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0xFF, 0, 0, 0, 0xFF, 0xFF
+    0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0xFF, 0, 0, 0, 0, 0xFF, 0xFF
   };
   static const unsigned char ReadyFiat[F1_IN] = {
-    0xFF, 0xFF, 0xFF, 0, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0xFF
+    0xFF, 0xFF, 0xFF, 0, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0xFF, 0xFF
   };
   static const unsigned char InitialPin[F1_IN] = {
-    0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+    0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
   };
   static const unsigned char EchoPin[F1_IN] = {
-    1, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+    1, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
   };
   static const unsigned char ReadyPin[F1_IN] = {
-    2, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+    2, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
   };
   static const unsigned char NoPinF1[F1_IN] = {
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
   };
   static const unsigned char InputReads[F1_OUT] = {
     1, 1, 1, 0, 0, 0, 1, 1
   };
   static const unsigned char BprFiat[F1_IN] = {
-    0, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 1
+    0, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 1
   };
   static const unsigned char BprReads[F1_OUT] = {
     0, 0, 0, 1, 1, 1, 0, 0

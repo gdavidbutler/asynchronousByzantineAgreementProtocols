@@ -58,11 +58,11 @@
  * buffer.  bracha87Fig4 begins with function-pointer fields, and
  * bracha87Fig1 begins with 2-byte shorts; rounding up to pointer
  * alignment subsumes both.  The struct bkr94acs header is 8 bytes --
- * six named bytes plus the explicit pad[2] the struct declares for
+ * seven named bytes plus the explicit pad[1] the struct declares for
  * exactly this purpose -- so a->data lands pointer-aligned; the
  * BKR94ACS_ALIGN_UP applications below pad each carved sub-region up
  * to the same boundary.  A re-implementation must reproduce the pad;
- * without it data[] starts at offset 6.
+ * without it data[] starts at offset 7.
  */
 #define BKR94ACS_ALIGN_P  ((unsigned long)sizeof (void *))
 #define BKR94ACS_ALIGN_UP(x)  (((unsigned long)(x) + BKR94ACS_ALIGN_P - 1) \
@@ -277,6 +277,7 @@ bkr94acsInit(
  ,unsigned char self
  ,bracha87CoinFn coin
  ,void *coinClosure
+ ,unsigned char hold
 ){
   unsigned int N;
   unsigned int i;
@@ -301,6 +302,8 @@ bkr94acsInit(
     return (0);
   if ((unsigned int)n + 1 <= 3u * t)
     return (0);
+  if (hold > 1)
+    return (0);
 
   memset(a, 0, bkr94acsSz(n, vLen, maxPhases));
   a->n = n;
@@ -308,6 +311,7 @@ bkr94acsInit(
   a->vLen = vLen;
   a->maxPhases = maxPhases;
   a->self = self;
+  a->hold = hold;
 
   N = n + 1;
 
@@ -1109,6 +1113,71 @@ bkr94acsFanout(
   return (nact);
 }
 
+unsigned int
+bkr94acsBaReveal(
+  struct bkr94acs *a
+ ,unsigned char process
+ ,struct bkr94acsAct *out
+){
+  struct bracha87Fig1 *f1;
+  const unsigned char *cv;
+  unsigned int mr;
+  unsigned int last;
+  unsigned int r;
+
+  if (!a || process > a->n || !out)
+    return (0);
+  mr = maxRounds(a);
+  last = bkr94acsNextRound(a)[process];
+  if (last >= mr)
+    last = mr - 1;
+  /* Only phase-opening rounds are ever held (bkr94acsTurn), and a
+   * second can be held before the first is released; the oldest
+   * goes first, one per call. */
+  for (r = BRACHA87_ROUNDS_PER_PHASE; r <= last; r += BRACHA87_ROUNDS_PER_PHASE) {
+    f1 = baF1(a, process, r, a->self);
+    if (!bracha87Fig1Release(f1))
+      continue;
+    if (!(cv = bracha87Fig1Value(f1)))
+      return (0);
+    out->value = 0;
+    out->skip = 0;
+    out->received = 0;
+    out->act = BKR94ACS_ACT_BA_SEND;
+    out->process = process;
+    out->round = r;
+    out->type = BRACHA87_INITIAL;
+    out->baValue = cv[0];
+    out->initiator = a->self;
+    out->accepted = 0;
+    return (1);
+  }
+  return (0);
+}
+
+unsigned int
+bkr94acsBaHeld(
+  const struct bkr94acs *a
+ ,unsigned char process
+){
+  unsigned int mr;
+  unsigned int last;
+  unsigned int r;
+  unsigned int held;
+
+  if (!a || process > a->n)
+    return (0);
+  mr = maxRounds(a);
+  last = bkr94acsNextRound(a)[process];
+  if (last >= mr)
+    last = mr - 1;
+  held = 0;
+  for (r = BRACHA87_ROUNDS_PER_PHASE; r <= last; r += BRACHA87_ROUNDS_PER_PHASE)
+    if (baF1(a, process, r, a->self)->flags & BRACHA87_F1_HELD)
+      ++held;
+  return (held);
+}
+
 unsigned char
 bkr94acsTurnDuty(
   const struct bkr94acs *a
@@ -1270,11 +1339,24 @@ bkr94acsTurn(
      * round-0 case in bkr94acsEnter.
      */
     {
+      struct bracha87Fig1 *f1;
       unsigned char binary;
 
       binary = f4->value;
-      bracha87Fig1Initiator(baF1(a, process, *nextRound, a->self),
-                         &binary);
+      f1 = baF1(a, process, *nextRound, a->self);
+      bracha87Fig1Initiator(f1, &binary);
+      /*
+       * A phase-opening round (3i, i >= 1) carries this process's
+       * step-3 outcome -- its coin, when case (iii) fired.  Under
+       * bkr94acsInit's hold it is HELD: no act here and no BPR retry until
+       * bkr94acsBaReveal releases it, so the caller decides when the
+       * coin goes out.  The other rounds carry the majority and the
+       * (d, v), which reveal no coin, and go out now.
+       */
+      if (a->hold && *nextRound % BRACHA87_ROUNDS_PER_PHASE == 0) {
+        bracha87Fig1Hold(f1);
+        return (nact);
+      }
     }
 
     out[nact].value = 0;

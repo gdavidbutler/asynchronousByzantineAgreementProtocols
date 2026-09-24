@@ -299,6 +299,26 @@ bracha87Fig1Initiator(
 }
 
 unsigned int
+bracha87Fig1Hold(
+  struct bracha87Fig1 *b
+){
+  if (!b || !(b->flags & BRACHA87_F1_INITIATOR))
+    return (0);
+  b->flags |= BRACHA87_F1_HELD;
+  return (1);
+}
+
+unsigned int
+bracha87Fig1Release(
+  struct bracha87Fig1 *b
+){
+  if (!b || !(b->flags & BRACHA87_F1_HELD))
+    return (0);
+  b->flags &= ~BRACHA87_F1_HELD;
+  return (1);
+}
+
+unsigned int
 bracha87Fig1Input(
   struct bracha87Fig1 *b
  ,unsigned char type
@@ -318,6 +338,7 @@ bracha87Fig1Input(
   unsigned char rdGeTPlus1;
   unsigned char rdGe2TPlus1;
   unsigned char amInitiator;
+  unsigned char held;
   unsigned char allEchoed;
   unsigned char readyMaskFull;
   unsigned char annAccepted;
@@ -369,6 +390,7 @@ bracha87Fig1Input(
    * nothing it reads depends on these (bracha87Fig1.dtc, one
    * dispatch, two entry points; test_predicates enumerates it). */
   amInitiator   = 0;
+  held          = 0;
   allEchoed     = 0;
   readyMaskFull = 0;
   annAccepted   = accepted ? 1 : 0;
@@ -437,6 +459,7 @@ bracha87Fig1Bpr(
   unsigned char rdGeTPlus1;
   unsigned char rdGe2TPlus1;
   unsigned char amInitiator;
+  unsigned char held;
   unsigned char allEchoed;
   unsigned char readyMaskFull;
   unsigned char annAccepted;
@@ -520,6 +543,7 @@ bracha87Fig1Bpr(
   rdGeTPlus1    = 0;
   rdGe2TPlus1   = 0;
   amInitiator   = (b->flags & BRACHA87_F1_INITIATOR) ? 1 : 0;
+  held          = (b->flags & BRACHA87_F1_HELD) ? 1 : 0;
   allEchoed     = fig1FromCnt(F1_ECFROM(b), B_N(b)) >= B_N(b);
   annAccepted   = 0;
   annReceived   = 1;

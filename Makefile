@@ -119,10 +119,35 @@ strategies: test_schedules
 mutants: test/mutants.sh
 	sh test/mutants.sh
 
+# The phase-budget instrument: drives the library's own Fig 4 with a
+# local fair coin under the papers' adversary and under a deployment's
+# levers, and prints the per-phase convergence beside its closed form
+# and the maxPhases each implies over the library's range.  An
+# instrument, not a check -- it reports a budget, never a pass -- and
+# minutes per run, so deliberate like the three above.  Arguments:
+# trials per cell (200 across every arm is ten minutes here; the
+# adversary arms spend tens of phases per trial) and an arm index to
+# run alone (0..10; the file's header names them).
+measure_phases: test/measure_phases.c bracha87.o bracha87.h
+	$(CC) $(CFLAGS) -I. -o $@ test/measure_phases.c bracha87.o -lm
+
+measure: measure_phases
+	./measure_phases 200
+
+# The release-discipline drift model: times only, no protocol.  Whether
+# a discipline holds the spread of correct step-3 turns, and what
+# fraction of correct processes a coin is revealed to before their
+# turn fires (the exposure the K arm above prices).  Minutes per run.
+measure_drift: test/measure_drift.c
+	$(CC) $(CFLAGS) -I. -o $@ test/measure_drift.c
+
+drift: measure_drift
+	./measure_drift 400
+
 clean:
 	rm -f bracha87.o bkr94acs.o
 	rm -f example_bracha87Fig1 example_bkr94acs
-	rm -f test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules test_ingress test_ceiling
+	rm -f test_bracha87 test_bkr94acs test_predicates test_bracha87_blackbox test_bkr94acs_blackbox test_schedules test_ingress test_ceiling measure_phases measure_drift
 	rm -rf mutantWork
 
 # the .psu are dtc's intermediate output, left behind by `make rules`;

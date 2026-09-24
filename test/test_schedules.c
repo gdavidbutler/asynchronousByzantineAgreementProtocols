@@ -538,6 +538,28 @@
 #include "bracha87.h"
 #include "bkr94acs.h"
 
+/*
+ * A turn followed at once by the reveal of anything it held -- the
+ * pair drain bkr94acs.h gives a holding caller (at bkr94acsTurn).
+ * Under hold 0 nothing is held and the reveal adds nothing, and a
+ * turn writes at most three acts; under hold 1 revealing at once is
+ * the papers' model, and a holding turn writes at most two and the
+ * reveal one.  Either way three entries hold the pair.  This suite
+ * runs hold 0 only; the hold is under test in test_bkr94acs's reveal
+ * arms and test_bkr94acs_blackbox Section R.
+ */
+static unsigned int
+turnRev(
+  struct bkr94acs *a
+ ,unsigned char p
+ ,struct bkr94acsAct *out
+){
+  unsigned int n;
+
+  n = bkr94acsTurn(a, p, out);
+  return (n + bkr94acsBaReveal(a, p, out + n));
+}
+
 /*--------------------------------------------------------------------------*/
 /*  Fixed limits                                                            */
 /*--------------------------------------------------------------------------*/
@@ -1916,7 +1938,7 @@ explore(
        * on every attempt and the turn fires whenever its duty is not
        * HELD -- an unconditional call here is firing-identical. */
       PreDec = bkr94acsBaDecision(Acsp, (unsigned char)q);
-      NActs = bkr94acsTurn(Acsp, (unsigned char)q, Acts);
+      NActs = turnRev(Acsp, (unsigned char)q, Acts);
       if (NActs > 3) {
         FailMsg = "bkr94acsTurn output more than 3 acts";
         goto fail;
@@ -2859,7 +2881,7 @@ main(
       else
         bkr94acsInit((struct bkr94acs *)Img[i], (unsigned char)(N - 1),
                      (unsigned char)T, 0, Cfg->maxPhases,
-                     (unsigned char)i, demoCoin, 0);
+                     (unsigned char)i, demoCoin, 0, 0);
       bracha87RetryInit(&Cursor[i]);
       Allow[i] = (i == Adv) ? 0 : Cfg->k;
     }

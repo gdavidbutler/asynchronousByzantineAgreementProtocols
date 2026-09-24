@@ -2181,6 +2181,229 @@ staggers a decision -- the multi-phase arms decide in lockstep too.
     }
 #END
 
+#MUTANT M75
+#FAMILY BPR -- the hold: the INITIAL retry ignores it
+#FILE bracha87.c
+#ORACLE test_bracha87
+#LABEL no INITIAL retry while held
+#EXPECT KILLED
+#WHY
+The hold (bracha87Fig1Hold) is the initiator withholding its own
+(initial, v) until the caller releases it -- for Fig 4, until every
+correct step-3 turn of the phase has fired, so no coin reaches a
+faulty process still able to force one.  The retry (initial, v) row
+reads "held" and answers no; this mutation feeds the row "no" from
+state, so the BPR sweep re-sends what the turn withheld and the hold
+protects nothing.  The Fig 1 contract arm ticks a held initiator and
+requires silence -- red on that label.
+#ANCHOR
+  held          = (b->flags & BRACHA87_F1_HELD) ? 1 : 0;
+#WITH
+  held          = 0;
+#END
+
+#MUTANT M76
+#FAMILY composition -- the hold: the turn releases where it should hold
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs
+#LABEL a phase-opening turn emits no INITIAL
+#EXPECT KILLED
+#WHY
+The one-token mistake at the seam: under the hold the phase-opening
+Fig 1 is released instead of held, and the turn goes on to return its
+BA_SEND.  The coin is out in the same tick the turn fired, the sweep
+retries it as any other INITIAL, and bkr94acsBaReveal never finds
+anything to release: the reveal seam is decoration and the delivery
+obligation (README, What the caller provides) protects nothing.  The
+reveal arm counts the INITIALs the turns emit per round and requires
+none for the round that opens a phase -- red on that label.  (The
+other half-implementation, holding the Fig 1 and returning the act
+anyway, is not catalogued: under it a turn and its immediate reveal
+emit four acts into the three-entry arrays every test declares from
+the turn's bound, and the battery dies instead of reddening.)
+#ANCHOR
+      if (a->hold && *nextRound % BRACHA87_ROUNDS_PER_PHASE == 0) {
+        bracha87Fig1Hold(f1);
+        return (nact);
+      }
+#WITH
+      if (a->hold && *nextRound % BRACHA87_ROUNDS_PER_PHASE == 0)
+        bracha87Fig1Release(f1);
+#END
+
+#MUTANT M77
+#FAMILY composition -- the hold: the reveal reads the machine, not the slot
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs
+#LABEL the reveal carries the stored value, not the machine's current one
+#EXPECT KILLED
+#WHY
+The value a held INITIAL carries is the one the turn stored at the
+hold (bracha87Fig1Initiator into the Fig 1's value slot), and the
+machine moves on while it is held: the next rounds turn on the
+others' INITIALs and write the majority and the (d, v) into
+fig4->value.  A reveal that reads the machine broadcasts the wrong
+round's value under the held round's number -- a step-2 (d, v) as a
+step-1 message, which Fig 3 rejects everywhere -- and a caller that
+reveals at once never sees it, since nothing has moved yet.  The
+reveal arm holds round 3 across round 4's turn and requires the
+stored 1 where the machine now holds (d, 1) -- red on that label.
+#ANCHOR
+    out->baValue = cv[0];
+    out->initiator = a->self;
+    out->accepted = 0;
+    return (1);
+#WITH
+    out->baValue = baF4(a, process)->value;
+    out->initiator = a->self;
+    out->accepted = 0;
+    return (1);
+#END
+
+#MUTANT M78
+#FAMILY composition -- the hold: the turn holds whatever the deployment chose
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs
+#LABEL without the hold a phase-opening turn emits its INITIAL
+#EXPECT KILLED
+#WHY
+The hold is a local-coin deployment's choice, made at bkr94acsInit,
+and a global-coin deployment -- every caller that passes hold 0 --
+owes no reveal.  This mutation drops the flag from the turn's gate,
+so every phase-opening INITIAL is held at every caller: one that
+never reveals goes silent at every phase-opening round of every BA,
+which is the always-on hold the choice exists to retire.  The reveal
+arm's hold-0 half drives phase 0 through its step-3 turn and requires
+the round-3 INITIAL out of that turn -- red on that label.
+#ANCHOR
+      if (a->hold && *nextRound % BRACHA87_ROUNDS_PER_PHASE == 0) {
+#WITH
+      if (*nextRound % BRACHA87_ROUNDS_PER_PHASE == 0) {
+#END
+
+#MUTANT M79
+#FAMILY composition -- the hold: Init drops the choice
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs
+#LABEL a phase-opening turn emits no INITIAL
+#EXPECT KILLED
+#WHY
+The other direction of M78: Init accepts hold 1 and stores 0, so a
+local-coin deployment that asked for the hold gets its coin sent at
+the turn, and bkr94acsBaReveal finds nothing to release -- the
+caller's release discipline protects nothing and nothing says so.
+The reveal arm initializes with hold 1 and requires no round-3
+INITIAL from the step-3 turn that closes phase 0 -- red on that
+label.
+#ANCHOR
+  a->hold = hold;
+#WITH
+  a->hold = 0;
+#END
+
+#MUTANT M80
+#FAMILY composition -- the hold: the reveal walks past the round space
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs
+#LABEL a reveal past the last BA's round space writes nothing past the instance
+#EXPECT KILLED
+#WHY
+The reveal walks the phase-opening rounds 3, 6, ... up to the BA's
+next round.  Once the round space is spent that next round is
+3 x maxPhases, itself a multiple of 3 and one past the last Fig 1,
+so a clamp off by one (> for >=) lets it through and the walk names
+the Fig 1 "at" that round: self x (one Fig 1) past the start of the
+BA's own Fig 4 -- inside it while the offset is short of it (always at
+self = 0), otherwise in the next BA's round-0 Fig 1s, or past the end
+of the allocation for the last BA -- and bracha87Fig1Release clears
+bit 0x10 wherever the byte there carries it.  Every BA past its round
+space reaches it, at hold 0 too: the walk runs whatever the choice,
+and only on a correct machine does it find nothing to release.
+Where the stray byte is a pointer's, the next validation can jump
+through it (a SIGBUS in fig4Nfn, address-dependent), so the clamp
+arms run FIRST in test_bkr94acs.  The last-BA arm spends the last BA
+at the last process's self in an instance followed by a 0xFF tail and
+compares instance and tail across a reveal -- red on that label,
+whatever the addresses.
+#ANCHOR
+  if (last >= mr)
+    last = mr - 1;
+  /* Only phase-opening rounds are ever held (bkr94acsTurn), and a
+#WITH
+  if (last > mr)
+    last = mr - 1;
+  /* Only phase-opening rounds are ever held (bkr94acsTurn), and a
+#END
+
+#MUTANT M81
+#FAMILY composition -- the hold: the held count reads past the round space
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs
+#LABEL a spent round space holds nothing
+#EXPECT KILLED
+#WHY
+M80's twin in bkr94acsBaHeld: the count walks the same rounds to the
+same bound, so with the same off-by-one clamp it reads a stray byte
+as Fig 1 flags -- past the allocation for the last BA at a large
+enough self -- and reports
+a hold no turn made: a caller that parks on the count never parks,
+and one that drains reveals on it spins.  Both clamp arms require a
+count of 0 from a spent BA whose stray byte carries the bit -- red on
+that label.
+#ANCHOR
+  if (last >= mr)
+    last = mr - 1;
+  held = 0;
+#WITH
+  if (last > mr)
+    last = mr - 1;
+  held = 0;
+#END
+
+#MUTANT M82
+#FAMILY composition -- the hold: Init takes any hold byte
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs_blackbox
+#LABEL Init refuses hold other than 0 or 1
+#EXPECT KILLED
+#WHY
+The hold is a boolean the deployment chooses, and Init refuses what
+is not one, as it refuses every other out-of-domain argument: a
+caller that passes a stray byte learns it at Init instead of running
+a machine whose mode it did not state.  With the refusal gone the
+machine initializes and holds (any non-zero reads as 1).  The
+blackbox Init probes pass 2 and require the refusal -- red on that
+label.
+#ANCHOR
+  if (hold > 1)
+    return (0);
+#WITH
+#END
+
+#MUTANT M83
+#FAMILY composition -- the hold: a reveal ends the choice
+#FILE bkr94acs.c
+#ORACLE test_bkr94acs
+#LABEL after a reveal the next phase-opening INITIAL is held too
+#EXPECT KILLED
+#WHY
+The hold is the deployment's for the life of the instance.  A reveal
+that clears it releases the round it names and then lets every later
+phase-opening INITIAL out at its turn, so the coin of every phase
+after the first reveal goes out uncovered -- and a caller whose
+discipline releases on time never sees a difference until a coin
+phase follows one.  The reveal arm that releases round 3 at once and
+then requires round 6 held is the only unit arm that reveals before a
+second hold -- red on that label (Section R reddens too).
+#ANCHOR
+    if (!bracha87Fig1Release(f1))
+      continue;
+#WITH
+    if (!bracha87Fig1Release(f1))
+      continue;
+    a->hold = 0;
+#END
+
 CATALOGUE_END
 
 # ---------------------------------------------------------------------

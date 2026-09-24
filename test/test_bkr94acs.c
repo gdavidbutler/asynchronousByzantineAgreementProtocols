@@ -13,19 +13,43 @@
  *   Ordering   -- deterministic sort produces identical order at each process
  */
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "bkr94acs.h"
 
-/* Every turn drain here is `while ((n = bkr94acsTurn(...)) > 0 &&
+/* Every turn drain here is `while ((n = turnRev(...)) > 0 &&
  * turnDrained())`: a drain ends because the turn advances or refuses,
  * and a machine that emitted acts without advancing would spin it.
  * The turn calls that returned acts inside a drain are counted against
  * a ceiling no correct run approaches (this suite takes about 73,000);
  * abort past it, announced, never a silent hang. */
 #define TURN_CALL_CAP (1u << 24)
+
+/* bytes of 0xFF past a clamp arm's instance: more than one Fig 1 */
+#define CLAMP_TAIL 256
 static unsigned long TurnCalls = 0;
+
+/*
+ * A turn followed at once by the reveal of anything it held -- the
+ * pair drain bkr94acs.h gives a holding caller (at bkr94acsTurn).
+ * Under hold 0 nothing is held and the reveal adds nothing, and a
+ * turn writes at most three acts; under hold 1 revealing at once is
+ * the papers' model, and a holding turn writes at most two and the
+ * reveal one.  Either way three entries hold the pair.
+ */
+static unsigned int
+turnRev(
+  struct bkr94acs *a
+ ,unsigned char p
+ ,struct bkr94acsAct *out
+){
+  unsigned int n;
+
+  n = bkr94acsTurn(a, p, out);
+  return (n + bkr94acsBaReveal(a, p, out + n));
+}
 
 static int
 turnDrained(
@@ -243,7 +267,7 @@ qTurns(
   unsigned int q;
 
   for (p = 0; p < n; ++p)
-    while ((nacts = bkr94acsTurn(st, (unsigned char)p, acts)) > 0 && turnDrained())
+    while ((nacts = turnRev(st, (unsigned char)p, acts)) > 0 && turnDrained())
       for (k = 0; k < nacts; ++k) {
         if (acts[k].act != BKR94ACS_ACT_BA_SEND)
           continue;
@@ -295,7 +319,7 @@ runAcs(
     }
     bkr94acsInit(processes[i], (unsigned char)(n - 1), (unsigned char)t,
                  (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i,
-                 testCoin, 0);
+                 testCoin, 0, 0);
   }
 
   qInit();
@@ -659,7 +683,7 @@ testValues(
     processes[i] = calloc(1, sz);
     bkr94acsInit(processes[i], (unsigned char)(n - 1), (unsigned char)t,
                  (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i,
-                 testCoin, 0);
+                 testCoin, 0, 0);
   }
 
   qInit();
@@ -919,7 +943,7 @@ testPostDecideContinuation(
     check("alloc bkr94acs instance", 0);
     return;
   }
-  bkr94acsInit(a, encN, t, 0, MAX_PHASES, 0, testCoin, 0);
+  bkr94acsInit(a, encN, t, 0, MAX_PHASES, 0, testCoin, 0, 0);
 
   N = (unsigned int)encN + 1;
 
@@ -976,7 +1000,7 @@ testPostDecideContinuation(
 
           (void)bkr94acsBaInput(a, 0, 0, initiator,
                                        type, ANNOT_NO_ARM, from, value, acts);
-          while ((nturn = bkr94acsTurn(a, 0, tacts)) > 0 && turnDrained())
+          while ((nturn = turnRev(a, 0, tacts)) > 0 && turnDrained())
             for (kk = 0; kk < nturn; ++kk) {
               /*
                * A post-decide BA_SEND with round > 0 proves the turn
@@ -1059,7 +1083,7 @@ testStepTwoTrigger(
     check("alloc bkr94acs instance", 0);
     return;
   }
-  bkr94acsInit(a, encN, t, 0, MAX_PHASES, 0, testCoin, 0);
+  bkr94acsInit(a, encN, t, 0, MAX_PHASES, 0, testCoin, 0, 0);
 
   enterZeroSeen = 0;
   enterOneSeen = 0;
@@ -1172,7 +1196,7 @@ testBpr(
   /* n=4, t=1, vLen=1, maxPhases=4, self=0 */
   sz = bkr94acsSz(3, 0, 4);
   a = calloc(1, sz);
-  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0, 0);
 
   /* Retry on a virgin instance: no sent state -> idle */
   n = bkr94acsRetryStep(a, &retry, out);
@@ -1296,7 +1320,7 @@ testBpr(
     for (p = 0; p < 4; ++p) {
       processes[p] = calloc(1, sz);
       bkr94acsInit(processes[p], 3, 1, 0, MAX_PHASES, (unsigned char)p,
-                   testCoin, 0);
+                   testCoin, 0, 0);
       bracha87RetryInit(&processRetry[p]);
     }
 
@@ -1477,7 +1501,7 @@ testBprCursorCoverage(
   sz = bkr94acsSz(3, 0, 4);
   for (p = 0; p < 4; ++p) {
     processes[p] = calloc(1, sz);
-    bkr94acsInit(processes[p], 3, 1, 0, 4, (unsigned char)p, testCoin, 0);
+    bkr94acsInit(processes[p], 3, 1, 0, 4, (unsigned char)p, testCoin, 0, 0);
   }
 
   /* Each process A-Casts; their A-Cast Fig1 (process = self) becomes
@@ -1567,7 +1591,7 @@ testAcastAllReadied(
     check("alloc bkr94acs instance", 0);
     return;
   }
-  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0, 0);
   val[0] = 1;
 
   check("AllReadied: NULL state -> 0", bkr94acsAcastAllReadied(0, 0) == 0);
@@ -1654,7 +1678,7 @@ testBprProcessGate(
 
   sz = bkr94acsSz(3, 0, 4);
   a = calloc(1, sz);
-  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0, 0);
   bracha87RetryInit(&retry);
 
   /* Both A-Cast Fig1s for processes 0 and 1 in ECHOED state.
@@ -1770,7 +1794,7 @@ testBaEnteredGetValid(
     check("testBaEnteredGetValid alloc", 0);
     return;
   }
-  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0, 0);
   val[0] = 1;
 
   check("BaEntered: NULL state -> 0", bkr94acsBaEntered(0, 0) == 0);
@@ -1832,7 +1856,7 @@ testBaEnteredGetValid(
     check("testBaEnteredGetValid alloc", 0);
     return;
   }
-  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);
+  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0, 0);
 
   /* Defensive guards touch neither array: prefill both with a
    * sentinel and require every byte back. */
@@ -1895,7 +1919,7 @@ testBaEnteredGetValid(
   /* Across a turn the answer is the NEXT round's set, so the count
    * is not monotone: 4 before, 0 after (round 1 has nothing yet). */
   before = bkr94acsBaGetValid(a, 0, senders, values);
-  nact = bkr94acsTurn(a, 0, out);
+  nact = turnRev(a, 0, out);
   check("BaGetValid: the MET turn fired", nact > 0);
   after = bkr94acsBaGetValid(a, 0, senders, values);
   check("BaGetValid: full round-0 sample before the turn", before == 4);
@@ -1933,7 +1957,7 @@ testBaEnteredGetValid(
     check("testBaEnteredGetValid alloc", 0);
     return;
   }
-  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
+  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0, 0);
   {
     struct bkr94acsAct tout[3];   /* bkr94acsTurn bound */
     unsigned int round;
@@ -1952,7 +1976,7 @@ testBaEnteredGetValid(
             bkr94acsBaInput(a, 0, round, b, BRACHA87_READY, ANNOT_NO_ARM, sender, v, out);
           else
             bkr94acsBaInput(a, 0, round, b, BRACHA87_INITIAL, ANNOT_NO_ARM, b, v, out);
-          while ((nact = bkr94acsTurn(a, 0, tout)) > 0 && turnDrained())
+          while ((nact = turnRev(a, 0, tout)) > 0 && turnDrained())
             for (k = 0; k < nact; ++k)
               if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
                 ++exhaustedSeen;
@@ -2008,7 +2032,7 @@ testFanoutFloorAboveEdge(
     check("testFanoutFloorAboveEdge alloc", 0);
     return;
   }
-  bkr94acsInit(a, 4, 1, 0, 4, 0, testCoin, 0);
+  bkr94acsInit(a, 4, 1, 0, 4, 0, testCoin, 0, 0);
 
   testWriteDecision(a, 0, 1);
   testWriteDecision(a, 1, 1);
@@ -2028,7 +2052,7 @@ testFanoutFloorAboveEdge(
     check("testFanoutFloorAboveEdge alloc (n=8)", 0);
     return;
   }
-  bkr94acsInit(a, 7, 2, 0, 4, 0, testCoin, 0);
+  bkr94acsInit(a, 7, 2, 0, 4, 0, testCoin, 0, 0);
   testWriteDecision(a, 0, 1);
   testWriteDecision(a, 1, 1);
   testWriteDecision(a, 2, 1);
@@ -2064,7 +2088,7 @@ testBprByzantineSilent(
   for (p = 0; p < 4; ++p) {
     processes[p] = calloc(1, sz);
     bkr94acsInit(processes[p], 3, 1, 0, MAX_PHASES, (unsigned char)p,
-                 testCoin, 0);
+                 testCoin, 0, 0);
     bracha87RetryInit(&processRetry[p]);
   }
 
@@ -2256,7 +2280,7 @@ runRetryOnlyE2e(
   for (p = 0; p < 4; ++p) {
     processes[p] = calloc(1, sz);
     bkr94acsInit(processes[p], 3, 1, 0, MAX_PHASES, (unsigned char)p,
-                 testCoin, 0);
+                 testCoin, 0, 0);
     bracha87RetryInit(&processRetry[p]);
   }
 
@@ -2463,7 +2487,7 @@ feedFig1Accept(
   /* INITIAL from initiator: process 0 echoes (Rule 1) */
   total += bkr94acsBaInput(a, process, round, initiator,
                                   BRACHA87_INITIAL, ANNOT_NO_ARM, initiator, value, out);
-  while ((n = bkr94acsTurn(a, process, tout)) > 0 && turnDrained())
+  while ((n = turnRev(a, process, tout)) > 0 && turnDrained())
     for (k = 0; k < n; ++k)
       if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED
        && tout[k].process == process)
@@ -2478,13 +2502,362 @@ feedFig1Accept(
   for (sender = 1; sender <= 3; ++sender) {
     total += bkr94acsBaInput(a, process, round, initiator,
                                     BRACHA87_READY, ANNOT_NO_ARM, sender, value, out);
-    while ((n = bkr94acsTurn(a, process, tout)) > 0 && turnDrained())
+    while ((n = turnRev(a, process, tout)) > 0 && turnDrained())
       for (k = 0; k < n; ++k)
         if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED
          && tout[k].process == process)
           ++*exhaustedSeen;
   }
   return (total);
+}
+
+/*
+ * The coin's reveal: under hold 1 a turn that opens a phase holds the
+ * round's own INITIAL (bkr94acsTurn emits no BA_SEND for it and the
+ * BPR sweep carries none), bkr94acsBaReveal releases it as exactly one
+ * BA_SEND, and with two held the older goes first.  Under hold 0 -- a
+ * global coin's deployment -- the same turn emits the INITIAL itself
+ * and nothing is ever held.  Turns
+ * here are bare bkr94acsTurn, not turnRev: the reveal is the thing
+ * under test.
+ */
+static void
+testReveal(
+  void
+){
+  unsigned long sz;
+  struct bkr94acs *a;
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
+  struct bkr94acsAct tout[3];
+  struct bracha87Retry retry;
+  const struct bracha87Fig1 *f1;
+  unsigned int round;
+  unsigned int b;
+  unsigned int n;
+  unsigned int k;
+  unsigned int sender;
+  unsigned int sentInitial[9];
+  unsigned int decided;
+  unsigned int sweepInitial3;
+  unsigned long sweeps;
+  unsigned char value;
+
+  printf("\n  Reveal (the held phase-opening INITIAL):\n");
+
+  sz = bkr94acsSz(3, 0, 3);   /* n=4, t=1, maxPhases=3: rounds 0..8 */
+  if (!(a = calloc(1, sz))) {
+    check("testReveal alloc", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 3, 0, testCoin, 0, 1);
+  bracha87RetryInit(&retry);
+  memset(sentInitial, 0, sizeof (sentInitial));
+  decided = 0;
+
+  /*
+   * Phase 0, every sender on 1: round 0 and 1 plain, round 2 the
+   * (d, 1) Fig 3 demands of a unanimous round 1.  Lemma 9 decides at
+   * round 2's turn, and that turn opens phase 1: round 3 is held.
+   * From round 3 on this process's own INITIAL is never fed back --
+   * it was not sent -- so the other three carry each round.
+   */
+  for (round = 0; round < 6; ++round) {
+    value = (round % BRACHA87_ROUNDS_PER_PHASE == 2) ? (1 | BRACHA87_D_FLAG) : 1;
+    for (b = (round >= 3) ? 1 : 0; b < 4; ++b) {
+      (void)bkr94acsBaInput(a, 0, (unsigned char)round, (unsigned char)b,
+                            BRACHA87_INITIAL, ANNOT_NO_ARM, (unsigned char)b, value, out);
+      for (sender = 1; sender <= 3; ++sender)
+        (void)bkr94acsBaInput(a, 0, (unsigned char)round, (unsigned char)b,
+                              BRACHA87_READY, ANNOT_NO_ARM, (unsigned char)sender, value, out);
+      while ((n = bkr94acsTurn(a, 0, tout)) > 0 && turnDrained())
+        for (k = 0; k < n; ++k) {
+          if (tout[k].act == BKR94ACS_ACT_BA_SEND && tout[k].type == BRACHA87_INITIAL
+           && tout[k].round < 9)
+            ++sentInitial[tout[k].round];
+          if (tout[k].act == BKR94ACS_ACT_BA_DECIDED)
+            ++decided;
+        }
+    }
+    if (round == 2) {
+      check("phase 0 decided at its step 3", decided == 1);
+      check("the turns emitted the majority and (d, v) INITIALs",
+            sentInitial[1] == 1 && sentInitial[2] == 1);
+      check("a phase-opening turn emits no INITIAL", sentInitial[3] == 0);
+      check("one INITIAL held", bkr94acsBaHeld(a, 0) == 1);
+      f1 = bkr94acsBaFig1(a, 0, 3, 0);
+      check("round 3's own Fig 1 is initiator and held",
+            f1 && (f1->flags & BRACHA87_F1_INITIATOR) && (f1->flags & BRACHA87_F1_HELD));
+
+      /* one full sweep: nothing for the held round */
+      sweepInitial3 = 0;
+      sweeps = retry.sweeps;
+      while (retry.sweeps == sweeps) {
+        n = bkr94acsRetryStep(a, &retry, out);
+        for (k = 0; k < n; ++k)
+          if (out[k].act == BKR94ACS_ACT_BA_SEND && out[k].type == BRACHA87_INITIAL
+           && out[k].round == 3 && out[k].initiator == 0)
+            ++sweepInitial3;
+        if (!n)
+          break;
+      }
+      check("the sweep carries no held INITIAL", sweepInitial3 == 0);
+    }
+  }
+
+  /* round 5's turn opened phase 2: round 6 is held beside round 3 */
+  check("the second phase-opening turn emits no INITIAL either", sentInitial[6] == 0);
+  f1 = bkr94acsBaFig1(a, 0, 6, 0);
+  check("round 6's own Fig 1 is held too", f1 && (f1->flags & BRACHA87_F1_HELD));
+  check("two INITIALs held", bkr94acsBaHeld(a, 0) == 2);
+
+  n = bkr94acsBaReveal(a, 0, out);
+  check("reveal releases one INITIAL, the oldest",
+        n == 1 && out[0].act == BKR94ACS_ACT_BA_SEND && out[0].type == BRACHA87_INITIAL
+        && out[0].round == 3 && out[0].initiator == 0 && out[0].baValue == 1);
+  f1 = bkr94acsBaFig1(a, 0, 3, 0);
+  check("round 3 no longer held", f1 && !(f1->flags & BRACHA87_F1_HELD));
+  n = bkr94acsBaReveal(a, 0, out);
+  check("the next reveal releases round 6",
+        n == 1 && out[0].round == 6 && out[0].type == BRACHA87_INITIAL);
+  check("a third reveal has nothing", bkr94acsBaReveal(a, 0, out) == 0);
+  check("nothing held after the reveals", bkr94acsBaHeld(a, 0) == 0);
+  check("held count refuses a null instance and a bad process",
+        bkr94acsBaHeld(0, 0) == 0 && bkr94acsBaHeld(a, 4) == 0);
+
+  /* the sweep now carries the revealed INITIAL like any other */
+  sweepInitial3 = 0;
+  sweeps = retry.sweeps;
+  while (retry.sweeps == sweeps) {
+    n = bkr94acsRetryStep(a, &retry, out);
+    for (k = 0; k < n; ++k)
+      if (out[k].act == BKR94ACS_ACT_BA_SEND && out[k].type == BRACHA87_INITIAL
+       && out[k].round == 3 && out[k].initiator == 0)
+        ++sweepInitial3;
+    if (!n)
+      break;
+  }
+  check("the sweep carries the revealed INITIAL", sweepInitial3 == 1);
+
+  check("reveal refuses a null instance", bkr94acsBaReveal(0, 0, out) == 0);
+  check("reveal refuses an out-of-range process", bkr94acsBaReveal(a, 4, out) == 0);
+  check("reveal refuses a null out", bkr94acsBaReveal(a, 0, 0) == 0);
+  free(a);
+
+  /*
+   * The last round of the space is never a phase-opening round (3M
+   * lies past rounds 0..3M-1), so a turn on the last phase's step 3
+   * holds nothing: at maxPhases 2 the round-5 turn opens no phase.
+   */
+  sz = bkr94acsSz(3, 0, 2);
+  if (!(a = calloc(1, sz))) {
+    check("testReveal alloc 2", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 2, 0, testCoin, 0, 1);
+  memset(sentInitial, 0, sizeof (sentInitial));
+  for (round = 0; round < 6; ++round) {
+    value = (round % BRACHA87_ROUNDS_PER_PHASE == 2) ? (1 | BRACHA87_D_FLAG) : 1;
+    for (b = (round >= 3) ? 1 : 0; b < 4; ++b) {
+      (void)bkr94acsBaInput(a, 0, (unsigned char)round, (unsigned char)b,
+                            BRACHA87_INITIAL, ANNOT_NO_ARM, (unsigned char)b, value, out);
+      for (sender = 1; sender <= 3; ++sender)
+        (void)bkr94acsBaInput(a, 0, (unsigned char)round, (unsigned char)b,
+                              BRACHA87_READY, ANNOT_NO_ARM, (unsigned char)sender, value, out);
+      while ((n = bkr94acsTurn(a, 0, tout)) > 0 && turnDrained())
+        for (k = 0; k < n; ++k)
+          if (tout[k].act == BKR94ACS_ACT_BA_SEND && tout[k].type == BRACHA87_INITIAL
+           && tout[k].round < 9)
+            ++sentInitial[tout[k].round];
+    }
+    if (round == 4) {
+      /* the machine's value is now (d, 1), written at round 4's turn;
+       * the held round-3 INITIAL carries the 1 stored at its hold */
+      n = bkr94acsBaReveal(a, 0, out);
+      check("at maxPhases 2 the round-2 turn holds round 3", n == 1 && out[0].round == 3);
+      check("the reveal carries the stored value, not the machine's current one",
+            n == 1 && out[0].baValue == 1);
+    }
+  }
+  check("the last phase's step-3 turn holds nothing",
+        bkr94acsBaReveal(a, 0, out) == 0 && sentInitial[6] == 0);
+  check("the machine is at the end of its space", bkr94acsTurnDuty(a, 0) == BKR94ACS_DUTY_HELD);
+  free(a);
+
+  /*
+   * Hold 0: the same phase 0 at maxPhases 3, and every round's
+   * INITIAL -- the phase-opening ones included -- comes out of the
+   * turn that computed it, as it did before the hold existed.  Round
+   * 3's own INITIAL is sent, so from round 3 on all four carry it.
+   */
+  sz = bkr94acsSz(3, 0, 3);
+  if (!(a = calloc(1, sz))) {
+    check("testReveal alloc 3", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 3, 0, testCoin, 0, 0);
+  memset(sentInitial, 0, sizeof (sentInitial));
+  for (round = 0; round < 9; ++round) {
+    value = (round % BRACHA87_ROUNDS_PER_PHASE == 2) ? (1 | BRACHA87_D_FLAG) : 1;
+    for (b = 0; b < 4; ++b) {
+      (void)bkr94acsBaInput(a, 0, (unsigned char)round, (unsigned char)b,
+                            BRACHA87_INITIAL, ANNOT_NO_ARM, (unsigned char)b, value, out);
+      for (sender = 1; sender <= 3; ++sender)
+        (void)bkr94acsBaInput(a, 0, (unsigned char)round, (unsigned char)b,
+                              BRACHA87_READY, ANNOT_NO_ARM, (unsigned char)sender, value, out);
+      while ((n = bkr94acsTurn(a, 0, tout)) > 0 && turnDrained())
+        for (k = 0; k < n; ++k)
+          if (tout[k].act == BKR94ACS_ACT_BA_SEND && tout[k].type == BRACHA87_INITIAL
+           && tout[k].round < 9)
+            ++sentInitial[tout[k].round];
+    }
+    if (round == 2) {
+      check("without the hold a phase-opening turn emits its INITIAL", sentInitial[3] == 1);
+      f1 = bkr94acsBaFig1(a, 0, 3, 0);
+      check("without the hold round 3's own Fig 1 is initiator, not held",
+            f1 && (f1->flags & BRACHA87_F1_INITIATOR) && !(f1->flags & BRACHA87_F1_HELD));
+    }
+  }
+  check("without the hold every round 1..8 went out once from its turn",
+        sentInitial[1] == 1 && sentInitial[2] == 1 && sentInitial[3] == 1
+        && sentInitial[4] == 1 && sentInitial[5] == 1 && sentInitial[6] == 1
+        && sentInitial[7] == 1 && sentInitial[8] == 1);
+  check("without the hold nothing is held or revealed",
+        bkr94acsBaHeld(a, 0) == 0 && bkr94acsBaReveal(a, 0, out) == 0);
+  free(a);
+
+  /*
+   * The choice outlives a reveal: hold 1, round 3 revealed as soon as
+   * round 2's turn holds it, and the next phase-opening round is held
+   * all the same.  (The first arm holds rounds 3 and 6 before either
+   * is revealed, so it cannot tell a hold that lasts from one a
+   * reveal switched off.)
+   */
+  sz = bkr94acsSz(3, 0, 3);
+  if (!(a = calloc(1, sz))) {
+    check("testReveal alloc 3b", 0);
+    return;
+  }
+  bkr94acsInit(a, 3, 1, 0, 3, 0, testCoin, 0, 1);
+  for (round = 0; round < 6; ++round) {
+    value = (round % BRACHA87_ROUNDS_PER_PHASE == 2) ? (1 | BRACHA87_D_FLAG) : 1;
+    for (b = (round >= 3) ? 1 : 0; b < 4; ++b) {
+      (void)bkr94acsBaInput(a, 0, (unsigned char)round, (unsigned char)b,
+                            BRACHA87_INITIAL, ANNOT_NO_ARM, (unsigned char)b, value, out);
+      for (sender = 1; sender <= 3; ++sender)
+        (void)bkr94acsBaInput(a, 0, (unsigned char)round, (unsigned char)b,
+                              BRACHA87_READY, ANNOT_NO_ARM, (unsigned char)sender, value, out);
+      while ((n = bkr94acsTurn(a, 0, tout)) > 0 && turnDrained())
+        ;
+    }
+    if (round == 2)
+      check("the held round 3 is revealed at once",
+            bkr94acsBaReveal(a, 0, out) == 1 && out[0].round == 3);
+  }
+  f1 = bkr94acsBaFig1(a, 0, 6, 0);
+  check("after a reveal the next phase-opening INITIAL is held too",
+        bkr94acsBaHeld(a, 0) == 1 && f1 && (f1->flags & BRACHA87_F1_HELD));
+  free(a);
+}
+
+/*
+ * Past the round space.  Reveal and Held walk the phase-opening rounds
+ * 3, 6, ... up to the BA's next round, and once the space is spent that
+ * next round is 3 x maxPhases -- a multiple of 3 one past the last
+ * Fig 1 -- so both clamp at the last round.  Without the clamp the walk
+ * names the Fig 1 "at" round 3 x maxPhases, which lies self x (one
+ * Fig 1) past the start of the BA's own Fig 4: inside that Fig 4 while
+ * the offset is short of it (always at self = 0), otherwise in the next
+ * BA's round-0 Fig 1s, or past the end of the allocation for the last
+ * BA (at n = 4, maxPhases 1, from self = 3).  Held then reads a stray
+ * byte as Fig 1 flags and Reveal clears bit 0x10 wherever that byte
+ * carries it.  Two arms, each a decided BA spent in its one phase:
+ *
+ *   the last BA at self = 3, the last process, the instance
+ *   allocated with a tail of 0xFF bytes past its end -- the walk
+ *   lands in the tail, so Held must count nothing and a reveal must
+ *   leave the instance and the tail alike untouched;
+ *
+ *   BA 0 at self = 0, where the Fig 1 flags byte falls inside the
+ *   Fig 4's coin closure on the usual ABIs, the closure chosen with
+ *   the held bit set in exactly that byte.  Where it falls elsewhere
+ *   the arm says so and asserts nothing.
+ *
+ * Run FIRST in main: a reveal past the space can clear a bit in a
+ * pointer of an ordinary run's Fig 4, address-dependently, and an
+ * earlier test that spends a round space could die on it before
+ * these labels say why.  The drives are bare turns: a single phase
+ * holds nothing, and a reveal inside the drain would spend the
+ * planted bit before the snapshot.
+ */
+static void
+testRevealClamp(
+  void
+){
+  union {
+    void *p;
+    unsigned char b[sizeof (void *)];
+  } clo;
+  unsigned long sz;
+  unsigned long off;
+  unsigned long base;
+  struct bkr94acs *a;
+  unsigned char *image;
+  struct bkr94acsAct out[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)];
+  struct bkr94acsAct tout[3];
+  unsigned int arm;
+  unsigned int ba;
+  unsigned int round;
+  unsigned int b;
+  unsigned int n;
+  unsigned int sender;
+  unsigned char value;
+
+  printf("\n  Reveal past the round space:\n");
+
+  sz = bkr94acsSz(3, 0, 1);
+  for (arm = 0; arm < 2; ++arm) {
+    ba = arm ? 0 : 3;
+    memset(&clo, 0, sizeof (clo));
+    if (arm) {
+      off = offsetof(struct bracha87Fig1, flags);
+      base = offsetof(struct bracha87Fig4, coinClosure);
+      if (off < base || off >= base + sizeof (void *)) {
+        printf("    self = 0 clamp arm: Fig 1 flags fall outside the coin closure on this ABI; not asserted\n");
+        return;
+      }
+      clo.b[off - base] = BRACHA87_F1_HELD;
+    }
+    if (!(a = malloc(sz + CLAMP_TAIL)) || !(image = malloc(sz + CLAMP_TAIL))) {
+      free(a);
+      check("testRevealClamp alloc", 0);
+      return;
+    }
+    memset(a, 0xFF, sz + CLAMP_TAIL);
+    bkr94acsInit(a, 3, 1, 0, 1, (unsigned char)ba, testCoin, clo.p, 1);
+    for (round = 0; round < 3; ++round) {
+      value = (round == 2) ? (1 | BRACHA87_D_FLAG) : 1;
+      for (b = 0; b < 4; ++b) {
+        (void)bkr94acsBaInput(a, (unsigned char)ba, (unsigned char)round, (unsigned char)b,
+                              BRACHA87_INITIAL, ANNOT_NO_ARM, (unsigned char)b, value, out);
+        for (sender = 1; sender <= 3; ++sender)
+          (void)bkr94acsBaInput(a, (unsigned char)ba, (unsigned char)round, (unsigned char)b,
+                                BRACHA87_READY, ANNOT_NO_ARM, (unsigned char)sender, value, out);
+        while ((n = bkr94acsTurn(a, (unsigned char)ba, tout)) > 0 && turnDrained())
+          ;
+      }
+    }
+    check("the spent BA decided in its one phase",
+          bkr94acsBaDecision(a, (unsigned char)ba) == 1
+          && bkr94acsTurnDuty(a, (unsigned char)ba) == BKR94ACS_DUTY_HELD);
+    check("a spent round space holds nothing", bkr94acsBaHeld(a, (unsigned char)ba) == 0);
+    memcpy(image, a, sz + CLAMP_TAIL);
+    n = bkr94acsBaReveal(a, (unsigned char)ba, out);
+    check(arm ? "a reveal past the round space leaves the Fig 4 untouched"
+              : "a reveal past the last BA's round space writes nothing past the instance",
+          n == 0 && !memcmp(image, a, sz + CLAMP_TAIL));
+    free(image);
+    free(a);
+  }
 }
 
 static void
@@ -2508,7 +2881,7 @@ testExhausted(
     check("testExhausted alloc", 0);
     return;
   }
-  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
+  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0, 0);
 
   exhaustedSeen = 0;
   for (round = 0; round < 3; ++round)
@@ -2531,7 +2904,7 @@ testExhausted(
    * structural.  Drive any further input and check.
    */
   (void)bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
-  while ((n = bkr94acsTurn(a, 0, out)) > 0 && turnDrained())
+  while ((n = turnRev(a, 0, out)) > 0 && turnDrained())
     for (k = 0; k < n; ++k)
       if (out[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
         ++exhaustedSeen;
@@ -2616,7 +2989,7 @@ testExhaustedAmongDecided(
     check("testExhaustedAmongDecided alloc", 0);
     return;
   }
-  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
+  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0, 0);
 
   exhaustedSeen = 0;
   completeSeen = 0;
@@ -2642,7 +3015,7 @@ testExhaustedAmongDecided(
                  ANNOT_NO_ARM,
                  (unsigned char)(sender ? sender : b), value, out);
           for (q = 0; q < 4; ++q)
-            while ((n = bkr94acsTurn(a, (unsigned char)q, tout)) > 0 && turnDrained())
+            while ((n = turnRev(a, (unsigned char)q, tout)) > 0 && turnDrained())
               for (k = 0; k < n; ++k) {
                 if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
                   ++exhaustedSeen;
@@ -2675,7 +3048,7 @@ testExhaustedAmongDecided(
       for (q = 0; q < 4; ++q) {
         (void)bkr94acsBaInput(a, (unsigned char)q, (unsigned char)round,
                (unsigned char)b, BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
-        while ((n = bkr94acsTurn(a, (unsigned char)q, tout)) > 0 && turnDrained())
+        while ((n = turnRev(a, (unsigned char)q, tout)) > 0 && turnDrained())
           for (k = 0; k < n; ++k)
             if (tout[k].act == BKR94ACS_ACT_COMPLETE)
               ++completeSeen;
@@ -2799,7 +3172,7 @@ testExhaustedAdoptBranch(
     check("testExhaustedAdoptBranch alloc", 0);
     return;
   }
-  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0);
+  bkr94acsInit(a, 3, 1, 0, 1, 0, testCoin, 0, 0);
 
   round2[0] = (unsigned char)(0 | BRACHA87_D_FLAG);
   round2[1] = (unsigned char)(0 | BRACHA87_D_FLAG);
@@ -2809,12 +3182,12 @@ testExhaustedAdoptBranch(
   for (b = 0; b < 4; ++b)
     feedFig1AcceptNoTurn(a, 0, 0, (unsigned char)b, Round0[b], out, 1);
   check("AdoptBranch: round 0 turns on its own sample",
-        bkr94acsTurn(a, 0, tout) > 0);
+        turnRev(a, 0, tout) > 0);
 
   for (b = 0; b < 4; ++b)
     feedFig1AcceptNoTurn(a, 0, 1, (unsigned char)b, Round1[b], out, 1);
   check("AdoptBranch: round 1 turns on its own sample",
-        bkr94acsTurn(a, 0, tout) > 0);
+        turnRev(a, 0, tout) > 0);
 
   for (b = 0; b < 4; ++b)
     feedFig1AcceptNoTurn(a, 0, 2, (unsigned char)b, round2[b], out, 1);
@@ -2833,7 +3206,7 @@ testExhaustedAdoptBranch(
         dcnt > 1 && dcnt <= 2);
 
   exhaustedSeen = 0;
-  n = bkr94acsTurn(a, 0, tout);
+  n = turnRev(a, 0, tout);
   for (k = 0; k < n; ++k)
     if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED && tout[k].process == 0)
       ++exhaustedSeen;
@@ -2848,7 +3221,7 @@ testExhaustedAdoptBranch(
 
   /* Further arrivals cannot make an outputless BA output again. */
   (void)bkr94acsBaInput(a, 0, 0, 0, BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
-  while ((n = bkr94acsTurn(a, 0, tout)) > 0 && turnDrained())
+  while ((n = turnRev(a, 0, tout)) > 0 && turnDrained())
     for (k = 0; k < n; ++k)
       if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
         ++exhaustedSeen;
@@ -2941,7 +3314,7 @@ testQuiescenceAfterExhausted(
       return;
     }
   for (p = 0; p < 4; ++p) {
-    bkr94acsInit(processes[p], 3, 1, 0, 1, (unsigned char)p, testCoin, 0);
+    bkr94acsInit(processes[p], 3, 1, 0, 1, (unsigned char)p, testCoin, 0, 0);
     exhausted[p] = 0;
   }
 
@@ -2963,7 +3336,7 @@ testQuiescenceAfterExhausted(
         }
       /* One turn per BA now that its round's sample is complete at all n. */
       for (j = 0; j < 4; ++j) {
-        n = bkr94acsTurn(processes[p], (unsigned char)j, tout);
+        n = turnRev(processes[p], (unsigned char)j, tout);
         for (k = 0; k < n; ++k)
           if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
             ++exhausted[p];
@@ -2983,7 +3356,7 @@ testQuiescenceAfterExhausted(
     for (j = 0; j < 4; ++j) {
       (void)bkr94acsBaInput(processes[p], (unsigned char)j, 0, 0,
                             BRACHA87_READY, ANNOT_NO_ARM, 0, 0, out);
-      while ((n = bkr94acsTurn(processes[p], (unsigned char)j, tout)) > 0 && turnDrained())
+      while ((n = turnRev(processes[p], (unsigned char)j, tout)) > 0 && turnDrained())
         for (k = 0; k < n; ++k)
           if (tout[k].act == BKR94ACS_ACT_BA_EXHAUSTED)
             ++exhausted[p];
@@ -3141,7 +3514,7 @@ testTurnDutyVacuityT0(
     check("testTurnDutyVacuityT0 alloc", 0);
     return;
   }
-  bkr94acsInit(a, 3, 0, 0, 1, 0, testCoin, 0);
+  bkr94acsInit(a, 3, 0, 0, 1, 0, testCoin, 0, 0);
 
   tolerance = 0;
   check("TurnDutyT0: a fresh BA is HELD",
@@ -3269,7 +3642,7 @@ testAcastValueGate(
     check("AcastValueGate alloc", 0);
     return;
   }
-  bkr94acsInit(a, 3, 1, 0, MAX_PHASES, 0, testCoin, 0);
+  bkr94acsInit(a, 3, 1, 0, MAX_PHASES, 0, testCoin, 0, 0);
 
   /* Pre-input: no flags set on any Fig1 -> AcastValue returns NULL
    * for both self and non-self processes. */
@@ -3381,7 +3754,7 @@ testBprSkipAccept(
 
   sz = bkr94acsSz(3, 0, 4);
   a = calloc(1, sz);
-  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0);   /* self = 0 */
+  bkr94acsInit(a, 3, 1, 0, 4, 0, testCoin, 0, 0);   /* self = 0 */
   bracha87RetryInit(&retry);
 
   val[0] = 1;
@@ -3444,7 +3817,7 @@ testBprSkipAccept(
 
     sz3 = bkr94acsSz(3, 0, 4);
     if ((a3 = calloc(1, sz3))) {
-      bkr94acsInit(a3, 3, 1, 0, 4, 0, testCoin, 0);
+      bkr94acsInit(a3, 3, 1, 0, 4, 0, testCoin, 0, 0);
       bkr94acsAcastInput(a3, 2, BRACHA87_INITIAL, ANNOT_NO_ARM, 2, val, iact);
       bkr94acsAcastInput(a3, 2, BRACHA87_READY,
                          BKR94ACS_ACCEPTED | BKR94ACS_RECEIVED, 1, val, iact);
@@ -3505,7 +3878,7 @@ testForgedInitial(
     check("ForgedInitial alloc", 0);
     return;
   }
-  bkr94acsInit(a, 3, 1, 0, MAX_PHASES, /*self=*/2, testCoin, 0);
+  bkr94acsInit(a, 3, 1, 0, MAX_PHASES, /*self=*/2, testCoin, 0, 0);
 
   /* Forged A-Cast INITIAL for process 0, sent by Byzantine process 1. */
   v = 0x55;
@@ -3565,6 +3938,7 @@ main(
     return (1);
   }
 
+  testRevealClamp();
   testBasic();
   testShuffled();
   testValues();
@@ -3583,6 +3957,7 @@ main(
   testBprByzantineSilent();
   testBprHighDrop();
   testExhausted();
+  testReveal();
   testExhaustedAmongDecided();
   testExhaustedAdoptBranch();
   testQuiescenceAfterExhausted();

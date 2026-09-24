@@ -257,7 +257,9 @@ no,"Q(j) = 1",
 #                          via Step 2, violating cross-process
 #                          agreement on SubSet)
 # The BA Fig 1 walk is ungated; bracha87Fig1Bpr returns 0 on
-# unsent instances.
+# unsent instances, and on a held one (bracha87Fig1Hold: under
+# bkr94acsInit's hold, the phase-opening INITIAL the turn withholds until
+# bkr94acsBaReveal).
 #
 # Inputs:
 #   "BA_j decision"          { undecided, decided 0, decided 1, exhausted }

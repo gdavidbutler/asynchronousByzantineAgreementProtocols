@@ -65,7 +65,30 @@
  *
  * Usage:
  *   ./example_bkr94acs [-v] [-s seed] [-d process] [-g patience]
- *                      [-b mode] n t acast0 ...
+ *                      [-l [-r sweeps]] [-b mode] n t acast0 ...
+ *
+ * THE COIN IS THE DEPLOYMENT'S CHOICE, and the hold goes with it
+ * (README, Coin Choice; bkr94acs.h at bkr94acsBaReveal).  By default
+ * every process runs the parity coin -- a global coin's agreement
+ * with none of its secrecy -- and bkr94acsInit is given no hold: the
+ * turn sends every INITIAL itself, as a global-coin deployment's
+ * does.  -l gives each process its own local coin and the hold, so
+ * the turn withholds each phase-opening INITIAL -- the round that
+ * carries a process's coin -- and the loop owes its release.  -r
+ * (with -l only) holds it that many completed BPR sweeps past the
+ * turn that held it, or past the previous reveal when one was
+ * already held, before bkr94acsBaReveal releases it; sweeps, because
+ * every deliberate wait in this stratum is counted in them (BPR.md,
+ * The Abandon Boundary).  0, the default, reveals in the same tick,
+ * which is the papers' model.  A process holding one is not
+ * quiescent: bkr94acsBaHeld is read before parking.
+ *
+ * The pair demonstrates the choice and the calls it implies; every
+ * process here turns over the same sample, so every BA decides in
+ * phase 0 and the results say "never tossed".  The coin is reached by
+ * the tests (test_bkr94acs_blackbox Section R runs the hold through a
+ * coin phase).  What release discipline meets a delivery bound is
+ * README's (What the caller provides).
  *
  * Example:
  *   ./example_bkr94acs 4 1 joe sam sally tim
@@ -133,7 +156,7 @@
 #define MAX_PROCESSES  16
 /*
  * The phase budget (README.md "The phase budget").  NOTHING HERE
- * SIZES IT.  Every arm decides in phase 0 and demoCoin is never
+ * SIZES IT.  Every arm decides in phase 0 and neither coin is ever
  * called: a lossless run among honest processes does not reach Fig 4
  * step 3 case (iii), so the coin's convergence -- and with it the
  * budget a real coin would need -- is not something this demo
@@ -151,7 +174,8 @@
  * it buys.  A deployment sizes this against the coin it supplies, and
  * demoCoin is precisely the coin no budget is right for -- agreed, so
  * it ends a phase, but predictable, so an adversary scheduling on it
- * can deny that ending.  There is no such adversary here.
+ * can deny that ending.  There is no such adversary here, and no
+ * coin runs.
  */
 #define MAX_PHASES 3
 #define MAX_VLEN   256  /* max A-Cast bytes (including \0); bracha87 vLen encoding 255 */
@@ -199,6 +223,7 @@ struct msg {
   unsigned char initiator; /* who initiated this Fig1 broadcast (BA) */
   unsigned char from;        /* sender */
   unsigned char to;          /* recipient */
+  unsigned char poke;        /* -b poke: this READY is a poke */
   unsigned char value[MAX_VLEN];  /* ACAST value (vLen+1 bytes); unused for BA */
 };
 
@@ -248,6 +273,7 @@ qPush(
   MsgQ[Qtail].initiator = initiator;
   MsgQ[Qtail].from = from;
   MsgQ[Qtail].to = to;
+  MsgQ[Qtail].poke = 0;
   if (cls == BKR94ACS_CLS_BA)
     /*
      * BA payload is two live bits: the binary value (placed at
@@ -298,8 +324,22 @@ qShuffle(
 }
 
 /*--------------------------------------------------------------------------*/
-/*  Coin -- deterministic alternating, adequate for demonstration only.     */
+/*  Coins -- the deployment's choice, one closure per process.              */
+/*                                                                          */
+/*  demoCoin is the parity stand-in for a global coin: every process        */
+/*  draws the same value for a phase, which is a global coin's agreement,   */
+/*  and anyone can compute it, which a dealt coin's secrecy is not -- it    */
+/*  stands in for the agreement only.  localCoin is the figure's own coin:  */
+/*  each process draws independently from its own stream, seeded from -s    */
+/*  and the process index so a run replays.  Both count their calls so the  */
+/*  results can say whether a coin ran at all.                              */
 /*--------------------------------------------------------------------------*/
+
+struct coin {
+  unsigned int state;       /* localCoin's stream */
+  unsigned int calls;
+  unsigned int maxPhase;
+};
 
 static unsigned char
 demoCoin(
@@ -307,9 +347,31 @@ demoCoin(
  ,unsigned char instance
  ,unsigned char phase
 ){
-  (void)closure;
+  struct coin *c;
+
   (void)instance;
+  c = closure;
+  ++c->calls;
+  if (phase > c->maxPhase)
+    c->maxPhase = phase;
   return (phase % 2);
+}
+
+static unsigned char
+localCoin(
+  void *closure
+ ,unsigned char instance
+ ,unsigned char phase
+){
+  struct coin *c;
+
+  (void)instance;
+  c = closure;
+  ++c->calls;
+  if (phase > c->maxPhase)
+    c->maxPhase = phase;
+  c->state = c->state * 1103515245u + 12345u;
+  return ((c->state >> 16) & 1);
 }
 
 /*--------------------------------------------------------------------------*/
@@ -459,7 +521,11 @@ main(
   unsigned int vLen;
   int dproc;                /* -d: the delayed (WAN laggard) process, -1 none */
   unsigned int patience;    /* -g: patience in sweeps, 0 = no deliberate wait */
+  unsigned int revealHold;  /* -r: sweeps a phase-opening INITIAL is held past its turn */
+  unsigned int local;       /* -l: local coin, with the hold */
+  struct coin coins[MAX_PROCESSES];
   unsigned int patienceGiven; /* -g appeared on the command line */
+  unsigned int revealGiven; /* -r appeared on the command line */
   unsigned int byzMode;     /* -b: BYZ_NONE / SILENT / EQUIV / POKE */
   unsigned int byzSplit;    /* -b equiv<S>: recipients [0..S) get the value */
 
@@ -480,6 +546,7 @@ main(
    * process is that count changing, or a quiescent tick (the pass
    * it would have made owes nothing). */
   unsigned int turnSweeps[MAX_PROCESSES][MAX_PROCESSES];
+  unsigned int revealDue[MAX_PROCESSES][MAX_PROCESSES]; /* sweep count + 1 at which a held INITIAL is released, 0 = none pending */
   unsigned int fanoutSweeps[MAX_PROCESSES];
   unsigned int lastSweeps[MAX_PROCESSES];
   unsigned int fanoutFires;
@@ -499,6 +566,7 @@ main(
    * the marked re-send the next egress aims back consumes the arm. */
   unsigned int pokeArmed;
   unsigned int pokeSent;
+  unsigned int pokeDelivered;
   unsigned int pokeActs;
   unsigned int pokeSampled;
   unsigned int pokeInstances;
@@ -523,6 +591,9 @@ main(
   dproc = -1;
   patience = 0;
   patienceGiven = 0;
+  revealGiven = 0;
+  revealHold = 0;
+  local = 0;
   byzMode = BYZ_NONE;
   byzSplit = 0;
 
@@ -546,6 +617,16 @@ main(
       if (arg >= argc) goto usage;
       patience = (unsigned int)atoi(argv[arg]);
       patienceGiven = 1;
+      ++arg;
+    } else if (argv[arg][1] == 'l' && argv[arg][2] == '\0') {
+      local = 1;
+      ++arg;
+    } else if (argv[arg][1] == 'r' && argv[arg][2] == '\0') {
+      ++arg;
+      if (arg >= argc) goto usage;
+      revealHold = (unsigned int)atoi(argv[arg]);
+      if (revealHold > 100000) goto usage;   /* a hold no run outlives */
+      revealGiven = 1;
       ++arg;
     } else if (argv[arg][1] == 'b' && argv[arg][2] == '\0') {
       ++arg;
@@ -591,6 +672,12 @@ main(
       fprintf(stderr, "-d needs t >= 1\n");
       return (1);
     }
+  }
+  /* -r paces the release of what the hold keeps, and only the local
+   * coin holds: under the parity coin there is nothing to release. */
+  if (revealGiven && !local) {
+    fprintf(stderr, "-r needs -l (only the local coin holds its reveal)\n");
+    return (1);
   }
   if (byzMode != BYZ_NONE) {
     /*
@@ -652,9 +739,13 @@ main(
       exitCode = 1;
       goto cleanup;
     }
+    coins[i].state = origSeed * 2654435761u + i + 1;
+    coins[i].calls = 0;
+    coins[i].maxPhase = 0;
     bkr94acsInit(processes[i], (unsigned char)(n - 1), (unsigned char)t,
                  (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i,
-                 demoCoin, 0);
+                 local ? localCoin : demoCoin, &coins[i],
+                 (unsigned char)local);
     bracha87RetryInit(&retry[i]);
   }
 
@@ -755,10 +846,12 @@ main(
   memset(quiescent, 0, sizeof (quiescent));
   memset(quiesceTick, 0, sizeof (quiesceTick));
   memset(turnSweeps, 0, sizeof (turnSweeps));
+  memset(revealDue, 0, sizeof (revealDue));
   memset(fanoutSweeps, 0, sizeof (fanoutSweeps));
   memset(lastSweeps, 0, sizeof (lastSweeps));
   pokeArmed = 0;
   pokeSent = 0;
+  pokeDelivered = 0;
   pokeActs = 0;
   pokeSampled = 0;
   pokeInstances = 0;
@@ -881,10 +974,15 @@ main(
        * quiescence and maintains no progress counter. */
       /* A poke is a duplicate READY.  Its Input return is what the
        * barren-sweep policy would read, and it is the whole reason a
-       * poke costs the evidence stream nothing. */
-      if (pokeArmed && m->from == (unsigned char)BYZ_PROCESS
-       && type == BRACHA87_READY)
+       * poke costs the evidence stream nothing.  Only the pokes are
+       * counted: the poker's own honest traffic after it completed --
+       * the post-decide continuation's BA READYs -- returns acts on
+       * first arrival as it should, and under shuffled delivery some
+       * arrive after the poking starts. */
+      if (m->poke) {
+        ++pokeDelivered;
         pokeActs += nacts;
+      }
       qActs(acts, nacts, m->to, n, vLen, verbose, "");
 
       if (shuffleSeed && Qtail > oldTail)
@@ -1025,7 +1123,11 @@ main(
           lastSweeps[i] = retry[i].sweeps;
           sweepDone = 1;
         }
-        if (!nacts && bkr94acsFig1SentCount(processes[i])) {
+        /* A held INITIAL is owed and the sweep carries nothing for
+         * it, so the 0 return is read beside bkr94acsBaHeld. */
+        for (p = 0; p < n && !bkr94acsBaHeld(processes[i], (unsigned char)p); ++p)
+          ;
+        if (!nacts && bkr94acsFig1SentCount(processes[i]) && p >= n) {
           quiescent[i] = 1;
           quiesceTick[i] = tickCount;
           ++quiesced;
@@ -1073,9 +1175,19 @@ main(
           turnSweeps[i][p] = 0;
         if (duty == BKR94ACS_DUTY_MET
          || turnSweeps[i][p] >= patience
-         || bkr94acsBaDecision(processes[i], (unsigned char)p) != 0xFF)
+         || bkr94acsBaDecision(processes[i], (unsigned char)p) != 0xFF) {
           nacts = bkr94acsTurn(processes[i], (unsigned char)p, acts);
-        else
+          /* A turn that held the phase-opening INITIAL owes its
+           * reveal -r sweeps from now; the hold is read off the
+           * library, and a process owing one is not quiescent. */
+          if (!revealDue[i][p] && bkr94acsBaHeld(processes[i], (unsigned char)p)) {
+            revealDue[i][p] = retry[i].sweeps + revealHold + 1;
+            if (quiescent[i]) {
+              quiescent[i] = 0;
+              --quiesced;
+            }
+          }
+        } else
           nacts = 0;
         if (nacts) {
           if (quiescent[i]) {
@@ -1084,6 +1196,21 @@ main(
           }
         }
         qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [turn]");
+        /* One reveal per due; a second held round, rare (its turn fired
+         * before the first reveal), waits its own -r from this one. */
+        if (revealDue[i][p] && retry[i].sweeps + 1 >= revealDue[i][p]) {
+          revealDue[i][p] = 0;
+          nacts = bkr94acsBaReveal(processes[i], (unsigned char)p, acts);
+          if (nacts) {
+            if (quiescent[i]) {
+              quiescent[i] = 0;
+              --quiesced;
+            }
+            qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [reveal]");
+          }
+          if (bkr94acsBaHeld(processes[i], (unsigned char)p))
+            revealDue[i][p] = retry[i].sweeps + revealHold + 1;
+        }
       }
 
       /*
@@ -1150,13 +1277,19 @@ main(
                                       (unsigned char)j)))
           continue;
         for (q = 0; q < n; ++q) {
+          unsigned int at;
+
           if (q == (unsigned int)BYZ_PROCESS)
             continue;
+          at = Qtail;
           qPush(BKR94ACS_CLS_ACAST, (unsigned char)j, 0, 0,
                 BRACHA87_READY, 1 /* the poker did accept */,
                 0 /* RECEIVED stripped -- unmarked, so the receiver re-arms */,
                 (unsigned char)BYZ_PROCESS, (unsigned char)q, pv, vLen);
-          ++pokeSent;
+          if (Qtail > at) {           /* the push may be declined when full */
+            MsgQ[at].poke = 1;
+            ++pokeSent;
+          }
         }
       }
     }
@@ -1291,6 +1424,23 @@ main(
       printf("Process %u: not quiescent (tick cap)\n", i);
   printf("Ending: %u of %u processes QUIESCENT in %u ticks\n",
          quiesced, n, tickCount);
+  {
+    unsigned int calls;
+    unsigned int maxPhase;
+
+    calls = 0;
+    maxPhase = 0;
+    for (i = 0; i < n; ++i) {
+      calls += coins[i].calls;
+      if (coins[i].maxPhase > maxPhase)
+        maxPhase = coins[i].maxPhase;
+    }
+    if (calls)
+      printf("Coin (%s): tossed %u times, last in phase %u\n",
+             local ? "local, held" : "parity", calls, maxPhase);
+    else
+      printf("Coin (%s): never tossed\n", local ? "local, held" : "parity");
+  }
 
   /*----------------------------------------------------------------------*/
   /*  The Byzantine mode's own verdict.  Each behavior states what the     */
@@ -1346,11 +1496,13 @@ main(
            byzInSubset ? "INCLUDED" : "excluded", cnt, n);
 
     if (byzMode == BYZ_POKE) {
-      printf("Poker: %u pokes sent, %u acts returned by them; "
-             "barren evidence stream %s\n",
-             pokeSent, pokeActs,
-             pokeActs ? "DISTURBED -- FAIL" : "unaffected");
-      if (pokeActs)
+      /* no poke delivered would make the verdict vacuous */
+      printf("Poker: %u pokes sent, %u delivered, %u acts returned by "
+             "them; barren evidence stream %s\n",
+             pokeSent, pokeDelivered, pokeActs,
+             !pokeDelivered ? "NOT EXERCISED -- FAIL"
+             : pokeActs ? "DISTURBED -- FAIL" : "unaffected");
+      if (!pokeDelivered || pokeActs)
         exitCode = 1;
       printf("Aimed re-sends: %u of %u poked instances suppress every "
              "process but the poker: %s\n",
@@ -1417,7 +1569,7 @@ cleanup:
 usage:
   fprintf(stderr,
     "usage: example_bkr94acs [-v] [-s seed] [-d process] [-g patience]"
-    " [-b mode] n t acast0 acast1 ...\n"
+    " [-l [-r sweeps]] [-b mode] n t acast0 acast1 ...\n"
     "  n            total processes (1-%d)\n"
     "  t            max Byzantine faults\n"
     "  acast*      per-process A-Cast strings\n"
@@ -1432,6 +1584,16 @@ usage:
     "               passes (0 = no deliberate wait, not a firing at\n"
     "               enabling; with -d, -g 1 includes the laggard in\n"
     "               SubSet)\n");
+  fprintf(stderr,
+    "  -l           local coin, each process its own stream seeded\n"
+    "               from -s, with the hold (bkr94acsInit); without it\n"
+    "               the parity coin, a global coin's stand-in, and\n"
+    "               no hold\n"
+    "  -r sweeps    with -l: hold each phase-opening INITIAL (the\n"
+    "               coin's broadcast) that many completed BPR sweeps\n"
+    "               past its turn, or past the previous reveal, before\n"
+    "               revealing it (0 = at once, the papers' model;\n"
+    "               at most 100000)\n");
   fprintf(stderr,
     "  -b mode      process %d is Byzantine (needs t >= 1; does not\n"
     "               compose with -d / -g).  The tick cap is then the\n"

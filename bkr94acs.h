@@ -268,10 +268,12 @@ struct bkr94acs {
   unsigned char self;       /* this process's index (needed for BA routing) */
   unsigned char complete;   /* boolean: all N BAs decided (Step 3); set
                              * once, never cleared.  A stand-alone byte,
-                             * not a flag bitmap: it is the struct's one
-                             * boolean, and completion is the caller's
-                             * primary query -- read a->complete
-                             * directly. */
+                             * not a flag bitmap: completion is the
+                             * caller's primary query -- read
+                             * a->complete directly. */
+  unsigned char hold;       /* boolean: phase-opening INITIALs are held
+                             * for bkr94acsBaReveal; set at
+                             * bkr94acsInit, never changed */
   /*
    * The BKR94 step-2 / step-3 decision counts are not stored: a
    * stored counter is a denormalization of baDecision[], and one held
@@ -288,7 +290,7 @@ struct bkr94acs {
    * alignment required by the function-pointer fields in the
    * Fig1/Fig4 instances carved out of it.
    */
-  unsigned char pad[2];
+  unsigned char pad[1];
   unsigned char data[1];    /* variable: see bkr94acsSz */
 };
 
@@ -319,8 +321,9 @@ bkr94acsSz(
  * Returns 1 initialized, 0 REFUSED, and a refusal writes NOTHING -- the
  * caller still holds its raw allocation.  Refused: a null instance, a
  * null coin, maxPhases 0 or above BRACHA87_MAX_PHASES, self outside
- * 0..n, and a configuration Bracha's model does not admit (n + 1 > 3t
- * is required).  Same contract as every bracha87Fig*Init.
+ * 0..n, hold other than 0 or 1, and a configuration Bracha's model
+ * does not admit (n + 1 > 3t is required).  Same contract as every
+ * bracha87Fig*Init.
  *
  * The N binary BAs share the single (coin, coin closure) supplied here.
  * Each is given the process index it decides on as its bracha87CoinFn
@@ -329,6 +332,13 @@ bkr94acsSz(
  * index is the BA's identity, not this process's, so it is the same
  * name at every process, which is what a global coin must agree on.  A
  * local coin ignores it and draws fresh entropy per call.
+ *
+ * hold goes with the coin: 1 holds every BA's phase-opening INITIAL
+ * for bkr94acsBaReveal, 0 sends it from the turn like every other
+ * round's.  A global coin passes 0.  A local coin has a use for 1
+ * only under a release discipline, and 1 revealed at once is harmless
+ * and buys nothing -- why, and the release 1 obliges, are at
+ * bkr94acsBaReveal.  Any other value is refused.
  */
 unsigned int
 bkr94acsInit(
@@ -340,6 +350,9 @@ bkr94acsInit(
  ,unsigned char            /* self: this process's index */
  ,bracha87CoinFn           /* coin function, must be non-null */
  ,void *                   /* coin closure */
+ ,unsigned char            /* hold: 1 = hold the coin's reveal
+                             * (bkr94acsBaReveal), 0 = send it at the
+                             * turn; anything else refused */
 );
 
 /*
@@ -357,7 +370,13 @@ bkr94acsInit(
  *
  * Turn (bkr94acsTurn, one BA round fired from the sweep):
  *   1 BA_SEND (next-round INITIAL) + 1 of BA_DECIDED or BA_EXHAUSTED
- *   + 1 COMPLETE.  Bound: 3.
+ *   + 1 COMPLETE.  Bound: 3.  Under the hold (bkr94acsInit) a
+ *   step-3 turn's BA_SEND is held instead of written, so a turn
+ *   writes at most 2 there and a turn plus its immediate reveal still
+ *   fit 3.
+ *
+ * Reveal (bkr94acsBaReveal, a held phase-opening INITIAL released):
+ *   1 BA_SEND.  Bound: 1.
  *
  * Fanout (bkr94acsFanout, BKR94 Step 2 fired from the sweep):
  *   one BA_SEND per BA unentered at the call.  Bound: N = n + 1.
@@ -592,7 +611,12 @@ bkr94acsAcast(
  *
  * Returns 0 only when a full sweep finds nothing to output: no sent
  * instance yet (pre-broadcast / shutdown state), or every sent
- * instance has retired all its retries -- quiescence, which under
+ * instance has retired all its retries, or is HELD -- under the
+ * hold (bkr94acsInit) a held phase-opening INITIAL is initiated, so
+ * bkr94acsFig1SentCount counts it, but not yet on the wire: the sweep
+ * carries nothing for it and it is still owed, so a 0 here with
+ * bkr94acsBaHeld non-zero for any BA is not quiescence -- otherwise
+ * quiescence, which under
  * fair loss is REACHABLE rather than guaranteed, since the honest
  * residue bracha87.h's retry banner names (a process that abandons
  * early, or never announces) holds the READY gate open for good.
@@ -873,20 +897,38 @@ bkr94acsFanout(
  *
  * bkr94acsTurn(a, process, out) performs at most ONE round turn:
  * fires iff duty is not HELD.  Returns acts written: 0 when it did
- * not fire, and 0 from the one fired turn that writes no act -- the
- * last round of a decided BA (bracha87.h, at bracha87Fig4Round),
- * which also exhausts the round space, so the duty reads HELD from
- * then on and a drain on > 0 leaves nothing owed.  A paced caller
- * reads bkr94acsTurnDuty and calls at MET (firing is free) or when
- * its patience has elapsed at TOLERANCE.
+ * not fire, and, under hold 0, 0 from the one fired turn that writes
+ * no act -- the last round of a decided BA (bracha87.h, at
+ * bracha87Fig4Round), which also exhausts the round space, so the
+ * duty reads HELD from then on and a drain on > 0 leaves nothing
+ * owed.  A paced caller reads bkr94acsTurnDuty and calls at MET
+ * (firing is free) or when its patience has elapsed at TOLERANCE.
  * Acts: BKR94ACS_ACT_BA_SEND (the next round's INITIAL, self as
  * initiator), BKR94ACS_ACT_BA_DECIDED or BKR94ACS_ACT_BA_EXHAUSTED,
  * and BKR94ACS_ACT_COMPLETE -- at most 3; these acts emerge ONLY
- * here, never from bkr94acsBaInput, whose BA_SENDs are ECHO and
- * READY only.  Post-decide continuation:
+ * here (and the held INITIAL at bkr94acsBaReveal), never from
+ * bkr94acsBaInput, whose BA_SENDs are ECHO and READY only.
+ * Post-decide continuation:
  * turns continue past DECIDE until the round space is exhausted.
  * A caller firing at enabling drains: while (bkr94acsTurn(a, p,
- * out)) per process after each Input that banks evidence.  Cascaded
+ * out)) per process after each Input that banks evidence.
+ *
+ * UNDER THE HOLD (bkr94acsInit) a step-3 turn holds the next phase's
+ * INITIAL rather than writing it, so a step-3 turn that decided
+ * nothing writes 0 acts and the drain above stops at the phase
+ * boundary.  The next round may already be turnable on the others'
+ * INITIALs, so a caller that holds and reveals at once drains the
+ * turn and the reveal as a pair, whatever either wrote, and stops
+ * when the pair writes nothing:
+ *   for (;;) {
+ *     n = bkr94acsTurn(a, p, out);
+ *     n += bkr94acsBaReveal(a, p, out + n);
+ *     if (!n)
+ *       break;
+ *     ... send out[0..n) ...
+ *   }
+ * A caller with a delivery bound reveals on its own discipline
+ * instead and drains the turn on its duty.  Cascaded
  * validation can make several successive rounds turnable at once;
  * each turn is its own call, and nothing here re-arms the caller's
  * clock when one fires, so a paced caller spends ONE patience
@@ -912,6 +954,115 @@ bkr94acsTurn(
   struct bkr94acs *
  ,unsigned char            /* process: which process's BA */
  ,struct bkr94acsAct *     /* out: room for 3 entries (BKR94ACS_MAX_ACTS covers it) */
+);
+
+/*
+ * The coin's reveal -- the phase-opening INITIAL, held at the turn
+ * when bkr94acsInit's hold is 1.
+ *
+ * A turn that closes a phase (step 3, round 3i+2) writes this process's
+ * value for phase i+1: the decision, an adopted v, or the coin.  The
+ * round-3(i+1) INITIAL that carries it is the one message of a phase
+ * that reveals a coin.  With hold 0 bkr94acsTurn writes it like every
+ * other round's INITIAL.  With hold 1 it does NOT: it marks the
+ * (process, 3(i+1), self) Fig 1 as initiator and holds it
+ * (bracha87Fig1Hold), so neither the turn nor the BPR sweep sends it
+ * until bkr94acsBaReveal releases it.  The rounds that carry the
+ * majority (3i+1) and the (d, v) (3i+2) reveal no coin and are written
+ * by the turn either way; the round-0 INITIAL is the BA's input and is
+ * written at entry.
+ *
+ * WHICH COIN WANTS IT.  The hold protects a coin that is unknown until
+ * its holder reveals it -- a LOCAL coin.  A global coin gains nothing
+ * from it, and the reason is the callback's contract, not agreement
+ * alone: a bracha87CoinFn answers from values already in its closure
+ * (bracha87.h, at bracha87CoinFn), so the global coins it can host are
+ * a sequence dealt in cleartext before the run or a deterministic
+ * function, and a faulty process's own closure names either one.  (In
+ * Rabin's model the processes exchange shares of the value in the
+ * third round, and t+1 shares rebuild it: it leaks at that exchange,
+ * before any step-1 INITIAL carries it, so a hold would cover
+ * nothing -- and the exchange cannot run behind the callback in any
+ * case.)  So a global-coin deployment passes hold 0.  A local-coin
+ * deployment has a use for 1 only under a release discipline;
+ * revealing at once holds nothing past the call, which is the papers'
+ * model and hold 0's behavior.  Nothing in this tree measures a global
+ * coin (README, Coin Choice).
+ *
+ * WHY THE SEAM EXISTS.  An adversary that reads a correct process's
+ * coin while another correct process's step-3 turn of the same phase
+ * is still pending can force that turn -- t+1 (d, v) with the faulty's
+ * own among them is case (ii), t or fewer is a toss -- and choose per
+ * process, which kills one tail of the coin's convergence (the
+ * adversary of test/measure_phases.c, arm F).  Whose choice that is
+ * depends on the model: the papers' scheduler decides which n-t
+ * messages each process receives; in a deployment it is a faulty
+ * process's own timing.  The papers' model has no time in which to
+ * say "not yet", so the papers cannot ask for it; a deployment that
+ * can bound when every correct step-3 turn has fired can hold the
+ * reveal past that point.  The library holds the hold itself; WHEN to
+ * release is the caller's, as every pacing decision here is.  What a
+ * hold costs and what it cannot cost is argued, on this seam's own
+ * ground, at BPR.md (The Sweep-Side Decisions, the hold): a held
+ * INITIAL is, to every receiver, a message the network delayed, so
+ * agreement and validity never read it; the theorems' liveness reads
+ * it as a message eventually sent, which is the release.
+ *
+ * "Held" here is the Fig 1's hold (BRACHA87_F1_HELD), not the duty
+ * BKR94ACS_DUTY_HELD.  This entry releases the oldest held
+ * phase-opening INITIAL of the BA, if any, and returns it as one
+ * BKR94ACS_ACT_BA_SEND, INITIAL, self as initiator, its .round naming
+ * the round released; 0 when nothing is held, which is always the
+ * case under hold 0.  out is written only when an INITIAL is released,
+ * so the pair drain at bkr94acsTurn may pass one past a full
+ * three-entry array under hold 0, where the turn alone can write
+ * three.  From the reveal on the INITIAL is retried by
+ * bkr94acsRetryStep as any other.
+ *
+ * CALLER OBLIGATION, under hold 1: release.  A process that
+ * never releases has, to every other correct process, gone silent at
+ * every phase-opening round of every BA -- a transmitter no one can
+ * tell from a crashed one (Section 1) -- and spends one of the t at
+ * each of them.  Its own BA proceeds on the others' INITIALs, but with
+ * t genuine faults silent every correct process blocks at that round,
+ * this one included.  Lemma 8 takes every correct process to have
+ * broadcast at the first blocked round: the release is what keeps this
+ * process inside the theorems.  Revealing at once -- the pair drain at
+ * bkr94acsTurn -- is the papers' model and holds nothing past the
+ * call.  A caller that declares a bound releases when its discipline
+ * says every correct step-3 turn of the phase has fired; README (What
+ * the caller provides) names the obligation and the seam, and what a
+ * discipline must show before it buys anything -- zero exposure, the
+ * spread held -- is what test/measure_drift.c measures (make drift).
+ * A held INITIAL is owed: bkr94acsBaHeld counts them, and a caller
+ * that parks on the sweep's 0 return reads it first -- a 0 with a hold
+ * pending is not quiescence.  Post-decide continuation rounds are held
+ * like any other; a caller may reveal a decided BA's at once, since
+ * Lemma 9 fixes its value and there is no coin in it to protect.
+ *
+ * Returns 0 on a null instance or out, an out-of-range process, or
+ * nothing held.
+ */
+unsigned int
+bkr94acsBaReveal(
+  struct bkr94acs *
+ ,unsigned char            /* process: which process's BA */
+ ,struct bkr94acsAct *     /* out: room for 1 entry, written only
+                             * when an INITIAL is released */
+);
+
+/*
+ * The count of this BA's own phase-opening INITIALs held by
+ * bkr94acsTurn and not yet released -- what bkr94acsBaReveal has left
+ * to release, one per call.  Always 0 under hold 0.  0 on a null
+ * instance or an out-of-range process.  A caller reads it where it
+ * decides to park: the sweep's 0 return with this non-zero is a held
+ * INITIAL still owed, not quiescence (bkr94acsRetryStep).
+ */
+unsigned int
+bkr94acsBaHeld(
+  const struct bkr94acs *
+ ,unsigned char            /* process: which process's BA */
 );
 
 /*************************************************************************/
