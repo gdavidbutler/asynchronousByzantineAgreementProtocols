@@ -185,7 +185,7 @@ no,"BA_j outputs 1",
 # every message is stored and validity re-derived as prior rounds
 # grow).  bkr94acsTurnDuty classifies a BA's next round with the
 # shared trichotomy of the BPR sub-tables below (HELD below n-t validated or
-# round space exhausted / TOLERANCE at >= n-t with the sample still
+# round space spent / TOLERANCE at >= n-t with the sample still
 # growable / MET at all n validated -- the full sample, firing is
 # free), and bkr94acsTurn computes one round under the same caller
 # discipline as the fanout.  BA_DECIDED / COMPLETE / BA_EXHAUSTED emerge from
@@ -257,9 +257,7 @@ no,"Q(j) = 1",
 #                          via Step 2, violating cross-process
 #                          agreement on SubSet)
 # The BA Fig 1 walk is ungated; bracha87Fig1Bpr returns 0 on
-# unsent instances, and on a held one (bracha87Fig1Hold: under
-# bkr94acsInit's hold, the phase-opening INITIAL the turn withholds until
-# bkr94acsBaReveal).
+# unsent instances.
 #
 # Inputs:
 #   "BA_j decision"          { undecided, decided 0, decided 1, exhausted }
@@ -283,7 +281,9 @@ yes,exhausted
 #                                unsound, a mass of 0-inputs could
 #                                force SubSet empty;
 #                              turn: the BA's next round exists (the
-#                                round space is not exhausted) and is
+#                                round space is not spent: neither
+#                                the ceiling nor a decided BA's
+#                                bound) and is
 #                                complete at >= n-t validated.
 #   "nothing left to wait for" fanout: no BA is unentered -- the set
 #                                the firing empties, so once per

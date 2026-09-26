@@ -47,9 +47,12 @@
 # Implementation Note 1 (post-decide continuation): the figure has no
 # decided state.  Case (i) reads "decision_p := value_p := v", every
 # case ends "Go to round 1 of phase i+1", and the paper's only word on
-# halting is that it is not built here (Bracha87.txt, Protocol
-# halting).  So a decided process plays every later phase as written
-# -- step 1 the majority, step 2 (d, v), step 3 v -- and what holds
+# halting is that it "can be easily accomplished" (Bracha87.txt,
+# Protocol halting).  So a decided process plays the phase after its
+# decision as written -- step 1 the majority, step 2 (d, v), step 3 v
+# -- and the C opens no phase after that one (the bound, bracha87.h
+# at bracha87Fig4Round: by its end every correct process has
+# decided); the rows here run on that last turn too.  What holds
 # its value at the decision is Lemma 9, not a rule: after a decision
 # every correct process starts the next phase with v (Theorem 2,
 # Agreement), so the majority is v, more than n/2 agree, and more than
@@ -57,9 +60,9 @@
 # undecided q that adopted v at case (ii) decides at phase r+1 on 2t+1
 # (d, v) messages, the decided processes' among them, and Figure 3
 # would reject a bare v there (more than n/2 agree at round 3i+2, so
-# N demands (d, v)).  "have decided" therefore guards one output only,
-# the DECIDE the library reports once (Rule 4.3); it never touches a
-# value update.
+# N demands (d, v)).  "have decided" therefore guards one output here,
+# the DECIDE the library reports once (Rule 4.3), and one thing in the
+# C, the bound above; it never touches a value update.
 #
 # Predicates appearing as inputs are computed by C functions over
 # the validated set delivered by Figure 3 (majority counts,
@@ -85,10 +88,11 @@
 # Two further actions - broadcast the value, advance to the next
 # step - are implicit on every round completion event;
 # they are not modeled as DTC outputs because they have no
-# yes/no decision (they always fire here).  The C wrapper may
-# attach implementation-level terminal handling (e.g. suppress
-# broadcast at maxPhases limit) by gating them on additional
-# state outside this file.
+# yes/no decision of the figure's (they always fire in the figure).
+# The C wrapper attaches the terminals -- the phase ceiling
+# (EXHAUSTED, on state outside this file) and the bound (on "have
+# decided" at step 3, Implementation Note 1 above) -- by gating them
+# there.
 
 # ===== Step 1: set value to majority of round (3i+1) =====
 

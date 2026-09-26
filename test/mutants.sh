@@ -95,6 +95,29 @@ CC=${CC:-cc}
 # trusted.  An entry whose ORACLE is "-" is one this catalogue claims
 # NO oracle reaches; its argument says why, and the run records whether
 # the battery agrees.
+#
+# Retired: M73 and M74 were two halts of post-decide continuation
+# registered against a figure that never halted.  M73's replacement
+# text, `if (haveDecided) return (0);` in the step-3 arm, is the
+# landed bound to the byte (bracha87.h, at bracha87Fig4Round): its
+# family text called it a halt at the decision, which that code never
+# was, since decideV runs first and the arm is reached one phase
+# later.  M74, a cut one phase short of the ceiling, coincided with
+# the bound only for a phase-0 decision at maxPhases 3.  M84 is M73
+# inverted (the unbounded figure restored), and M85 is the halt M73's
+# text described.  M74's argument against the bound -- a stopped
+# process withholds the readys Lemma 3's accept counts on, so two
+# deciders completing on different n-t sets leave only their
+# intersection acceptable -- holds against a stop that withdraws Fig 1
+# participation, which the bound does not: it stops the rounds a
+# process initiates, and every Fig 1 duty (echo, ready, the BPR retry)
+# goes on -- witnessed by the loss arms (test_bkr94acs_blackbox F1b,
+# H1), where a retry withheld after a decision strands a peer; the
+# two-wave arms (Section R) run lossless and would not see it.  Its
+# other point, that a decided process still waits on phase r+2, is
+# true and harmless: the wait is a decided BA's HELD.  Their numbers
+# are not reused, and M75-M83 were never in this tree: the catalogue
+# runs to M72, then M84.
 # ---------------------------------------------------------------------
 
 mkdir -p "$WORK" || exit 2
@@ -580,8 +603,8 @@ alone.  Under the mutation that check goes red.
 #WHY
 Figure 4 has no decided state: case (i) reads "decision_p := value_p
 := v" and every case ends "Go to round 1 of phase i+1", so a decided
-process sets (d, v) at step 2 of every later phase exactly as an
-undecided one does.  Guarding that update on the decision is the
+process sets (d, v) at step 2 of the phase after its decision exactly
+as an undecided one does.  Guarding that update on the decision is the
 plausible "preserve the decision value" reading, and it is a liveness
 defect dressed as safety: the decided process then
 broadcasts a bare v at round 3i+3, and Figure 3 at every peer rejects
@@ -1030,9 +1053,10 @@ the count check goes red.
 EXHAUSTED means the round space is spent WITHOUT a decision -- the
 condition Note 12 hands to the BKR94 layer as a locally unrecoverable
 failure.  A process that decided at an earlier phase is in the opposite
-state: it has its decision and, per Note 1, keeps broadcasting it to
-the end of the round space.  Running out of phases after that is the
-end of this instance's participation, not a failure to agree, so the
+state: it has its decision and, per Note 1, broadcasts the phase
+after it and then stops.  Stopping there -- at the bound, or at the
+DECIDE itself when the decision lands on the last phase -- is the end
+of this instance's participation, not a failure to agree, so the
 caller must not be told EXHAUSTED.  Testing maxPhases ahead of the
 decided state is the confusion, and it is invisible until a decided
 process actually reaches its last phase.  Reachability: the oracle
@@ -1040,9 +1064,11 @@ decides at phase 0 of a two-phase instance and plays phase 1 to its
 end; the correct machine returns 0 with the EXHAUSTED flag clear, and
 under the mutation it returns BRACHA87_EXHAUSTED and sets the flag.
 #ANCHOR
-    if (haveDecided) {
+    if (haveDecided)
+      return (0);
 #WITH
-    if (haveDecided && ph + 1 < b->maxPhases) {
+    if (haveDecided && ph + 1 < b->maxPhases)
+      return (0);
 #END
 
 #MUTANT M39
@@ -1132,7 +1158,7 @@ withheld and one arrives.
 #FAMILY figure 4 step 3 -- case (i)'s value update guarded on the decided state
 #FILE bracha87.c
 #ORACLE test_bracha87
-#LABEL MultiPhase: no D_FLAG in step 1
+#LABEL MultiPhase: no D_FLAG out of step 3
 #EXPECT KILLED
 #WHY
 Case (i) is two assignments, "decision_p := value_p := v", and only
@@ -1140,13 +1166,15 @@ the first is once-only: the library reports DECIDE once, so the
 dispatch gates "decide v" on the decided state and leaves "adopt v"
 -- the value_p half, shared with case (ii) -- to fire every phase.
 Gating the whole case is the plausible slip, since the figure writes
-it as one line.  The value then stays where step 2 left it, (d, v),
-and rides into the next phase's step-1 broadcast, which VALID^(3i+1)
-rejects (no correct process sends a d-message at step 1).
-Reachability: the oracle decides at phase 0 and plays three more
-phases feeding each round the value it just broadcast; under the
-mutation the round-6 broadcast carries D_FLAG and the leak check goes
-red.
+it as one line.  The value then stays where step 2 left it, (d, v).
+Against the unbounded figure that value rode into the next phase's
+step-1 broadcast, which VALID^(3i+1) rejects; under the bound the one
+decided step-3 turn is the last, and opens no phase, so the leak
+never reaches the wire -- the rule is the figure's reading, and this
+entry is caught on the machine's state alone.  Reachability: the
+oracle decides at phase 0, plays phase 1 feeding each round the value
+it just broadcast, and reads the value the bound turn leaves; under
+the mutation it is (d, v) and the check goes red.
 #ANCHOR
   if (adoptV)
     b->value = dmax;
@@ -2090,318 +2118,124 @@ green.
   ecGtHalfNT    = ec >= (B_N(b) + b->t) / 2 + 1;
 #END
 
-#MUTANT M73
-#FAMILY figure 4 -- post-decide continuation halted at the decision
+#MUTANT M84
+#FAMILY figure 4 -- post-decide continuation unbounded
 #FILE bracha87.c
 #ORACLE test_bracha87_blackbox
-#LABEL figure-unchanged arm: a decided process keeps broadcasting to the end of the phase space
+#LABEL two-wave arm: p0 and p1 open no phase 2
 #EXPECT KILLED
 #WHY
-Section 4 carries one unproved clause -- "For notational convenience,
-the protocol in Fig. 4 does not terminate once a decision is made.
-However, this can be easily accomplished." -- and this mutation is that
-clause implemented the obvious way: a decided process issues no further
-round.  Figure 4 has no such case; every arm of step 3 ends "Go to
-round 1 of phase i+1", and Lemma 8's no-deadlock argument takes every
-correct process to have broadcast at the first blocked round.  A
-process that halts here cannot be told apart from a slow one, so to
-every peer it is a faulty transmitter budgeted against t, and a peer
-still short of n-t has no recourse the model admits.  Theorem 2's
-Agreement proof consumes the withheld message directly: a correct q
-that adopted v at case (ii) decides at phase r+1 on 2t+1 (d, v)
-messages, the decided processes' among them.  The contract suite plays
-a decided instance through two further phases and requires a broadcast
-from each; under the mutation the first post-decide round returns no
-action -- red on that label.
+The continuation a decided process owes is the phase after its
+decision: Theorem 2's Agreement has every correct process set v at
+the decision's step 3 and, by Lemma 9, decide by the end of the next
+phase, which needs every correct process broadcasting that phase's
+three rounds and nothing after.  This restores the unbounded figure --
+the decided arm advances to the next phase as long as the round space
+lasts -- so every decided BA plays every phase of its budget, and
+under a local coin's budget that is the whole traffic of a run.  The
+two-wave arm decides p0 and p1 at phase 0, carries the adopter p2
+through phase 1 on their broadcasts, and requires their step-3 turn
+of phase 1 to open nothing -- red on that label.
 #ANCHOR
-    if (haveDecided) {
-      /* Post-decide continuation: the figure never halts, and the
-       * value it carries into phase i+1 is the one the dispatch just
-       * wrote, as at any other phase (Lemma 9 makes it the decision). */
-      if (ph + 1 >= b->maxPhases)
-        return (0);
-      b->phase = (ph + 1);
-      b->subRound = 0;
-      return (BRACHA87_BROADCAST);
-    }
-#WITH
     if (haveDecided)
       return (0);
-#END
-
-#MUTANT M74
-#FAMILY figure 4 -- post-decide continuation cut one phase past the decision
-#FILE bracha87.c
-#ORACLE test_bracha87_blackbox
-#LABEL figure-unchanged arm: a decided process keeps broadcasting to the end of the phase space
-#EXPECT KILLED
-#WHY
-Not the naive halt of M73 but the bounded one, registered because the
-bound is the plausible mistake.  Theorem 2's Agreement paragraph is
-phase-indexed -- a correct process deciding at phase r forces every
-correct process to hold v at the beginning of phase r+1, and by Lemma
-9 all decide at the end of it -- which invites the reading that phase
-r+2 onward is dead traffic.  It does not follow.  No correct process
-NEEDING a phase r+2 message is not the same as none CONSUMING one:
-step 3 case (i) sets decision_p and still ends "Go to round 1 of phase
-i+1", so a decided process waits on phase r+2 by construction.  And
-the bound is stated in Fig 4's units while the saving would be taken
-in Fig 1's: Lemma 3's proof turns on "at least n - t processes send
-(ready, v) messages", so a correct process that has stopped withholds
-a ready the accept amplification counts on.  Two processes that decide
-at phase r and complete their last round on DIFFERENT n-t sets A and B
-leave only A cap B acceptable everywhere, and |A cap B| >= 2(n-t) - n
-= t+1, strictly below n-t for t >= 1; at n=4, t=1 that is 2 of the 3
-readys accept needs, and a third correct process blocks in phase r+1 --
-inside the bound, not past it.  Nor can the stop be confined to Fig 4:
-a process still relaying Fig 1 echoes and readys has not stopped, and
-can never know when those obligations are discharged, a message not
-sent being indistinguishable from a slow one.  The cut here is written
-against the phase CEILING rather than the deciding phase, because the
-Fig 4 instance records a decided flag and not the phase it decided in;
-the oracle arm decides in phase 0 at maxPhases 3 (bracha87Fig4Init(...,
-3, ...) and rounds 3..8), so "ph + 2 >= maxPhases" is exactly one phase
-past the decision there and nothing more general.  Note what reds and
-what does not: the contract arm's figure-fidelity label alone, with no
-agreement or liveness arm moving, because no arm in this battery
-staggers a decision -- the multi-phase arms decide in lockstep too.
-#ANCHOR
+#WITH
+    if (haveDecided) {
       if (ph + 1 >= b->maxPhases)
         return (0);
       b->phase = (ph + 1);
       b->subRound = 0;
       return (BRACHA87_BROADCAST);
     }
-#WITH
-      if (ph + 2 >= b->maxPhases)
-        return (0);
-      b->phase = (ph + 1);
-      b->subRound = 0;
-      return (BRACHA87_BROADCAST);
-    }
 #END
 
-#MUTANT M75
-#FAMILY BPR -- the hold: the INITIAL retry ignores it
+#MUTANT M85
+#FAMILY figure 4 -- post-decide continuation cut at its first round
 #FILE bracha87.c
-#ORACLE test_bracha87
-#LABEL no INITIAL retry while held
+#ORACLE test_bracha87_blackbox
+#LABEL two-wave arm: every correct process broadcasts phase 1
 #EXPECT KILLED
 #WHY
-The hold (bracha87Fig1Hold) is the initiator withholding its own
-(initial, v) until the caller releases it -- for Fig 4, until every
-correct step-3 turn of the phase has fired, so no coin reaches a
-faulty process still able to force one.  The retry (initial, v) row
-reads "held" and answers no; this mutation feeds the row "no" from
-state, so the BPR sweep re-sends what the turn withheld and the hold
-protects nothing.  The Fig 1 contract arm ticks a held initiator and
-requires silence -- red on that label.
+The other direction of M84, and the reading the figure's "does not
+terminate once a decision is made" invites: stop at the decision.  The
+deciding turn still opens the next phase (DECIDE | BROADCAST, so the
+step-1 INITIAL goes out); a decided process then answers that round
+with nothing, and a
+correct process that only adopted v at the decision's step 3 -- more
+than t (d, v) in its sample, not more than 2t -- needs that process's
+phase-1 rounds to reach n-t whenever the faulty are silent: at n=4,
+t=1, n-t is every correct process.  The two-wave arm is that
+schedule; under the mutation p0 and p1 return nothing at round 3 --
+red on that label, and p2 is left short of its decision.
 #ANCHOR
-  held          = (b->flags & BRACHA87_F1_HELD) ? 1 : 0;
+  case 0:
+    b->phase = ph;
+    b->subRound = 1;
+    return (BRACHA87_BROADCAST);
 #WITH
-  held          = 0;
+  case 0:
+    if (haveDecided)
+      return (0);
+    b->phase = ph;
+    b->subRound = 1;
+    return (BRACHA87_BROADCAST);
 #END
 
-#MUTANT M76
-#FAMILY composition -- the hold: the turn releases where it should hold
+#MUTANT M86
+#FAMILY composition -- a decided BA's round space closed at the decision
 #FILE bkr94acs.c
 #ORACLE test_bkr94acs
-#LABEL a phase-opening turn emits no INITIAL
+#LABEL bound: every BA's rounds initiated end at the (d, v) of the phase after its decision
 #EXPECT KILLED
 #WHY
-The one-token mistake at the seam: under the hold the phase-opening
-Fig 1 is released instead of held, and the turn goes on to return its
-BA_SEND.  The coin is out in the same tick the turn fired, the sweep
-retries it as any other INITIAL, and bkr94acsBaReveal never finds
-anything to release: the reveal seam is decoration and the delivery
-obligation (README, What the caller provides) protects nothing.  The
-reveal arm counts the INITIALs the turns emit per round and requires
-none for the round that opens a phase -- red on that label.  (The
-other half-implementation, holding the Fig 1 and returning the act
-anyway, is not catalogued: under it a turn and its immediate reveal
-emit four acts into the three-entry arrays every test declares from
-the turn's bound, and the battery dies instead of reddening.)
+The turn closes a decided BA's round space where Fig 4 stops, the step
+3 of the phase after the decision, by pinning its next round at the
+ceiling.  Pinning on the decision itself closes it one phase early,
+one round shorter than M85's image at the composition: the turn that
+decides writes no phase-opening INITIAL (M85's still does), the duty
+reads HELD from there, and the BA's phase-1 rounds never leave this
+process.  The bound arm runs the
+lossless n=4 t=1 cluster, where every BA decides in phase 0, and
+requires the rounds each process initiated in every BA to end at 5;
+under the mutation they end at 2 -- red on that label.  (The run
+shows the same arm red under M84 through the composition: unbounded,
+they end at 3 x MAX_PHASES - 1.)
 #ANCHOR
-      if (a->hold && *nextRound % BRACHA87_ROUNDS_PER_PHASE == 0) {
-        bracha87Fig1Hold(f1);
-        return (nact);
-      }
+  if (!act && (f4->flags & BRACHA87_F4_DECIDED))
+    *nextRound = mr;
 #WITH
-      if (a->hold && *nextRound % BRACHA87_ROUNDS_PER_PHASE == 0)
-        bracha87Fig1Release(f1);
+  if (f4->flags & BRACHA87_F4_DECIDED)
+    *nextRound = mr;
 #END
 
-#MUTANT M77
-#FAMILY composition -- the hold: the reveal reads the machine, not the slot
-#FILE bkr94acs.c
-#ORACLE test_bkr94acs
-#LABEL the reveal carries the stored value, not the machine's current one
-#EXPECT KILLED
-#WHY
-The value a held INITIAL carries is the one the turn stored at the
-hold (bracha87Fig1Initiator into the Fig 1's value slot), and the
-machine moves on while it is held: the next rounds turn on the
-others' INITIALs and write the majority and the (d, v) into
-fig4->value.  A reveal that reads the machine broadcasts the wrong
-round's value under the held round's number -- a step-2 (d, v) as a
-step-1 message, which Fig 3 rejects everywhere -- and a caller that
-reveals at once never sees it, since nothing has moved yet.  The
-reveal arm holds round 3 across round 4's turn and requires the
-stored 1 where the machine now holds (d, 1) -- red on that label.
-#ANCHOR
-    out->baValue = cv[0];
-    out->initiator = a->self;
-    out->accepted = 0;
-    return (1);
-#WITH
-    out->baValue = baF4(a, process)->value;
-    out->initiator = a->self;
-    out->accepted = 0;
-    return (1);
-#END
-
-#MUTANT M78
-#FAMILY composition -- the hold: the turn holds whatever the deployment chose
-#FILE bkr94acs.c
-#ORACLE test_bkr94acs
-#LABEL without the hold a phase-opening turn emits its INITIAL
-#EXPECT KILLED
-#WHY
-The hold is a local-coin deployment's choice, made at bkr94acsInit,
-and a global-coin deployment -- every caller that passes hold 0 --
-owes no reveal.  This mutation drops the flag from the turn's gate,
-so every phase-opening INITIAL is held at every caller: one that
-never reveals goes silent at every phase-opening round of every BA,
-which is the always-on hold the choice exists to retire.  The reveal
-arm's hold-0 half drives phase 0 through its step-3 turn and requires
-the round-3 INITIAL out of that turn -- red on that label.
-#ANCHOR
-      if (a->hold && *nextRound % BRACHA87_ROUNDS_PER_PHASE == 0) {
-#WITH
-      if (*nextRound % BRACHA87_ROUNDS_PER_PHASE == 0) {
-#END
-
-#MUTANT M79
-#FAMILY composition -- the hold: Init drops the choice
-#FILE bkr94acs.c
-#ORACLE test_bkr94acs
-#LABEL a phase-opening turn emits no INITIAL
-#EXPECT KILLED
-#WHY
-The other direction of M78: Init accepts hold 1 and stores 0, so a
-local-coin deployment that asked for the hold gets its coin sent at
-the turn, and bkr94acsBaReveal finds nothing to release -- the
-caller's release discipline protects nothing and nothing says so.
-The reveal arm initializes with hold 1 and requires no round-3
-INITIAL from the step-3 turn that closes phase 0 -- red on that
-label.
-#ANCHOR
-  a->hold = hold;
-#WITH
-  a->hold = 0;
-#END
-
-#MUTANT M80
-#FAMILY composition -- the hold: the reveal walks past the round space
-#FILE bkr94acs.c
-#ORACLE test_bkr94acs
-#LABEL a reveal past the last BA's round space writes nothing past the instance
-#EXPECT KILLED
-#WHY
-The reveal walks the phase-opening rounds 3, 6, ... up to the BA's
-next round.  Once the round space is spent that next round is
-3 x maxPhases, itself a multiple of 3 and one past the last Fig 1,
-so a clamp off by one (> for >=) lets it through and the walk names
-the Fig 1 "at" that round: self x (one Fig 1) past the start of the
-BA's own Fig 4 -- inside it while the offset is short of it (always at
-self = 0), otherwise in the next BA's round-0 Fig 1s, or past the end
-of the allocation for the last BA -- and bracha87Fig1Release clears
-bit 0x10 wherever the byte there carries it.  Every BA past its round
-space reaches it, at hold 0 too: the walk runs whatever the choice,
-and only on a correct machine does it find nothing to release.
-Where the stray byte is a pointer's, the next validation can jump
-through it (a SIGBUS in fig4Nfn, address-dependent), so the clamp
-arms run FIRST in test_bkr94acs.  The last-BA arm spends the last BA
-at the last process's self in an instance followed by a 0xFF tail and
-compares instance and tail across a reveal -- red on that label,
-whatever the addresses.
-#ANCHOR
-  if (last >= mr)
-    last = mr - 1;
-  /* Only phase-opening rounds are ever held (bkr94acsTurn), and a
-#WITH
-  if (last > mr)
-    last = mr - 1;
-  /* Only phase-opening rounds are ever held (bkr94acsTurn), and a
-#END
-
-#MUTANT M81
-#FAMILY composition -- the hold: the held count reads past the round space
-#FILE bkr94acs.c
-#ORACLE test_bkr94acs
-#LABEL a spent round space holds nothing
-#EXPECT KILLED
-#WHY
-M80's twin in bkr94acsBaHeld: the count walks the same rounds to the
-same bound, so with the same off-by-one clamp it reads a stray byte
-as Fig 1 flags -- past the allocation for the last BA at a large
-enough self -- and reports
-a hold no turn made: a caller that parks on the count never parks,
-and one that drains reveals on it spins.  Both clamp arms require a
-count of 0 from a spent BA whose stray byte carries the bit -- red on
-that label.
-#ANCHOR
-  if (last >= mr)
-    last = mr - 1;
-  held = 0;
-#WITH
-  if (last > mr)
-    last = mr - 1;
-  held = 0;
-#END
-
-#MUTANT M82
-#FAMILY composition -- the hold: Init takes any hold byte
+#MUTANT M87
+#FAMILY composition -- a decided BA's round space never closed
 #FILE bkr94acs.c
 #ORACLE test_bkr94acs_blackbox
-#LABEL Init refuses hold other than 0 or 1
+#LABEL R1: the first wave's next round is spent
 #EXPECT KILLED
 #WHY
-The hold is a boolean the deployment chooses, and Init refuses what
-is not one, as it refuses every other out-of-domain argument: a
-caller that passes a stray byte learns it at Init instead of running
-a machine whose mode it did not state.  With the refusal gone the
-machine initializes and holds (any non-zero reads as 1).  The
-blackbox Init probes pass 2 and require the refusal -- red on that
-label.
+The pin removed: every turn advances the next round by one, the bound
+turn included.  A decided BA then sits on the round after its bound
+-- the step 1 of a phase it never opened -- and reads HELD there
+only because that round is incomplete, so a duty reading cannot tell
+the two machines apart; where a second wave of n-t completes that
+round (Section R2) the duty reads TOLERANCE, the turn fires, Fig 4
+refuses the round on its k check, and the next round walks up one
+refused turn at a time.  What tells them apart on the lossless
+two-wave arm is bkr94acsBaGetValid: pinned, the round space is spent
+and it answers 0; unpinned, it answers the one message the second
+wave sent at that round.  R1 requires 0 at every first-wave decider
+-- red on that label (R2's count of turns that fired and wrote
+nothing reds too: three refused turns for the lone decider, not the
+bound turn's one).
 #ANCHOR
-  if (hold > 1)
-    return (0);
+  if (!act && (f4->flags & BRACHA87_F4_DECIDED))
+    *nextRound = mr;
+  else
+    ++*nextRound;
 #WITH
-#END
-
-#MUTANT M83
-#FAMILY composition -- the hold: a reveal ends the choice
-#FILE bkr94acs.c
-#ORACLE test_bkr94acs
-#LABEL after a reveal the next phase-opening INITIAL is held too
-#EXPECT KILLED
-#WHY
-The hold is the deployment's for the life of the instance.  A reveal
-that clears it releases the round it names and then lets every later
-phase-opening INITIAL out at its turn, so the coin of every phase
-after the first reveal goes out uncovered -- and a caller whose
-discipline releases on time never sees a difference until a coin
-phase follows one.  The reveal arm that releases round 3 at once and
-then requires round 6 held is the only unit arm that reveals before a
-second hold -- red on that label (Section R reddens too).
-#ANCHOR
-    if (!bracha87Fig1Release(f1))
-      continue;
-#WITH
-    if (!bracha87Fig1Release(f1))
-      continue;
-    a->hold = 0;
+  ++*nextRound;
 #END
 
 CATALOGUE_END

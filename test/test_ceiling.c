@@ -42,35 +42,13 @@
 #include <string.h>
 #include "bkr94acs.h"
 
-/* The one turn drain here is `while (turnRev(...) > 0 &&
+/* The one turn drain here is `while (bkr94acsTurn(...) > 0 &&
  * turnDrained())`: a drain ends because the turn advances or refuses,
  * and a machine that emitted acts without advancing would spin it.
  * Counted against a ceiling no correct run approaches; abort past it,
  * announced, never a silent hang. */
 #define TURN_CALL_CAP (1u << 24)
 static unsigned long TurnCalls = 0;
-
-/*
- * A turn followed at once by the reveal of anything it held -- the
- * pair drain bkr94acs.h gives a holding caller (at bkr94acsTurn).
- * Under hold 0 nothing is held and the reveal adds nothing, and a
- * turn writes at most three acts; under hold 1 revealing at once is
- * the papers' model, and a holding turn writes at most two and the
- * reveal one.  Either way three entries hold the pair.  This suite
- * runs hold 0 only; the hold is under test in test_bkr94acs's reveal
- * arms and test_bkr94acs_blackbox Section R.
- */
-static unsigned int
-turnRev(
-  struct bkr94acs *a
- ,unsigned char p
- ,struct bkr94acsAct *out
-){
-  unsigned int n;
-
-  n = bkr94acsTurn(a, p, out);
-  return (n + bkr94acsBaReveal(a, p, out + n));
-}
 
 static int
 turnDrained(
@@ -322,7 +300,7 @@ main(
     return (2);
   }
   check("ACS: Init admits 256, t=85",
-        bkr94acsInit(a, N_ENC, T, 0, 1, 0, coin, 0, 0));
+        bkr94acsInit(a, N_ENC, T, 0, 1, 0, coin, 0));
   check("ACS: fanout HELD with 256 unentered",
         bkr94acsFanoutDuty(a) == BKR94ACS_DUTY_HELD);
 
@@ -358,7 +336,7 @@ main(
       }
       if (p == N_ACT - 1 && r == 2)
         check("ACS: not complete at 255 decided", !a->complete);
-      while ((nact = turnRev(a, p, tout)) > 0 && turnDrained())
+      while ((nact = bkr94acsTurn(a, p, tout)) > 0 && turnDrained())
         for (j = 0; j < nact; ++j) {
           if (tout[j].act == BKR94ACS_ACT_BA_DECIDED && tout[j].baValue == 1)
             ++decided;

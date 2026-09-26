@@ -283,7 +283,6 @@ no,"(echo, v)",,,,
 # Additional inputs introduced by BPR (all read from the instance;
 # bridged in bracha87Fig1ToC.dtc):
 #   "am initiator"                   { yes, no }
-#   "held"                           { yes, no }   the initiator withholds (initial, v)
 #   "all echoed"                     { yes, no }   echo senders == n
 #   "READY suppress mask covers all n" { yes, no }
 #   "carries ACCEPTED"               { yes, no }   read on (ready, v)
@@ -304,22 +303,11 @@ no,"(echo, v)",,,,
 # so at local-echo time no readys may exist yet and any honest
 # process that missed the bootstrap can leave the cascade one echo
 # short forever; only the initiator breaks it.
-#
-# "held" is the initiator's own withholding (bracha87Fig1Hold): the
-# broadcast is not yet out, so there is nothing to retry.  It is not
-# a retire -- release (bracha87Fig1Release) reopens the row.  An
-# unsent initiator meets neither retire gate -- nothing has echoed or
-# readied a broadcast that never went out -- so without "held" the
-# row would send it.  A Fig 4 caller with a local coin may
-# hold a phase-opening INITIAL until every correct step-3 turn of
-# the phase has fired, so no coin is revealed to a process still
-# able to force one (bkr94acs.h at bkr94acsBaReveal).
-@"retry (initial, v)","am initiator","held","have accepted","all echoed"
-no,yes,yes,,
-yes,yes,no,no,no
-no,yes,no,no,yes
-no,yes,no,yes,
-no,no,,,
+@"retry (initial, v)","am initiator","have accepted","all echoed"
+yes,yes,no,no
+no,yes,no,yes
+no,yes,yes,
+no,no,,
 
 # ===== retry (echo, v) =====
 #

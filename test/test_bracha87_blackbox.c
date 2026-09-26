@@ -1743,7 +1743,9 @@ main(int argc, char **argv)
   /* (all v, then all (d, v)), and the peer's Fig 3 is the judge of    */
   /* what the decided process broadcasts: at round 3i+2 more than n/2  */
   /* agree, so N demands (d, v) and a bare v is what no correct        */
-  /* process could have sent.                                          */
+  /* process could have sent.  That phase is the whole continuation:   */
+  /* by its end every correct process has decided, so the step 3 of    */
+  /* the phase after the decision opens no phase (bracha87Fig4Round).  */
   {
     static unsigned char fig4Buf[64 * 1024];
     static unsigned char peerBuf[64 * 1024];
@@ -1772,10 +1774,11 @@ main(int argc, char **argv)
           && fig4->decision == 1 && fig4->value == 1,
           "figure-unchanged arm: decided 1 at the end of phase 0, value v");
 
-    /* Phases 1 and 2 on the Lemma 9 trajectory.  Every rule fires as
+    /* Phase 1 on the Lemma 9 trajectory.  Every rule fires as
      * written; the value is v after steps 1 and 3 and (d, v) after
-     * step 2; DECIDE is never output a second time; the last phase
-     * ends in 0, never EXHAUSTED. */
+     * step 2; DECIDE is never output a second time; its step 3 ends
+     * the continuation in 0, never EXHAUSTED, and phase 2's rounds are
+     * refused with nothing changed. */
     for (r = 3; r < 9; ++r) {
       if (r % 3 == 2) {
         values[0] = values[1] = values[2] = 1 | BRACHA87_D_FLAG;
@@ -1783,17 +1786,19 @@ main(int argc, char **argv)
         values[0] = values[1] = values[2] = 1;
       }
       nact = bracha87Fig4Round(fig4, (unsigned char) r, 3, values);
-      if (r + 1 < 9)
+      if (r + 1 < 6)
         bcast[r + 1] = fig4->value;
-      CHECK(nact == ((r == 8) ? 0 : BRACHA87_BROADCAST),
-            "figure-unchanged arm: a decided process keeps broadcasting to the end of the phase space");
+      CHECK(nact == ((r >= 5) ? 0 : BRACHA87_BROADCAST),
+            "figure-unchanged arm: a decided process broadcasts the phase after its decision and no more");
       CHECK((fig4->flags & BRACHA87_F4_DECIDED)
             && (fig4->flags & BRACHA87_F4_EXHAUSTED) == 0,
             "figure-unchanged arm: DECIDED holds and EXHAUSTED stays clear");
       CHECK(fig4->decision == 1,
             "figure-unchanged arm: the decision does not move");
-      CHECK(fig4->value == ((r % 3 == 1) ? (1 | BRACHA87_D_FLAG) : 1),
+      CHECK(fig4->value == ((r % 3 == 1 && r < 5) ? (1 | BRACHA87_D_FLAG) : 1),
             "figure-unchanged arm: step 2 sets (d, v) after a decision, steps 1 and 3 set v");
+      CHECK(r < 6 || (fig4->phase == 1 && fig4->subRound == 2),
+            "figure-unchanged arm: phase 2 never opens");
     }
 
     /* A peer's Fig 3 fed the decided process's own broadcasts as three
@@ -1816,6 +1821,94 @@ main(int argc, char **argv)
     vc = 0;
     CHECK(bracha87Fig3Accept(&peer->fig3, 5, 3, 1, &vc) == 0 && vc == 3,
           "figure-unchanged arm: a bare v at round 5 is rejected by the peer");
+  }
+
+  /* ---------------------------------------------------------------- */
+  BANNER("Fig4: the continuation is the phase after the decision, and it is enough");
+  /* ---------------------------------------------------------------- */
+  /* Theorem 2's Agreement: a correct decision at phase r on 2t+1      */
+  /* (d, v) leaves at least t+1 of them in every correct step-3        */
+  /* sample of phase r, so every correct process sets v there, and by  */
+  /* Lemma 9 decides at phase r+1 -- which takes every correct process */
+  /* broadcasting all three of that phase's rounds.  The schedule at   */
+  /* n=4, t=1, process 3 faulty (the samples are what the figure       */
+  /* computes over; Fig 3's judgment of them is the arm above's): p2's */
+  /* round-1 sample holds the faulty's 0, so p2 sends a bare 1 at      */
+  /* round 2; p0 and p1 each take three (d, 1) at round 2, the         */
+  /* faulty's among them, and decide; p2's round-2 sample {p0, p1, p2} */
+  /* holds two (d, 1) -- more than t, not more than 2t -- and it       */
+  /* adopts.  Then the faulty falls silent, so n-t = 3 is every        */
+  /* correct process and p2's phase 1 needs all of p0's and p1's       */
+  /* phase-1 rounds, and gets them; p0 and p1 open no phase 2, and     */
+  /* p2's phase 2 -- which it opens, decided at phase 1 -- has one     */
+  /* correct sender, itself, short of n-t for good, which costs a      */
+  /* decided process nothing.                                          */
+  {
+    static unsigned char dBuf[3][64 * 1024];
+    struct bracha87Fig4 *d[3];
+    unsigned char bc[3][7];
+    unsigned char values[N_ACT];
+    unsigned int act[3];
+    unsigned int r;
+    unsigned int p;
+
+    for (p = 0; p < 3; ++p) {
+      CHECK(bracha87Fig4Sz(N_ENC, 3) <= sizeof (dBuf[p]),
+            "two-wave arm: buffer size");
+      d[p] = (struct bracha87Fig4 *) dBuf[p];
+      bracha87Fig4Init(d[p], N_ENC, T_VAL, 3, 1, 0, testCoinAlt, 0);
+      bc[p][0] = 1;
+    }
+    /* phase 0: rounds 0 and 1 over n-t samples */
+    values[0] = values[1] = values[2] = 1;
+    for (p = 0; p < 3; ++p) {
+      (void) bracha87Fig4Round(d[p], 0, 3, values);
+      bc[p][1] = d[p]->value;
+    }
+    for (p = 0; p < 2; ++p) {
+      (void) bracha87Fig4Round(d[p], 1, 3, values);
+      bc[p][2] = d[p]->value;
+    }
+    values[2] = 0;                              /* the faulty's 0 */
+    (void) bracha87Fig4Round(d[2], 1, 3, values);
+    bc[2][2] = d[2]->value;
+    CHECK(bc[0][2] == (1 | BRACHA87_D_FLAG) && bc[1][2] == (1 | BRACHA87_D_FLAG)
+          && bc[2][2] == 1,
+          "two-wave arm: p0 and p1 send (d, 1) at round 2, p2 a bare 1");
+    values[0] = values[1] = values[2] = 1 | BRACHA87_D_FLAG;  /* faulty's (d, 1) */
+    for (p = 0; p < 2; ++p) {
+      act[p] = bracha87Fig4Round(d[p], 2, 3, values);
+      bc[p][3] = d[p]->value;
+    }
+    values[0] = bc[0][2]; values[1] = bc[1][2]; values[2] = bc[2][2];
+    act[2] = bracha87Fig4Round(d[2], 2, 3, values);
+    bc[2][3] = d[2]->value;
+    CHECK(act[0] == (BRACHA87_DECIDE | BRACHA87_BROADCAST)
+          && act[1] == (BRACHA87_DECIDE | BRACHA87_BROADCAST)
+          && act[2] == BRACHA87_BROADCAST && d[2]->value == 1
+          && !(d[2]->flags & BRACHA87_F4_DECIDED),
+          "two-wave arm: p0 and p1 decide at phase 0, p2 adopts 1");
+
+    /* phase 1: every sample is the three correct processes' broadcasts */
+    for (r = 3; r < 6; ++r) {
+      for (p = 0; p < 3; ++p)
+        values[p] = bc[p][r];
+      for (p = 0; p < 3; ++p) {
+        act[p] = bracha87Fig4Round(d[p], (unsigned char) r, 3, values);
+        bc[p][r + 1] = d[p]->value;
+      }
+      if (r < 5)
+        CHECK(act[0] == BRACHA87_BROADCAST && act[1] == BRACHA87_BROADCAST
+              && act[2] == BRACHA87_BROADCAST,
+              "two-wave arm: every correct process broadcasts phase 1");
+    }
+    CHECK(act[2] == (BRACHA87_DECIDE | BRACHA87_BROADCAST)
+          && d[2]->decision == 1,
+          "two-wave arm: p2 decides 1 at phase 1 on the deciders' phase-1 rounds");
+    CHECK(act[0] == 0 && act[1] == 0,
+          "two-wave arm: p0 and p1 open no phase 2");
+    CHECK(d[2]->decision == 1 && d[0]->decision == 1 && d[1]->decision == 1,
+          "two-wave arm: all three correct processes decided 1");
   }
 
   /* ---------------------------------------------------------------- */

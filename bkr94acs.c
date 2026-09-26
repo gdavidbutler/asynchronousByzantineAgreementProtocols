@@ -58,11 +58,11 @@
  * buffer.  bracha87Fig4 begins with function-pointer fields, and
  * bracha87Fig1 begins with 2-byte shorts; rounding up to pointer
  * alignment subsumes both.  The struct bkr94acs header is 8 bytes --
- * seven named bytes plus the explicit pad[1] the struct declares for
+ * six named bytes plus the explicit pad[2] the struct declares for
  * exactly this purpose -- so a->data lands pointer-aligned; the
  * BKR94ACS_ALIGN_UP applications below pad each carved sub-region up
  * to the same boundary.  A re-implementation must reproduce the pad;
- * without it data[] starts at offset 7.
+ * without it data[] starts at offset 6.
  */
 #define BKR94ACS_ALIGN_P  ((unsigned long)sizeof (void *))
 #define BKR94ACS_ALIGN_UP(x)  (((unsigned long)(x) + BKR94ACS_ALIGN_P - 1) \
@@ -277,7 +277,6 @@ bkr94acsInit(
  ,unsigned char self
  ,bracha87CoinFn coin
  ,void *coinClosure
- ,unsigned char hold
 ){
   unsigned int N;
   unsigned int i;
@@ -302,8 +301,6 @@ bkr94acsInit(
     return (0);
   if ((unsigned int)n + 1 <= 3u * t)
     return (0);
-  if (hold > 1)
-    return (0);
 
   memset(a, 0, bkr94acsSz(n, vLen, maxPhases));
   a->n = n;
@@ -311,7 +308,6 @@ bkr94acsInit(
   a->vLen = vLen;
   a->maxPhases = maxPhases;
   a->self = self;
-  a->hold = hold;
 
   N = n + 1;
 
@@ -584,8 +580,10 @@ bkr94acsBaInput(
    *
    * 1. We do NOT short-circuit on bkr94acsDecision[process] != 0xFF.
    *    Bracha Fig4 requires a decided process to continue
-   *    broadcasting so processes lagging in THIS BA can reach n-t
-   *    validated and decide.
+   *    broadcasting through the phase after its decision, and to
+   *    echo and ready every Fig 1 of the BA that reaches it, so
+   *    processes lagging in THIS BA can reach n-t validated and
+   *    decide.
    *
    * 2. We do NOT short-circuit on a->complete.  A locally-complete
    *    process has decided all N BAs but other processes may still be
@@ -1113,71 +1111,6 @@ bkr94acsFanout(
   return (nact);
 }
 
-unsigned int
-bkr94acsBaReveal(
-  struct bkr94acs *a
- ,unsigned char process
- ,struct bkr94acsAct *out
-){
-  struct bracha87Fig1 *f1;
-  const unsigned char *cv;
-  unsigned int mr;
-  unsigned int last;
-  unsigned int r;
-
-  if (!a || process > a->n || !out)
-    return (0);
-  mr = maxRounds(a);
-  last = bkr94acsNextRound(a)[process];
-  if (last >= mr)
-    last = mr - 1;
-  /* Only phase-opening rounds are ever held (bkr94acsTurn), and a
-   * second can be held before the first is released; the oldest
-   * goes first, one per call. */
-  for (r = BRACHA87_ROUNDS_PER_PHASE; r <= last; r += BRACHA87_ROUNDS_PER_PHASE) {
-    f1 = baF1(a, process, r, a->self);
-    if (!bracha87Fig1Release(f1))
-      continue;
-    if (!(cv = bracha87Fig1Value(f1)))
-      return (0);
-    out->value = 0;
-    out->skip = 0;
-    out->received = 0;
-    out->act = BKR94ACS_ACT_BA_SEND;
-    out->process = process;
-    out->round = r;
-    out->type = BRACHA87_INITIAL;
-    out->baValue = cv[0];
-    out->initiator = a->self;
-    out->accepted = 0;
-    return (1);
-  }
-  return (0);
-}
-
-unsigned int
-bkr94acsBaHeld(
-  const struct bkr94acs *a
- ,unsigned char process
-){
-  unsigned int mr;
-  unsigned int last;
-  unsigned int r;
-  unsigned int held;
-
-  if (!a || process > a->n)
-    return (0);
-  mr = maxRounds(a);
-  last = bkr94acsNextRound(a)[process];
-  if (last >= mr)
-    last = mr - 1;
-  held = 0;
-  for (r = BRACHA87_ROUNDS_PER_PHASE; r <= last; r += BRACHA87_ROUNDS_PER_PHASE)
-    if (baF1(a, process, r, a->self)->flags & BRACHA87_F1_HELD)
-      ++held;
-  return (held);
-}
-
 unsigned char
 bkr94acsTurnDuty(
   const struct bkr94acs *a
@@ -1233,7 +1166,13 @@ bkr94acsTurn(
    * round, which is this one until the turn below advances it. */
   rcnt = bracha87Fig3GetValid(f3, *nextRound, 0, rval);
   act = bracha87Fig4Round(f4, *nextRound, rcnt, rval);
-  ++*nextRound;
+  /* A decided BA's last turn (the step 3 of the phase after its
+   * decision) opens no phase: its round space ends there, and the duty
+   * reads HELD from then on, as at the ceiling. */
+  if (!act && (f4->flags & BRACHA87_F4_DECIDED))
+    *nextRound = mr;
+  else
+    ++*nextRound;
   nact = 0;
 
   if (act & BRACHA87_DECIDE) {
@@ -1339,24 +1278,11 @@ bkr94acsTurn(
      * round-0 case in bkr94acsEnter.
      */
     {
-      struct bracha87Fig1 *f1;
       unsigned char binary;
 
       binary = f4->value;
-      f1 = baF1(a, process, *nextRound, a->self);
-      bracha87Fig1Initiator(f1, &binary);
-      /*
-       * A phase-opening round (3i, i >= 1) carries this process's
-       * step-3 outcome -- its coin, when case (iii) fired.  Under
-       * bkr94acsInit's hold it is HELD: no act here and no BPR retry until
-       * bkr94acsBaReveal releases it, so the caller decides when the
-       * coin goes out.  The other rounds carry the majority and the
-       * (d, v), which reveal no coin, and go out now.
-       */
-      if (a->hold && *nextRound % BRACHA87_ROUNDS_PER_PHASE == 0) {
-        bracha87Fig1Hold(f1);
-        return (nact);
-      }
+      bracha87Fig1Initiator(baF1(a, process, *nextRound, a->self),
+                         &binary);
     }
 
     out[nact].value = 0;
@@ -1459,9 +1385,10 @@ bkr94acsBaGetValid(
     return (0);
   /*
    * The BA's next round is the one bkr94acsTurnDuty classifies and
-   * bkr94acsTurn consumes; at maxRounds the round space is exhausted
-   * and there is no next round to report (bracha87Fig3GetValid
-   * would return 0 for the out-of-range round anyway).
+   * bkr94acsTurn consumes; at maxRounds the round space is spent (the
+   * ceiling, or a decided BA's bound) and there is no next round to
+   * report (bracha87Fig3GetValid would return 0 for the out-of-range
+   * round anyway).
    */
   nextRound = bkr94acsNextRound(a)[process];
   if (nextRound >= maxRounds(a))

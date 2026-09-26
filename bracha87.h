@@ -156,7 +156,6 @@
 #define BRACHA87_F1_RDSENT   0x02
 #define BRACHA87_F1_ACCEPTED 0x04
 #define BRACHA87_F1_INITIATOR   0x08  /* this process is the broadcast initiator */
-#define BRACHA87_F1_HELD        0x10  /* initiator whose (initial, v) is withheld */
 
 /*
  * Figure 1 state.
@@ -176,7 +175,7 @@ struct bracha87Fig1 {
   unsigned char n;        /* process count encoding: actual = n + 1 */
   unsigned char t;        /* max Byzantine (n + 1 > 3t) */
   unsigned char vLen;     /* value length encoding: actual = vLen + 1 */
-  unsigned char flags;    /* BRACHA87_F1_ECHOED/RDSENT/ACCEPTED/INITIATOR/HELD */
+  unsigned char flags;    /* BRACHA87_F1_ECHOED/RDSENT/ACCEPTED/INITIATOR */
   unsigned char data[1];  /* variable: see bracha87Fig1Sz */
 };
 
@@ -247,60 +246,6 @@ void
 bracha87Fig1Initiator(
   struct bracha87Fig1 *
  ,const unsigned char *    /* value: vLen + 1 bytes */
-);
-
-/*
- * Withhold the initiator's (initial, v) until released.
- *
- * A held instance is an initiator (bracha87Fig1Initiator has run, the
- * value is stored) whose broadcast has not gone out: bracha87Fig1Bpr
- * outputs no BRACHA87_INITIAL_ALL for it -- the "held" input of the
- * retry (initial, v) row in bracha87Fig1.dtc -- and the caller sends
- * nothing.  Nothing else changes: an (echo, v) or (ready, v) arriving
- * for the instance is recorded and counted as ever (a Byzantine
- * process may echo a broadcast that was never sent; it stays below
- * every threshold on its own), and the instance's own send rules are
- * untouched.  bracha87Fig1Release clears the hold and returns 1 iff it
- * was held; the caller then sends (initial, v) to all and relies on
- * BPR thereafter, as bracha87Fig1Initiator describes.
- *
- * WHAT IT IS FOR.  A Fig 4 process's step-1 broadcast of a phase it did
- * not decide carries its coin, and under a LOCAL coin -- one no other
- * process can name before it is revealed -- a process that reveals its
- * coin while another correct process's step-3 turn is still pending
- * hands the adversary -- the scheduler of the papers' model, a faulty
- * process's own timing in a deployment -- the choice of forcing that
- * turn (Fig 4 step 3 case (ii): t+1 d-messages, the faulty's own among
- * them) or letting it toss.  Bracha's model has no time in which to
- * say "wait", so the papers do not; a deployment that declares a
- * delivery bound can hold the reveal past every correct turn
- * (bkr94acs.h, at bkr94acsBaReveal; README, What the caller
- * provides).  The hold is the library's half; when to release is the
- * caller's, like every pacing decision in this tree, and what a hold
- * can and cannot cost is BPR.md's (The Sweep-Side Decisions, the
- * hold).
- *
- * The stored value survives the hold: the echoed-value slot it sits in
- * is rewritten only when a send or accept rule fires, and with the
- * (initial, v) unsent no correct process echoes or readies this
- * instance, so the counts the
- * rules need -- more than (n+t)/2 echoes, t+1 readies, both above what
- * t faulty processes can supply alone -- are out of reach until the
- * release.  (A forged (initial, v') is the caller's to drop: the
- * INITIAL sender obligation at bracha87Fig1Input.)
- *
- * Hold is refused (returns 0) on a null instance or one that is not an
- * initiator; on an instance already accepted it is pointless but
- * harmless, and honored.  Both entries are idempotent.
- */
-unsigned int
-bracha87Fig1Hold(
-  struct bracha87Fig1 *
-);
-
-unsigned int
-bracha87Fig1Release(
-  struct bracha87Fig1 *
 );
 
 /*
@@ -426,9 +371,7 @@ bracha87Fig1Value(
  *     been observed from every process (echoSenders == n).  INITIAL
  *     only induces echoes, so all-echoed leaves nothing to induce;
  *     ACCEPTED witnesses t+1 correct readys, after which ready-
- *     amplification needs no initial.  Silent, not retired, while
- *     the initiator HOLDS it (bracha87Fig1Hold): nothing has been
- *     sent to re-send, and the release reopens the row.
+ *     amplification needs no initial.
  *   ECHO (echoed): retires at ACCEPTED, for the same amplification
  *     reason -- past t+1 correct readys no process consumes an echo.
  *   READY (rdSent): never retires on LOCAL state.  It is exactly
@@ -998,8 +941,8 @@ bracha87Fig3RoundComplete(
  * randomness comes from there: the dealer, before the run.  A
  * construction that instead GENERATES fresh randomness by agreement
  * inside the run gives up what the local coin keeps: BKR94 records
- * that at n <= 4t any t-resilient asynchronous verifiable secret
- * sharing "must have some probability qA > 0 of not terminating",
+ * that its secret-sharing route carries "an
+ * exponentially small but non zero probability of not terminating",
  * against "the asynchronous Byzantine Agreement problem where the
  * randomized protocol terminates with probability 1".  It would be
  * circular here besides -- the exchange needs a reliable broadcast, and
@@ -1165,25 +1108,62 @@ bracha87Fig4Init(
  * possibility that all t faulty processes do not send any message in
  * that round."  So a silent decider must be budgeted against t, and a
  * process still short of n-t has no recourse the model admits.  The
- * paper's only word on halting is one unproved clause (Bracha87.txt;
- * Implementation Note 1 carries the argument).  So a decided process
- * keeps broadcasting, and what it broadcasts is what the figure
- * writes: the figure has no decided state, so every later phase runs
- * as the first did -- step 1 the majority, step 2 (d, v), step 3 v --
- * and the decision is held there by Lemma 9, not by a rule (after a
- * decision every correct process opens the next phase with v).  The
- * once-only DECIDE is the only thing the decided state gates.  A
- * decision taken on the LAST phase has no next round, so there it is
- * returned alone: the decision stands, and the continuation is simply
- * over.  This is the one path that yields a bare BRACHA87_DECIDE.
+ * paper's only word on halting is one unproved clause, "this can be
+ * easily accomplished" (Bracha87.txt; Implementation Note 1 carries
+ * the argument).  So a decided process keeps broadcasting, and what
+ * it broadcasts is what the figure writes: the figure has no decided
+ * state, so the next phase runs as the first did -- step 1 the
+ * majority, step 2 (d, v), step 3 v -- and the decision is held there
+ * by Lemma 9, not by a rule (after a decision every correct process
+ * opens the next phase with v).  The once-only DECIDE is one thing
+ * the decided state gates; the other is the bound.
+ *
+ * THE BOUND is Theorem 2's Agreement.  The first correct decision,
+ * at phase r, rests on 2t+1 (d, v); every correct step-3 sample of
+ * phase r omits at most t senders, so it holds at least t+1 of them
+ * (the paper reaches t+1 by Lemma 6; this counting is the tree's
+ * step, the one its Termination proof also takes, and it rests on
+ * Lemma 5: a sender's (d, v) is the same message at every correct
+ * process), and every correct process sets v there -- decided or
+ * adopting (Lemma 10 rules out a (d, v') beside them).  By Lemma 9
+ * every correct process then decides at phase r+1, which takes every
+ * correct process broadcasting all three rounds of phase r+1 and
+ * nothing after it.  So the step-3 turn of the phase after the
+ * decision returns 0 and opens no phase: the rules run as written
+ * (the value is computed), the phase and subRound stay on that round,
+ * and every later round is refused.  Lemma 8's premise -- that a
+ * process at a round has broadcast at it -- is given up knowingly
+ * for decided processes past r+1: it protects a process that could
+ * be blocked while undecided, and none is undecided past r+1.
+ * Stopping one phase sooner is the
+ * faulty transmitter above: at n = 3t+1 with the faulty silent, n-t
+ * is every correct process, and a process that only adopted v at
+ * phase r needs every decider's phase-r+1 rounds.  A process that
+ * first decides at r+1 (the second wave; the first is the phase-r
+ * deciders) opens a phase r+2 the earlier deciders never
+ * enter, and can wait there for good, short of n-t once they have
+ * stopped (with enough of the second wave and the faulty it may turn
+ * r+2's rounds first, the last its own bound turn), having decided --
+ * which costs it nothing.  The bound is on the rounds a process
+ * initiates, not on its Fig 1 duties: it goes on echoing and readying
+ * what reaches it, which Lemma 4's echo count needs of every correct
+ * process at n = 3t+1.  A decision taken on the LAST phase has no
+ * next round, so there it is returned alone: the decision stands, and
+ * the continuation is simply over.  This is the one path that yields
+ * a bare BRACHA87_DECIDE -- and a correct process that adopted v in
+ * that phase has no phase to decide in, so it is EXHAUSTED beside the
+ * decider: a budget covers a first decision no later than its
+ * second-to-last phase.
  *
  * DECIDE is a success signal, NOT a stop condition.  A decided
- * process keeps broadcasting (post-decide continuation, above) for as
- * long as the phase space lasts, so the caller must never treat DECIDE
- * as "done, stop."  Past the ceiling the continuation rounds run out
- * and Round returns 0 without setting BRACHA87_F4_EXHAUSTED -- that
- * flag reports a phase space spent WITHOUT a decision, and a decided
- * instance never earns it.  The same
+ * process keeps broadcasting (post-decide continuation, above) through
+ * the phase after its decision, so the caller must never treat DECIDE
+ * as "done, stop."  At the bound the continuation rounds end and
+ * Round returns 0 without setting BRACHA87_F4_EXHAUSTED -- that flag
+ * reports a phase space spent WITHOUT a decision, and a decided
+ * instance never earns it (a decision on the last phase ends the
+ * continuation at the bare DECIDE itself, and the 0 is a re-call's).
+ * The same
  * holds for Fig 1's BRACHA87_ACCEPT -- reliable broadcast has no stop
  * condition at all (no EXHAUSTED, no phase ceiling).  Under unbounded
  * latency no process can know that stopping is safe, so when to stop
@@ -1231,17 +1211,20 @@ bracha87Fig4Init(
  * round: the dispatch runs again over the values handed in, and only
  * the value follows them -- the decision is written by the once-only
  * decide rule alone, so it cannot change -- but the call is not the
- * refusal the rule above promises.  The same holds for a post-decide
- * continuation that ran out of phase space.  Both are terminals: read
- * BRACHA87_F4_DECIDED in fig4->flags and stop calling, rather than
- * driving a terminal round a second time.  The third terminal needs
+ * refusal the rule above promises.  The same holds for the bound: a
+ * decided machine's last turn, the step 3 of the phase after its
+ * decision, returns 0 without advancing, so re-calling that round
+ * recomputes it and any later round is refused.  Both are terminals:
+ * read BRACHA87_F4_DECIDED in fig4->flags and stop calling, rather
+ * than driving a terminal round a second time.  The third terminal needs
  * no such care: an EXHAUSTED instance is refused by its own guard.
  *
  * A 0 return is therefore one of four things.  Three are readable off
  * state the caller already holds: k did not match (fig4->phase /
  * fig4->subRound say so), the instance is EXHAUSTED
- * (BRACHA87_F4_EXHAUSTED), or the post-decide continuation ran out of
- * phase space (BRACHA87_F4_DECIDED set, phase at the ceiling).  The
+ * (BRACHA87_F4_EXHAUSTED), or the post-decide continuation is over
+ * (BRACHA87_F4_DECIDED set, subRound 2 of the phase after the
+ * decision or of the last phase).  The
  * fourth leaves no trace and is the caller's own argument: an empty
  * set, n_msgs == 0, which computes nothing and advances nothing, so
  * the same k stays due.  Only a k mismatch is a caller error; an empty

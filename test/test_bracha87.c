@@ -1976,9 +1976,10 @@ testFig4AdoptFinalExhausted(
 
 /*
  * Test Fig4: decided process continues participating (paper requirement).
- * After deciding, subsequent rounds return BRACHA87_BROADCAST, never a
- * second DECIDE, advancing through phases; the value follows the figure
- * (step 1 the majority, here the decision) and the decision stands.
+ * After deciding, the rounds of the next phase return BRACHA87_BROADCAST,
+ * never a second DECIDE; the value follows the figure (step 1 the
+ * majority, here the decision) and the decision stands.  The bound
+ * that ends the phase after the decision is testPostDecideMultiPhase's.
  */
 static void
 testFig4PostDecide(
@@ -2030,7 +2031,8 @@ testFig4PostDecide(
 
 /*
  * Post-decide, no rule gated: the header promises that a decided
- * process runs every later phase as the figure writes it, and on the
+ * process runs the phase after its decision as the figure writes it,
+ * and on the
  * samples the model presents after a decision (Lemma 9: all v, then
  * all (d, v)) a step 1 or a coin gated on the decision would write
  * the same value the figure does.  Only a sample Lemma 9 EXCLUDES can
@@ -2038,7 +2040,9 @@ testFig4PostDecide(
  * -- a majority against the decision at step 1, no d-message at all
  * at step 3 -- and requires the figure's answer: the majority, then
  * (d, majority), then the coin.  The decision stands throughout, and
- * DECIDE is not output again.
+ * DECIDE is not output again.  The step 3 is the phase-after-decision's,
+ * the continuation's last turn: the rules run as written and no next
+ * phase opens (0 actions).
  */
 static void
 testFig4PostDecideUngated(
@@ -2075,7 +2079,7 @@ testFig4PostDecideUngated(
   CoinVal = 1;
   act = bracha87Fig4Round(b, 5, 4, vals);
   check("Post-decide ungated: step 3 tosses without a d-message",
-        act == BRACHA87_BROADCAST && b->value == CoinVal);
+        act == 0 && b->value == CoinVal);
   check("Post-decide ungated: the decision stands", b->decision == 0);
   free(b);
 }
@@ -3478,11 +3482,13 @@ testByzantineComposed(
 }
 
 /*
- * Post-decide multi-phase: decided process runs through 3+ additional
- * phases on the Lemma 9 trajectory (each round fed the value it just
- * broadcast, so step 3 meets 2t+1 (d, v)), verifying case (i)'s
- * value_p := v still fires once decided -- D_FLAG never leaks into a
- * step 1 broadcast -- and the decision never moves.
+ * Post-decide continuation, bounded: a process decided at phase 0 runs
+ * phase 1 on the Lemma 9 trajectory (each round fed the value it just
+ * broadcast, so step 3 meets 2t+1 (d, v)) and opens no phase 2 --
+ * Theorem 2's Agreement has every correct process decided by the end of
+ * phase 1.  Case (i)'s value_p := v still fires once decided (D_FLAG
+ * never rides out of step 3), the decision never moves, DECIDE is not
+ * output again, and every round past the bound is refused unchanged.
  */
 static void
 testPostDecideMultiPhase(
@@ -3494,10 +3500,8 @@ testPostDecideMultiPhase(
   unsigned int act;
   unsigned int i;
   unsigned int k;
-  int dflagLeak;
-  int decChanged;
 
-  printf("\n  Post-decide multi-phase tests:\n");
+  printf("\n  Post-decide continuation, bounded:\n");
 
   sz = bracha87Fig4Sz(3, 10);
   b = calloc(1, sz);
@@ -3516,39 +3520,30 @@ testPostDecideMultiPhase(
   check("MultiPhase: decide+broadcast",
         act == (BRACHA87_DECIDE | BRACHA87_BROADCAST));
 
-  /* Run through phases 1, 2, 3 (rounds 3-11) */
-  dflagLeak = 0;
-  decChanged = 0;
-  for (k = 3; k <= 11; ++k) {
-    unsigned int sub;
-
-    /* Feed uniform values matching decision */
+  /* Phase 1, rounds 3-5: steps 1 and 2 broadcast, step 3 ends it */
+  for (k = 3; k <= 5; ++k) {
     for (i = 0; i < 4; ++i)
       vals[i] = b->value;
-
     act = bracha87Fig4Round(b, (unsigned char)k, 4, vals);
-
-    sub = k % 3;
-
-    /* After step 3 (sub was 2): the value now broadcast into the next
-     * phase's step 1 carries no D_FLAG */
-    if (sub == 2 && (b->value & BRACHA87_D_FLAG))
-      dflagLeak = 1;
-
-    /* Decision must never change */
-    if (b->decision != 0)
-      decChanged = 1;
-
-    /* Must keep broadcasting */
-    check("MultiPhase: keeps broadcasting",
-          (act & BRACHA87_BROADCAST) != 0);
-    /* Must not retry DECIDE */
-    check("MultiPhase: no re-decide",
-          (act & BRACHA87_DECIDE) == 0);
+    check("MultiPhase: the phase after the decision is broadcast, then no more",
+          act == ((k < 5) ? BRACHA87_BROADCAST : 0));
+    check("MultiPhase: decision unchanged", b->decision == 0);
   }
-  check("MultiPhase: no D_FLAG in step 1", !dflagLeak);
-  check("MultiPhase: decision unchanged", !decChanged);
-  printf("    3 phases post-decide : ok\n");
+  check("MultiPhase: no D_FLAG out of step 3",
+        !(b->value & BRACHA87_D_FLAG) && b->value == 0);
+  check("MultiPhase: DECIDED holds, EXHAUSTED stays clear",
+        (b->flags & BRACHA87_F4_DECIDED)
+        && !(b->flags & BRACHA87_F4_EXHAUSTED));
+
+  /* Phase 2 never opens: its rounds are refused and change nothing */
+  for (k = 6; k <= 8; ++k) {
+    for (i = 0; i < 4; ++i)
+      vals[i] = 0;
+    check("MultiPhase: no phase past the bound",
+          bracha87Fig4Round(b, (unsigned char)k, 4, vals) == 0
+          && b->phase == 1 && b->subRound == 2);
+  }
+  printf("    1 phase post-decide, then none : ok\n");
 
   free(b);
 }
@@ -4066,59 +4061,6 @@ testFig1Bpr(
 }
 
 /* Bit test on a returned suppress mask (process j skipped iff bit j set). */
-
-/*
- * The hold: an initiator whose (initial, v) is withheld
- * (bracha87Fig1Hold) retries nothing until released, and a Byzantine
- * echo for the unsent broadcast neither reopens the retry nor
- * overwrites the stored value.
- */
-static void
-testFig1Hold(
-  void
-){
-  struct bracha87Fig1 *b;
-  unsigned long sz;
-  unsigned char out[3];
-  unsigned char v[1];
-  unsigned int n;
-
-  printf("\n  Fig1 hold (a withheld initiator):\n");
-  sz = bracha87Fig1Sz(3, 0);
-  if (!(b = calloc(1, sz))) {
-    check("testFig1Hold alloc", 0);
-    return;
-  }
-  bracha87Fig1Init(b, 3, 1, 0);
-
-  check("hold refused on a non-initiator", bracha87Fig1Hold(b) == 0);
-  check("release on an unheld instance returns 0", bracha87Fig1Release(b) == 0);
-  v[0] = 1;
-  bracha87Fig1Initiator(b, v);
-  n = bracha87Fig1Bpr(b, out);
-  check("an initiator retries INITIAL", n == 1 && out[0] == BRACHA87_INITIAL_ALL);
-  check("hold honored on an initiator", bracha87Fig1Hold(b) == 1);
-  check("held flag set", (b->flags & BRACHA87_F1_HELD) != 0);
-  n = bracha87Fig1Bpr(b, out);
-  check("no INITIAL retry while held", n == 0);
-  v[0] = 0;
-  n = bracha87Fig1Input(b, BRACHA87_ECHO, 1, v, 0, 1, out);
-  v[0] = 1;
-  /* one echo is below every threshold, held or not: this is the
-   * setup for the two checks after it, not a test of the hold */
-  check("a lone stray echo fires nothing", n == 0);
-  check("the stored value survives a stray echo of another value",
-        bracha87Fig1Value(b) && bracha87Fig1Value(b)[0] == 1);
-  n = bracha87Fig1Bpr(b, out);
-  check("still no retry after a stray echo while held", n == 0);
-  check("hold is idempotent", bracha87Fig1Hold(b) == 1);
-  check("release returns 1", bracha87Fig1Release(b) == 1);
-  check("release is once", bracha87Fig1Release(b) == 0);
-  check("held flag clear after release", (b->flags & BRACHA87_F1_HELD) == 0);
-  n = bracha87Fig1Bpr(b, out);
-  check("INITIAL retry resumes after release", n == 1 && out[0] == BRACHA87_INITIAL_ALL);
-  free(b);
-}
 
 /*
  * Per-process BPR suppression: bracha87Fig1Skip masks +
@@ -5640,7 +5582,6 @@ main(
   testPostDecideMultiPhase();
   testFig1ValueSwitch();
   testFig1Bpr();
-  testFig1Hold();
   testFig1SkipAccept();
   testFig1ResendReceived();
   testFig1Annot();
