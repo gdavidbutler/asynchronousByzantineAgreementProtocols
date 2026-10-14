@@ -95,6 +95,21 @@ where the page turns):
   The protocol is basically the consensus protocol of Ben-Or (1983)
   and Bracha and Toueg (1985), into which we plugged our stronger
   communication primitives.
+  The protocol, described in Fig. 4, is conducted in phases that are
+  executed by all processes; a process can proceed to phase i + 1 only
+  after it completed phase i. Phase i consists of rounds 3i + 1,
+  3i + 2, and 3i + 3, that are instances of the generic round of
+  Fig. 3. The messages contain either a simple value, v, or a tagged
+  value, (d, v), indicating that the process is ready to decide v at
+  that phase. For notational convenience, the protocol in Fig. 4 does
+  not terminate once a decision is made. However, this can be easily
+  accomplished.
+
+(The second paragraph, and the Section 3 prose, the Section 5 opening
+sentence and the closing optimality paragraph below, are the
+architect's copy of the scan, OCR hand-corrected by him; the notation
+is set as this file sets the rest -- VALID^k_p, "in", m_{n-t} -- and
+line-end hyphenation is closed.)
 
 The perspective: every figure is written from ONE process's seat --
 "(By process p)" (Fig 1), "round(k) by process p" (Figs 2 and 3),
@@ -151,9 +166,8 @@ the figure prints the thresholds bare, and agree on "or" between the
 three step-1 conditions.  The proofs supply the relation, and it is
 strict: Lemma 1's uses "more than (n + t)/2", and the pigeonhole
 argument needs it strict; Lemma 4's "n - t > (n + t)/2" is strict too.
-The code follows the proofs: threshold = (n+t)/2 + 1 in integer
-arithmetic.  The figure is incomplete, not wrong -- it carries no
-relation to contradict.
+The figure is incomplete, not wrong -- it carries no relation to
+contradict.
 
 Figure 2 -- Not a protocol. The abstract form of ANY asynchronous
 protocol round:
@@ -186,9 +200,57 @@ conjunct is what makes Lemma 6 a claim about two processes' sets
 agreeing rather than a restatement of Theorem 1.
 
 Parameterized by N -- the protocol function. The application supplies N.
-A message is validated only if it COULD have been sent by a correct
-process. This is a separate module from Figure 1 -- it wraps Accept with
-a recursive conformance check.
+A message is validated only if it could have been sent by a correct
+process -- the paper's own sentence, in the Section 3 prose below. This
+is a separate module from Figure 1 -- it wraps Accept with a recursive
+conformance check.
+
+Section 3, Correctness Enforcement -- the prose around Fig. 3 and the
+VALID definition (pp. 135-136, the architect's hand-corrected copy;
+the VALID definition it introduces is quoted above, and Lemmas 5-7,
+which it introduces, are quoted with their proofs below):
+
+  In the previous section, we restricted the behavior of the Byzantine
+  processes by forcing them to send the same message to all processes
+  or no message at all. However, we could not control the content of
+  the message. In this section we present a scheme that forces the
+  Byzantine processes to conform to the underlying protocol.
+  Consider the general outline of an asynchronous protocol in Fig. 2.
+  N is the protocol function that determines the new value of the
+  variable v according to the round number and S. Note that the set of
+  n - t messages from round k could have been received by process p
+  while it was not yet in round k, these messages are stored by p till
+  round k and only then they are used to generate the value v. We will
+  show that for any protocol that can be put in this form the faulty
+  processes can be forced to send only messages according to the
+  protocol.
+  As a first step we use Broadcast and Accept instead of Send and
+  Receive. This will cause several instances of the broadcast protocol
+  to be active at the same time: broadcasts of different processes and,
+  because of the asynchrony of the system, even broadcasts of the same
+  process but from different rounds. To distinguish between messages
+  sent in different broadcasts, all messages sent in the kth round by
+  process p will be tagged with (p, k). A message of the form (p, k, v)
+  is said to be a k-message with value v. A call to Broadcast (p, k, v)
+  initiates the broadcast protocol of Fig. 1 with all messages tagged
+  with (p, k). For each round k, each process p maintains a set of
+  k-messages, VALID^k_p, defined as follows:
+  [the VALID^1_p and VALID^k_p definitions quoted above]
+  The processes update their VALID sets whenever they accept a
+  message. A process p validates a k-message m if m in VALID^k_p.
+  Messages that are not validated are ignored in the protocol (although
+  they are still stored for future validation). Intuitively, a
+  k-message m is validated only if it could have been sent by a correct
+  process in that round.
+  The basic round form is modified again to use Broadcast and Validate
+  instead of Send and Receive, so that it has the following form shown
+  in Fig. 3.
+  We now show that Validate has the same properties as Accept:
+  [Lemmas 5, 6 and 7, quoted below]
+  So far we have shown that the Broadcast and Validate primitives
+  provide us a reliable broadcast protocol. The additional power of
+  Validate will be explicitly exploited in the consensus protocol in
+  the next section.
 
 Figure 4 -- The consensus protocol. A specific instantiation of Figure 3's
 pattern. Three rounds per phase, with specific N functions.  Read off the
@@ -225,33 +287,15 @@ case (i) above reads "value_p = (d, v)", a bare equals, where every
 other assignment in the figure -- seven of them, including case (ii) on
 the very next line -- reads ":=".  Read off the page and then
 double-checked.  Do NOT normalize it: this file quotes the paper, and
-the oddity is the paper's.  The code is unaffected -- an
-assignment is an assignment, and bracha87.c writes the (d, v) at step 2
-like any other value update.
+the oddity is the paper's.
 
-Parameterized by coin -- the application supplies randomness.
-
-Library decomposition follows the paper's structure:
-
-  Module      Figure   Parameterized by          Knows about
-  --------------------------------------------------------------------------
-  Broadcast   Fig 1    n, t                      thresholds, bitmaps
-  Validate    Fig 3    N (protocol function)     VALID sets, rounds
-  Consensus   Fig 4    coin                      phases, majority, decision
-
-Each builds on the previous. None knows about networking, threading,
-or transport. The caller supplies: N (the protocol function for its
-specific use), coin (local random), and all the I/O wiring.
-
-Validate is its own abstraction. It is not "the application checks VALID
-before calling the library." It is a recursive structure that the library
-maintains across rounds -- tracking what messages COULD have been
-legitimately produced. That is real protocol logic, not application logic.
+Parameterized by coin: the paper writes "coin_toss (0 or 1 with
+probability 1/2)" and says no more about its source.
 
 Key properties from the paper.  THIS LIST IS A SUMMARY, not paper text.
-Lemmas 1-8 are quoted verbatim, with their proofs, in the Sections 2.2
-and 3 block below; Lemmas 9 and 10 and Theorem 2 in the Section 5 block
-after it.  Where a statement here and the verbatim text below differ,
+Lemmas 1-8 are quoted verbatim, with their proofs, in the Sections 2.2,
+3 and 5 block below; Lemmas 9 and 10 and Theorem 2 in the Section 5
+block after it.  Where a statement here and the verbatim text below differ,
 the verbatim text is the paper:
 
   Lemma 1: If two correct processes send (ready, v) and (ready, u),
@@ -285,8 +329,9 @@ the verbatim text is the paper:
   Termination: proved in the Theorem 2 termination paragraph quoted
   below.
 
-Sections 2.2 and 3 proofs -- Lemmas 1 through 8, statements and
-proofs (pp. 134-138, verbatim).  Recovered from three independent
+Sections 2.2, 3 and 5 proofs -- Lemmas 1 through 8, statements and
+proofs (pp. 134-138, verbatim; Lemmas 1-4 are Section 2.2's, 5-7
+Section 3's, and 8 opens Section 5).  Recovered from three independent
 readings of the paper, reconciled: the PDF's embedded text layer
 (itself an OCR product -- it reads "t < n/S" in the abstract), a fresh
 2x rasterization read by Vision with language correction off, and the
@@ -319,14 +364,15 @@ reading:
   Lemma 6  "for some k >= 1"     OCR had ">",         text layer right
   Lemma 7  "1 <= i <= n - t"     text layer had "<",  OCR right
 The two non-strict readings in Lemmas 3 and 4 are the only ones true at
-n = 3t+1, where n - t and 2t + 1 are equal -- the boundary this library
-lives on.
+n = 3t+1, where n - t and 2t + 1 are equal.
 
-One assignment below is editorial, not recovered: in Lemma 1's proof
-both machine readings give the SAME letter to the two echo counts.
-They are assigned by the sense of the proof -- q sent (ready, v) so q
-counted (echo, v); r sent (ready, u) so r counted (echo, u) -- and that
-has not been read off the page.
+In Lemma 1's proof the page itself gives the SAME letter to the two
+echo counts: it prints "more than (n+t)/2 (echo,v) messages" for
+process q and again for process r, read directly off the page.  The
+proof's sense wants (echo, u) for r, since r sent (ready, u) and the
+next sentence has a correct process sending both (echo, u) and
+(echo, v).  The paper's letters are kept below; the slip is the
+paper's.
 
   LEMMA 1. If two correct processes s and t send (ready, v) and
   (ready, u) messages, respectively, then u = v.
@@ -334,7 +380,7 @@ has not been read off the page.
   (ready, v) message, and let r be the first process that sends a
   (ready, u) message. Process q must have received more than
   (n + t)/2 (echo, v) messages, and process r must have received more
-  than (n + t)/2 (echo, u) messages. Therefore, some correct process
+  than (n + t)/2 (echo, v) messages. Therefore, some correct process
   must have sent both (echo, u) and (echo, v) messages. But correct
   processes send only one message of each type during a broadcast, and
   hence a contradiction.
@@ -399,6 +445,12 @@ has not been read off the page.
   q will accept m. Therefore, eventually m in VALID^{k+1}_q for every
   correct process.
 
+  5. CORRECTNESS PROOF
+  In this section we prove that the protocol in Fig. 4 is a t-resilient
+  consensus protocol, for t < n/3. Since the protocol requires
+  processes to wait for each other, we must show that it does not
+  deadlock.
+
   LEMMA 8. If a correct process p is at round i, then p will eventually
   progress to round i + 1.
   Proof. Suppose not; then some correct processes are forever blocked.
@@ -409,8 +461,7 @@ has not been read off the page.
 
 Lemma 8 is the one passage all three readings give word for word, down
 to "Proof."; only the end-of-proof mark differs between the machines.
-It is the load-bearing citation at bracha87Fig4Round in bracha87.h --
-"all correct processes have already broadcast messages at that round"
+"All correct processes have already broadcast messages at that round"
 is the paper's own sentence, not a paraphrase of it.  Its statement
 indexes the round i and its proof indexes it r, and it supposes "some
 correct processes" blocked (plural) while concluding about the single
@@ -496,6 +547,11 @@ Theorem 2, its statement and proof (pp. 139-140):
   by Lemma 9 they all decide in phase r + 1. The probability of not
   terminating is lim_{r->inf} (1 - rho)^r = 0.
 
+  In Bracha and Toueg (1985) it was proved that for t >= n/3,
+  t-resilient randomized asynchronous consensus protocols are
+  impossible. Thus, the protocol is optimal in the number of faulty
+  processes it can tolerate.
+
 Why the paper sets Rabin's model aside (Section 1, p. 132):
 
   In Toueg (1984) this protocol is extended to tolerate up to t < n/3
@@ -565,15 +621,4 @@ termination (the probabilistic property above); Figure 1's broadcast
 has no halting discussion at all.  When a process may stop SENDING
 is therefore outside the paper's theorems entirely: the model's
 reliable channels make single sends suffice, so the paper never
-faces message retirement, and any halting mechanism built over
-fair loss (retry retire gates, quiescence) is engineering below
-the theorems, carrying no paper cover and owing its own proof.
-
-Lemma/Theorem to test mapping:
-
-  Lemma 1   Composed simulation: inline check on every honest rdSent instance
-  Lemma 2   Composed simulation: inline check on every honest accepted instance
-            simFig1Equivoc: explicit cross-process accept agreement check
-  Lemma 9   simFig4: all-honest same-value tests (decide in one phase)
-  Theorem 2 simFig4, simFig4Byz, simComposed: all decision agreement checks
-  Step 1 no D_FLAG  Composed simulation: inline check on every step 1 broadcast
+faces message retirement.

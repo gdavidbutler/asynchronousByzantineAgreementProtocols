@@ -1,33 +1,22 @@
-# Bridge from bracha87Fig1.dtc (paper vocabulary) to C symbols used in
-# bracha87Fig1Input.  '~'-prefixed names are C boundary symbols; the
-# post-'~' text is the bare C identifier and each row's right-hand side
-# is the literal C token (constant macro, integer literal) the local
-# translator substitutes verbatim into 'if (id == TOKEN) goto Lk;' and
-# 'id = TOKEN;'.
+# Bridge from bracha87Fig1.dtc (paper, caller and BPR vocabulary) to C
+# symbols.  '~'-prefixed names are C boundary symbols; the post-'~' text
+# is the bare C identifier and each row's right-hand side is the literal
+# C token psu.awk substitutes verbatim into 'if (id == TOKEN) goto Lk;'
+# and 'id = TOKEN;'.
 #
-# Scope: the predicates the paper's and BPR's rows read.  The null
-# and range refusals stay as a C-side early-exit -- DTC has no
-# ordering insight to add there.  Dedup is not an exit: a duplicate
-# records nothing and still runs the dispatch, and "have accepted"
-# is a bridged input, because the BPR rows consume the messages the
-# paper's rows are finished with.
+# The partitioned counters bridge to a band each: the C side does the
+# relational test once and hands the band in.
 
-# Message kind: bridge directly to the function parameter 'type'.
-@"kind of message",~type
-"(initial, v)",BRACHA87_INITIAL
-"(echo, v)",BRACHA87_ECHO
-"(ready, v)",BRACHA87_READY
+# The event this run is for.
+@"event",~sweep
+sweep,1
+arrival,0
 
-# Per-process state flags reduced to 0/1.
-@"have echoed",~haveEchoed
+# The paper's inputs.
+@"received (initial, v) from p",~receivedInitial
 yes,1
 no,0
 
-@"have sent ready",~haveSentReady
-yes,1
-no,0
-
-# Threshold predicates (paper: strict > (n+t)/2 for echo; >= for ready).
 @"echo-count(v) > (n+t)/2",~ecGtHalfNT
 yes,1
 no,0
@@ -40,9 +29,52 @@ no,0
 yes,1
 no,0
 
-# Domain action -> boolean local that drives post-dispatch side effects
-# (fig1Echo / memcpy / flag set / out[nout++]=...).
+@"have echoed",~haveEchoed
+yes,1
+no,0
 
+@"have sent ready",~haveSentReady
+yes,1
+no,0
+
+@"have accepted",~haveAccepted
+yes,1
+no,0
+
+# The caller's inputs.
+@"am initiator",~amInitiator
+yes,1
+no,0
+
+@"hold the caller's something from p",~holdSomething
+yes,1
+no,0
+
+# holders < n : 0, holders == n : 1
+@"processes holding (initial, v)",~holdingBand
+"not all",0
+all,1
+
+# process sweeps < abandon : 0, otherwise 1
+@"sweeps since this process started",~abandonBand
+"< abandon",0
+">= abandon",1
+
+@"abandoned",~abandoned
+yes,1
+no,0
+
+# BPR's inputs: the echo armed, and no process owed (ready, v) : 0,
+# some process : 1
+@"echo armed",~echoArmed
+yes,1
+no,0
+
+@"processes owed (ready, v)",~owedBand
+none,0
+some,1
+
+# The paper's outputs.
 @~sendEcho,"send (echo, v)"
 1,yes
 0,no
@@ -51,49 +83,28 @@ no,0
 1,yes
 0,no
 
-@~acceptV,"accept(v)"
+@~acceptV,"accept v"
 1,yes
 0,no
 
-# The once-only accept: the flag as the message found it.
-@"have accepted",~haveAccepted
-yes,1
-no,0
+# The caller's outputs.
+@~takeStep1,"take step 1"
+1,yes
+0,no
 
-# ===========================================================
-# Bracha Phase Retry (BPR)
-# ===========================================================
-#
-# Bridge entries for the BPR sub-tables in bracha87Fig1.dtc.  Same
-# binding style as above.  The three retire inputs are read from
-# the instance in bracha87Fig1Bpr (and fed as 0 by bracha87Fig1Input,
-# which discards the retry outputs); the two annotation inputs are
-# the caller's flags in bracha87Fig1Input (and 0 / 1 -- nothing
-# carried, nothing to arm -- in bracha87Fig1Bpr, which discards the
-# annotation outputs).  The wire encoding for retried messages
-# re-uses BRACHA87_INITIAL / BRACHA87_ECHO / BRACHA87_READY, so the
-# retry outputs bridge to per-action booleans.
+@~takeStep2,"take step 2"
+1,yes
+0,no
 
-@"am initiator",~amInitiator
-yes,1
-no,0
+@~takeStep3,"take step 3"
+1,yes
+0,no
 
-@"all echoed",~allEchoed
-yes,1
-no,0
+@~abandon,"abandon"
+1,yes
+0,no
 
-@"READY suppress mask covers all n",~readyMaskFull
-yes,1
-no,0
-
-@"carries ACCEPTED",~annAccepted
-yes,1
-no,0
-
-@"carries RECEIVED",~annReceived
-yes,1
-no,0
-
+# BPR's outputs.
 @~retryInitial,"retry (initial, v)"
 1,yes
 0,no
@@ -103,13 +114,5 @@ no,0
 0,no
 
 @~retryReady,"retry (ready, v)"
-1,yes
-0,no
-
-@~recordSender,"record sender accepted"
-1,yes
-0,no
-
-@~armSender,"arm re-send to sender"
 1,yes
 0,no

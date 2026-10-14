@@ -19,1441 +19,506 @@
  */
 
 /*
- * bkr94acs.c -- Standalone demonstration of the BKR94 Asynchronous
- * Common Subset protocol (Ben-Or/Kelmer/Rabin 1994 Section 4
- * Figure 3, composing Bracha87 Figures 1 and 4).
+ * n seats, each with a message, agree on a subset of the seats and on
+ * the message of each seat in it, over an in-memory queue that loses
+ * and reorders by seed.  The report is the messages of the subset, as
+ * each seat's library hands them back.
  *
- * Each of N processes A-Casts a string value.  Agreement[Q] agrees on
- * a subset of at least n-t PROCESS INDICES; carrying each process's
- * value there on a Fig 1 A-Cast is this library's construction, so
- * what the demo prints is that subset's values.  The subset is sorted
- * deterministically so every process outputs the same ordering -- the
- * deterministic ordering the caller chooses over SubSet.
+ * The message is the seat's value: seat j broadcasts it, padded to a
+ * fixed length, and a seat's subset is output with the value of every
+ * seat in it accepted there.  Nothing here is sent beside a broadcast.
  *
- * Scope: this demo runs in a single process with a synchronous
- * in-memory queue -- every message is delivered, no loss, no
- * asynchrony; delivery order is deterministic unless -s is given.
- * It exercises the protocol state machines and the BPR retry but
- * does NOT exercise the deployment-time abandonment policy needed
- * under real asynchronous transport; that is inherently coupled to
- * message loss, partial ordering, and the failure modes those
- * introduce. See README.md "Abandonment" for the design.
+ * Every seat is one bkr94acs seat: it feeds what arrives, sends what
+ * its actions name, hands its own messages straight back to itself off
+ * the queue, and sweeps once per pass of this loop.  With -b one seat
+ * is Byzantine and holds nothing: it sends the (initial, v) of its
+ * message to every seat, and in every BA its round-1 (initial, v) with
+ * value 1 to the seats below the split and 0 to the rest, and says
+ * nothing more.
  *
- * How a run ends -- the taxonomy, and which half this demo shows:
+ * How a run ends: by abandon at each honest seat, after its decisions.
  *
- *   QUIESCENT   the owing ending (BPR.md Quiescence -- no exit
- *               decision at all), demonstrated here, per process on
- *               its OWN evidence: a bkr94acsRetryStep pass past its
- *               A-Cast owes nothing, so it leaves the retry
- *               rotation.  Completion is then an assertion the
- *               results section checks, not the gate.  Reaching it
- *               needs both READY annotations round-tripped below --
- *               ACCEPTED for "I have accepted", RECEIVED for "I have
- *               yours" -- since suppressing on the first alone
- *               silences the announcement the other end waits for.
- *   ABANDONED   the policy backstop (README.md "Abandonment"), which
- *               reads the ABSENCE of progress and therefore cannot
- *               tell a laggard from a dead process.  Under loss it
- *               is the only exit a process whose owed evidence
- *               never arrives has.
- *               This demo loses nothing, so it never takes it.
- *   tick cap    a harness guard, not protocol: a bound on the
- *               rotation, carrying no evidence of anything.
- *
- * Build:
- *   (from project root) make example_bkr94acs
- *
- * Usage:
- *   ./example_bkr94acs [-v] [-s seed] [-d process] [-g patience]
- *                      [-b mode] n t acast0 ...
- *
- * Example:
- *   ./example_bkr94acs 4 1 joe sam sally tim
- *
- * The Byzantine mode (-b) designates PROCESS 0 as the one faulty
- * process -- the same slot example/bracha87Fig1.c's -b uses, and the
- * one the equivocation splits are written around -- and gives it one
- * of three behaviors.  It composes with -s and -v and REFUSES to
- * compose with -d / -g: those demonstrate sweep-counted patience, and
- * a patience demonstration collapses when the run cannot end by
- * quiescence.  Under -b the tick cap IS the expected ending, and the
- * exit code reports whether the honest assertions held:
- *   ./example_bkr94acs -b silent 4 1 joe sam sally tim
- *     process 0 runs no state machine and sends nothing.  The honest
- *     processes complete with its A-Cast excluded and agree; every
- *     gate that needs all n stands one bit short forever.
- *   ./example_bkr94acs -b equiv2 4 1 joe sam sally tim
- *     process 0 submits INITIAL with its value to processes [0..2)
- *     and with the first byte's case bit flipped to [2..n), then runs
- *     no state machine.  The honest camps are 1 and 2, both below the echo
- *     threshold of 3: nobody accepts, and Lemma 2's conditional is
- *     vacuous.
- *   ./example_bkr94acs -b equiv1 4 1 joe sam sally tim
- *     the same behavior split 1/3, so all three honest processes echo
- *     the same value, cross the threshold, and accept it -- the
- *     equivocator's A-Cast is INCLUDED.
- *   ./example_bkr94acs -b poke 4 1 joe sam sally tim
- *     process 0 participates honestly through COMPLETE, then forever
- *     re-sends READYs stripped of the RECEIVED annotation.  Each poke
- *     re-arms one marked re-send aimed only at the poker, and is a
- *     duplicate READY that Input returns 0 acts for: it defeats the
- *     quiescence ending without touching the progress evidence a
- *     barren-sweep policy reads.
- *
- * The sweep-side pacing pair (-d names the WAN laggard, -g the patience,
- * in COMPLETED BPR SWEEPS -- full passes of the Retry cursor, the
- * unit bkr94acs.h ratifies):
- *   ./example_bkr94acs -d 3 4 1 joe sam sally tim
- *     zero patience excludes the delayed honest process:
- *     SubSet = 3 of 4, its value accepted everywhere but
- *     excluded -- participation loss, not value loss
- *   ./example_bkr94acs -d 3 -g 1 4 1 joe sam sally tim
- *     the identical schedule under ONE sweep of patience includes it:
- *     SubSet = 4 of 4, step 2 never fires.  One sweep is what
- *     patience is worth by construction: a full cursor pass spans
- *     many ticks and the queue is drained every tick, so the
- *     released INITIAL and its cascade accept everywhere inside the
- *     pass and step 1 enters the laggard's BA before the fanout's
- *     patience elapses.
- * What the pair deliberately shows the zero-patience run giving up is the
- * whole demonstration; a run without -d never reaches TOLERANCE at
- * step 2 (every A-Cast enters 1 before three BAs decide, so the
- * duty goes from HELD to MET).
+ * usage: example_bkr94acs [-v] [-s seed] [-l loss] [-b seat] [-x split]
+ *                         [-p patience] [-a abandon] [-r rounds]
+ *                         n t message...     (n messages, up to 63 bytes)
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "bracha87Fig1.h"
 #include "bkr94acs.h"
 
-/*--------------------------------------------------------------------------*/
-/*  Constants                                                               */
-/*--------------------------------------------------------------------------*/
+#define HOLDS(st) (((st) & (BRACHA87_F1_INITIAL | BRACHA87_F1_BESIDE)) == (BRACHA87_F1_INITIAL | BRACHA87_F1_BESIDE))
 
-#define MAX_PROCESSES  16
-/*
- * The phase budget (README.md "The phase budget"), the least this demo
- * admits.  Every arm decides in phase 0, and post-decide continuation
- * runs through the phase after the decision and opens no other, so a
- * decision in phase 0 plays rounds 0..5 (the lossless n = 4 run ends
- * QUIESCENT at tick 201).  One phase would make the phase-0 decision a
- * last-phase one, which opens nothing, and a process that only adopted
- * v there would be EXHAUSTED beside the deciders (bracha87.h, at
- * bracha87Fig4Round).  No more than 2, because a budget is paid at
- * Init: the Fig 1 instance space is O(N^2 * maxPhases * 3) and each
- * instance is O(N) bytes, so bkr94acsSz grows as N^3 * maxPhases,
- * allocated whether or not a phase is ever entered.  A deployment sizes
- * this against the coin it supplies.
- */
-#define MAX_PHASES 2
-#define MAX_VLEN   256  /* max A-Cast bytes (including \0); bracha87 vLen encoding 255 */
-
-/*
- * The -b behaviors.  BYZ_PROCESS is the designated faulty slot: process
- * 0, matching example/bracha87Fig1.c's default initiator, so the
- * equivocation splits below read as the paper's do -- [0..split) gets
- * one value, [split..n) the other, and the honest camps are what is
- * left after the equivocator's own slot is taken out.
- */
-#define BYZ_NONE    0
-#define BYZ_SILENT  1
-#define BYZ_EQUIV   2
-#define BYZ_POKE    3
-#define BYZ_PROCESS 0
-
-/*--------------------------------------------------------------------------*/
-/*  Message queue -- simulated network                                      */
-/*                                                                          */
-/*  Two message classes share one queue:                                    */
-/*    BKR94ACS_CLS_ACAST -- Fig1 messages carrying A-Cast values            */
-/*    BKR94ACS_CLS_BA    -- Fig1 messages for per-process binary BA         */
-/*                                                                          */
-/*  Class + Bracha87 type (and, for BA, the binary value + D_FLAG)          */
-/*  ride in ONE clsType byte per the canonical packed-byte layout in        */
-/*  bkr94acs.h.  qPush composes it; the process loop recovers it.  An       */
-/*  ACAST carries its value in value[]; BA folds its payload into           */
-/*  clsType and leaves value[] unused.  A READY also carries the two        */
-/*  class-independent BPR annotations: BKR94ACS_ACCEPTED (bit 4) from the   */
-/*  act's .accepted flag, one fact about the sender; and                    */
-/*  BKR94ACS_RECEIVED (bit 5) from the act's .received mask, decided per    */
-/*  RECIPIENT.  Together they are the READY retire: the first says "I       */
-/*  have accepted," the second "I have yours," and quiescence needs both    */
-/*  in every direction.  On ingress neither needs a call of its own --      */
-/*  the whole clsType byte goes to bkr94acs*Input as annot, which routes    */
-/*  both, in order, off the one message that carried them.                  */
-/*--------------------------------------------------------------------------*/
+#define MSGLEN 64
 
 struct msg {
-  unsigned char clsType;     /* class|type; +ACCEPTED,+RECEIVED on a READY;
-                              * +cv,D_FLAG for BA (see above) */
-  unsigned char process;      /* which process */
-  unsigned char round;       /* BA round (class=BA only) */
-  unsigned char initiator; /* who initiated this Fig1 broadcast (BA) */
-  unsigned char from;        /* sender */
-  unsigned char to;          /* recipient */
-  unsigned char poke;        /* -b poke: this READY is a poke */
-  unsigned char value[MAX_VLEN];  /* ACAST value (vLen+1 bytes); unused for BA */
+  unsigned char kind;
+  unsigned char ba;
+  unsigned char q;
+  unsigned char k;
+  unsigned char from;
+  unsigned char value;
+  unsigned char annot;    /* on an ECHO or a READY */
+  unsigned char to;
+  unsigned char v[MSGLEN];  /* at round 0: the message */
 };
 
-static struct msg *MsgQ;
-static unsigned int Qcap;
-static unsigned int Qhead;
-static unsigned int Qtail;
-
-static int
-qAlloc(
-  unsigned int cap
-){
-  MsgQ = calloc(cap, sizeof (struct msg));
-  if (!MsgQ)
-    return (-1);
-  Qcap = cap;
-  Qhead = Qtail = 0;
-  return (0);
-}
-
-static void
-qFree(
-  void
-){
-  free(MsgQ);
-  MsgQ = 0;
-}
-
-static void
-qPush(
-  unsigned char cls
- ,unsigned char process
- ,unsigned char round
- ,unsigned char initiator
- ,unsigned char type
- ,unsigned char accepted /* READY only: act's .accepted -> wire bit 4 */
- ,unsigned char received /* READY only: act's .received bit 'to' -> wire bit 5 */
- ,unsigned char from
- ,unsigned char to
- ,const unsigned char *value
- ,unsigned int valueLen
-){
-  if (Qtail >= Qcap)
-    return;
-  MsgQ[Qtail].process = process;
-  MsgQ[Qtail].round = round;
-  MsgQ[Qtail].initiator = initiator;
-  MsgQ[Qtail].from = from;
-  MsgQ[Qtail].to = to;
-  MsgQ[Qtail].poke = 0;
-  if (cls == BKR94ACS_CLS_BA)
-    /*
-     * BA payload is two live bits: the binary value (placed at
-     * bit 3) and BRACHA87_D_FLAG (kept at its native bit 7).  Fold both
-     * into the wire byte alongside class, type, and the ACCEPTED
-     * annotation; no value byte is sent.
-     */
-    MsgQ[Qtail].clsType = (unsigned char)
-      (cls | type
-       | (accepted ? BKR94ACS_ACCEPTED : 0)
-       | (received ? BKR94ACS_RECEIVED : 0)
-       | ((value[0] & 1) << 3)
-       | (value[0] & BRACHA87_D_FLAG));
-  else {
-    /* A-Cast payload is real bytes; pack class, type, ACCEPTED. */
-    MsgQ[Qtail].clsType = (unsigned char)
-      (cls | type
-       | (accepted ? BKR94ACS_ACCEPTED : 0)
-       | (received ? BKR94ACS_RECEIVED : 0));
-    memcpy(MsgQ[Qtail].value, value, valueLen);
-  }
-  ++Qtail;
-}
-
-/*
- * Fisher-Yates shuffle of the unprocessed portion of the queue.
- */
-static void
-qShuffle(
-  unsigned int *seed
-){
-  unsigned int n;
-  unsigned int i;
-
-  n = Qtail - Qhead;
-  if (n < 2)
-    return;
-  for (i = n - 1; i > 0; --i) {
-    unsigned int j;
-    struct msg tmp;
-
-    *seed = *seed * 1103515245u + 12345u;
-    j = ((*seed >> 16) & 0x7FFF) % (i + 1);
-    tmp = MsgQ[Qhead + i];
-    MsgQ[Qhead + i] = MsgQ[Qhead + j];
-    MsgQ[Qhead + j] = tmp;
-  }
-}
-
-/*--------------------------------------------------------------------------*/
-/*  Coin -- deterministic alternating, adequate for demonstration only.     */
-/*--------------------------------------------------------------------------*/
+static unsigned long CoinCalls;
 
 static unsigned char
-demoCoin(
-  void *closure
- ,unsigned char instance
- ,unsigned char phase
+coin(
+  void *ctx
 ){
-  (void)closure;
-  (void)instance;
-  return (phase % 2);
+  unsigned int *seed;
+
+  ++CoinCalls;
+  seed = ctx;
+  *seed = *seed * 1103515245u + 12345u;
+  return ((*seed >> 16) & 1);
 }
-
-/*--------------------------------------------------------------------------*/
-/*  Verbose helpers                                                         */
-/*--------------------------------------------------------------------------*/
-
-static const char *
-typeName(
-  unsigned char type
-){
-  switch (type) {
-  case BRACHA87_INITIAL: return ("INITIAL");
-  case BRACHA87_ECHO:    return ("ECHO");
-  case BRACHA87_READY:   return ("READY");
-  default:               return ("???");
-  }
-}
-
-/*--------------------------------------------------------------------------*/
-/*  Act framing -- the canonical packed-byte template                       */
-/*                                                                          */
-/*  Three sources hand the loop acts of the same kinds: a delivery          */
-/*  (bkr94acs{Acast,Ba}Input), the step-2 fanout (bkr94acsFanout), and a     */
-/*  BA round turn (bkr94acsTurn).  They differ only in what enabled them,    */
-/*  never in how their acts are framed, so all three route here: the wire    */
-/*  byte composed per bkr94acs.h, the BPR per-process suppress mask          */
-/*  honored, and the three terminal acts reported.  'tag' names the source   */
-/*  in the verbose trace.                                                   */
-/*--------------------------------------------------------------------------*/
-
-static void
-qActs(
-  const struct bkr94acsAct *acts
- ,unsigned int nacts
- ,unsigned char self
- ,unsigned int n
- ,unsigned int vLen
- ,unsigned int verbose
- ,const char *tag
-){
-  unsigned int k;
-  unsigned int p;
-
-  for (k = 0; k < nacts; ++k) {
-    switch (acts[k].act) {
-
-    case BKR94ACS_ACT_ACAST_SEND:
-      if (!acts[k].value)
-        break;
-      if (verbose)
-        printf("process %u: -> ACAST %s(process=%u)%s\n",
-               (unsigned)self, typeName(acts[k].type),
-               (unsigned)acts[k].process, tag);
-      for (p = 0; p < n; ++p) {
-        /* BPR per-process suppression: a transport skips recipients the
-         * action is provably no longer owed to (echoed -> INITIAL,
-         * readied -> ECHO, accepted -> READY).  Sound under loss; here
-         * (no loss) it merely trims redundant retries.  The READY
-         * suppress mask is fed by the ACCEPTED wire bit this loop
-         * round-trips (egress .accepted -> bit 4 -> the annot argument
-         * of bkr94acs*Input); the same round-trip is exercised under
-         * loss in test_bkr94acs_blackbox.c. */
-        if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
-          continue;
-        qPush(BKR94ACS_CLS_ACAST, acts[k].process, 0, 0,
-              acts[k].type, acts[k].accepted,
-              acts[k].received && BRACHA87_SKIP_TST(acts[k].received, p),
-              self, (unsigned char)p,
-              acts[k].value, vLen);
-      }
-      break;
-
-    case BKR94ACS_ACT_BA_SEND:
-      if (verbose)
-        printf("process %u: -> BA %s(process=%u, round=%u, initiator=%u, val=%u)%s\n",
-               (unsigned)self, typeName(acts[k].type),
-               (unsigned)acts[k].process, (unsigned)acts[k].round,
-               (unsigned)acts[k].initiator,
-               (unsigned)acts[k].baValue, tag);
-      for (p = 0; p < n; ++p) {
-        if (acts[k].skip && BRACHA87_SKIP_TST(acts[k].skip, p))
-          continue;
-        qPush(BKR94ACS_CLS_BA, acts[k].process, acts[k].round,
-              acts[k].initiator, acts[k].type, acts[k].accepted,
-              acts[k].received && BRACHA87_SKIP_TST(acts[k].received, p),
-              self, (unsigned char)p,
-              &acts[k].baValue, 1);
-      }
-      break;
-
-    case BKR94ACS_ACT_BA_DECIDED:
-      if (verbose)
-        printf("process %u: BA[%u] decided %u\n",
-               (unsigned)self, (unsigned)acts[k].process,
-               (unsigned)acts[k].baValue);
-      break;
-
-    case BKR94ACS_ACT_COMPLETE:
-      if (verbose)
-        printf("process %u: BKR94 ACS COMPLETE\n", (unsigned)self);
-      break;
-
-    case BKR94ACS_ACT_BA_EXHAUSTED:
-      /*
-       * Not verbose-gated: BA_EXHAUSTED is a fatal protocol-level
-       * event (BKR94 Lemma 2 Part B's BA-termination assumption
-       * was violated for this instance), not informational like
-       * BA_DECIDED / COMPLETE.  An application's silence on this
-       * action would teach the wrong pattern.
-       */
-      printf("process %u: BA[%u] EXHAUSTED -- ACS cannot complete "
-             "(no decision in %u phases)\n",
-             (unsigned)self, (unsigned)acts[k].process,
-             (unsigned)MAX_PHASES);
-      break;
-    }
-  }
-}
-
-/*--------------------------------------------------------------------------*/
-/*  String comparison for qsort                                             */
-/*--------------------------------------------------------------------------*/
-
-static int
-strPtrCmp(
-  const void *a
- ,const void *b
-){
-  return (strcmp(*(const char *const *)a, *(const char *const *)b));
-}
-
-/*--------------------------------------------------------------------------*/
-/*  Main simulation                                                         */
-/*--------------------------------------------------------------------------*/
 
 int
 main(
   int argc
  ,char *argv[]
 ){
-  /* Configuration */
+  struct bkr94acs **a;
+  struct bkr94acsAct *out;
+  struct bkr94acsAct *work;
+  struct msg *q;
+  unsigned int *subsetAt;
+  unsigned int *abandonedAt;
+  unsigned long *sent;        /* deliveries by kind: initial, echo, ready */
+  unsigned long sz;
+  unsigned int patience;
+  unsigned int abandon;
   unsigned int n;
   unsigned int t;
+  unsigned int maxRounds;
+  unsigned int seed;
+  unsigned int seed0;
+  unsigned int *coinSeed;     /* per seat: the coin is local to its seat */
+  unsigned int loss;
   unsigned int verbose;
-  unsigned int shuffleSeed;
-  unsigned int origSeed;
-  unsigned int vLen;
-  int dproc;                /* -d: the delayed (WAN laggard) process, -1 none */
-  unsigned int patience;    /* -g: patience in sweeps, 0 = no deliberate wait */
-  unsigned int patienceGiven; /* -g appeared on the command line */
-  unsigned int byzMode;     /* -b: BYZ_NONE / SILENT / EQUIV / POKE */
-  unsigned int byzSplit;    /* -b equiv<S>: recipients [0..S) get the value */
-
-  /* Per-process BKR94 ACS state */
-  struct bkr94acs *processes[MAX_PROCESSES];
-  unsigned long acsSize;
-  struct bracha87Retry retry[MAX_PROCESSES];
-
-  /* Sweep-side pacing state (the header's caller discipline: count
-   * COMPLETED SWEEPS while a decision's duty holds TOLERANCE, fire
-   * when the count reaches the budget, evaluating the count on
-   * every tick so a zero budget spends no wait; reset whenever duty
-   * leaves TOLERANCE.  THE UNIT IS THE FULL SWEEP -- one complete
-   * pass of the Retry cursor over every sent Fig 1 instance, read
-   * off the cursor's own `sweeps` wrap count, per bkr94acs.h.  One
-   * loop pass here is a TICK (one Retry call per process, the
-   * header's application-loop template), so a sweep boundary for a
-   * process is that count changing, or a quiescent tick (the pass
-   * it would have made owes nothing). */
-  unsigned int turnSweeps[MAX_PROCESSES][MAX_PROCESSES];
-  unsigned int fanoutSweeps[MAX_PROCESSES];
-  unsigned int lastSweeps[MAX_PROCESSES];
-  unsigned int fanoutFires;
-  unsigned int tickCount;
-  unsigned int released;
-
-  /* Per-process ending: quiescence is read per process, from its own
-   * Retry sweep, so the run reports which processes left and when. */
-  unsigned char quiescent[MAX_PROCESSES];
-  unsigned int quiesceTick[MAX_PROCESSES];
-  unsigned int quiesced;
-
-  /* Byzantine-mode observation.  The POKE assertions are read off the
-   * live run: a poke's Input return (the barren evidence stream), and
-   * the two READY masks at the one stable point where they diverge --
-   * right after a poke's delivery has re-armed its sender and before
-   * the marked re-send the next egress aims back consumes the arm. */
-  unsigned int pokeArmed;
-  unsigned int pokeSent;
-  unsigned int pokeDelivered;
-  unsigned int pokeActs;
-  unsigned int pokeSampled;
-  unsigned int pokeInstances;
-  unsigned int pokeAimed;
-
-  /* A-Cast strings */
-  char acasts[MAX_PROCESSES][MAX_VLEN];
-
-  /* Loop / temp */
+  unsigned int byz;           /* the Byzantine seat, n if none */
+  unsigned int split;
+  unsigned int qcap;
+  unsigned int qhead;
+  unsigned int qtail;
+  unsigned int sweep;
+  unsigned int dropped;
+  unsigned int toByz;
+  unsigned int outMax;
+  unsigned int workCap;
+  unsigned int nwork;
+  unsigned int nout;
+  unsigned int p;
+  unsigned int site;
   unsigned int i;
   unsigned int j;
+  unsigned int w;
+  unsigned int to;
   int arg;
-  int exitCode;
-
-  /*----------------------------------------------------------------------*/
-  /*  Parse command line                                                   */
-  /*----------------------------------------------------------------------*/
+  const struct bracha87Fig1 *inst;
+  int recip;                  /* a READY re-sent on a sweep: to its recipients only */
+  const unsigned char *cv;
+  unsigned char v[MSGLEN];
+  int rc;
+  int more;
 
   verbose = 0;
-  shuffleSeed = 0;
-  exitCode = 0;
-  dproc = -1;
-  patience = 0;
-  patienceGiven = 0;
-  byzMode = BYZ_NONE;
-  byzSplit = 0;
+  seed = 0;
+  loss = 0;
+  byz = 256;
+  split = 0;
+  patience = 2;
+  abandon = 32;
+  maxRounds = 6;
+  rc = 1;
+  a = 0;
+  out = work = 0;
+  q = 0;
+  subsetAt = abandonedAt = 0;
+  sent = 0;
+  coinSeed = 0;
+  CoinCalls = 0;
 
   arg = 1;
-  while (arg < argc && argv[arg][0] == '-') {
-    if (argv[arg][1] == 'v' && argv[arg][2] == '\0') {
+  while (arg < argc && argv[arg][0] == '-' && argv[arg][1] && argv[arg][2] == '\0') {
+    switch (argv[arg][1]) {
+    case 'v':
       verbose = 1;
       ++arg;
-    } else if (argv[arg][1] == 's' && argv[arg][2] == '\0') {
-      ++arg;
-      if (arg >= argc) goto usage;
-      shuffleSeed = (unsigned int)atoi(argv[arg]);
-      ++arg;
-    } else if (argv[arg][1] == 'd' && argv[arg][2] == '\0') {
-      ++arg;
-      if (arg >= argc) goto usage;
-      dproc = atoi(argv[arg]);
-      ++arg;
-    } else if (argv[arg][1] == 'g' && argv[arg][2] == '\0') {
-      ++arg;
-      if (arg >= argc) goto usage;
-      patience = (unsigned int)atoi(argv[arg]);
-      patienceGiven = 1;
-      ++arg;
-    } else if (argv[arg][1] == 'b' && argv[arg][2] == '\0') {
-      ++arg;
-      if (arg >= argc) goto usage;
-      if (!strcmp(argv[arg], "silent"))
-        byzMode = BYZ_SILENT;
-      else if (!strcmp(argv[arg], "poke"))
-        byzMode = BYZ_POKE;
-      else if (!strncmp(argv[arg], "equiv", 5)) {
-        byzMode = BYZ_EQUIV;
-        byzSplit = (unsigned int)atoi(argv[arg] + 5);
-      } else
+      continue;
+    case 's':
+    case 'l':
+    case 'b':
+    case 'x':
+    case 'p':
+    case 'a':
+    case 'r':
+      if (arg + 1 >= argc)
         goto usage;
-      ++arg;
-    } else {
+      switch (argv[arg][1]) {
+      case 's': seed = atoi(argv[arg + 1]); break;
+      case 'l': loss = atoi(argv[arg + 1]); break;
+      case 'b': byz = atoi(argv[arg + 1]); break;
+      case 'x': split = atoi(argv[arg + 1]); break;
+      case 'p': patience = atoi(argv[arg + 1]); break;
+      case 'a': abandon = atoi(argv[arg + 1]); break;
+      default:  maxRounds = atoi(argv[arg + 1]); break;
+      }
+      arg += 2;
+      continue;
+    default:
       goto usage;
     }
   }
+  if (argc - arg < 2)
+    goto usage;
+  n = atoi(argv[arg]);
+  t = atoi(argv[arg + 1]);
+  if (n < 1 || n > 64 || t > 21 || n <= 3 * t || loss > 99
+   || maxRounds < 1 || maxRounds > 255
+   || (byz < 256 && (byz >= n || !t))) {
+    fprintf(stderr, "n is 1..64 and above 3t, loss below 100, rounds 1..255,"
+                    " a Byzantine seat below n and only when t > 0\n");
+    goto done;
+  }
+  if (argc - arg != 2 + (int)n)
+    goto usage;
+  for (j = 0; j < n; ++j)
+    if (!argv[arg + 2 + j][0] || strlen(argv[arg + 2 + j]) >= MSGLEN) {
+      fprintf(stderr, "each message is 1..%d bytes\n", MSGLEN - 1);
+      goto done;
+    }
+  if (byz < 256 && split > n)
+    split = n;
+  seed0 = seed;
+  if (!(coinSeed = calloc(n, sizeof (*coinSeed)))) {
+    fprintf(stderr, "allocation failed\n");
+    goto done;
+  }
+  for (i = 0; i < n; ++i)
+    coinSeed[i] = seed + 1 + i;
 
-  if (argc - arg < 2) goto usage;
-  n = (unsigned int)atoi(argv[arg++]);
-  t = (unsigned int)atoi(argv[arg++]);
-
-  if (n < 1 || n > MAX_PROCESSES) {
-    fprintf(stderr, "n must be 1..%d\n", MAX_PROCESSES);
-    return (1);
+  sz = bkr94acsSz(n - 1, MSGLEN - 1, maxRounds);
+  if (!(a = calloc(n, sizeof (*a)))
+   || !(subsetAt = calloc(n, sizeof (*subsetAt))) || !(abandonedAt = calloc(n, sizeof (*abandonedAt)))
+   || !(sent = calloc(3, sizeof (*sent)))) {
+    fprintf(stderr, "allocation failed\n");
+    goto done;
   }
-  if (n <= 3 * t) {
-    fprintf(stderr, "need n > 3t (n=%u, t=%u)\n", n, t);
-    return (1);
-  }
-  if (dproc >= 0) {
-    if ((unsigned int)dproc >= n) {
-      fprintf(stderr, "-d process must be < n\n");
-      return (1);
-    }
-    /*
-     * At t = 0, n-t = n: step 2's count can never reach n while a BA
-     * is unentered, so TOLERANCE -- the release trigger below -- is
-     * unreachable and the delayed A-Cast would be held forever.
-     */
-    if (t < 1) {
-      fprintf(stderr, "-d needs t >= 1\n");
-      return (1);
-    }
-  }
-  if (byzMode != BYZ_NONE) {
-    /*
-     * The -d / -g pair demonstrates sweep-counted patience, and
-     * patience is demonstrated by the ENDING it changes.  With a Byzantine
-     * process the run cannot end by quiescence at all, so the pair
-     * would be measuring nothing.  Refuse rather than mislead.
-     */
-    if (dproc >= 0 || patienceGiven) {
-      fprintf(stderr, "-b does not compose with -d / -g\n");
-      return (1);
-    }
-    if (t < 1) {
-      fprintf(stderr, "-b needs t >= 1 (one faulty process to tolerate)\n");
-      return (1);
-    }
-    if (byzMode == BYZ_EQUIV && byzSplit > n) {
-      fprintf(stderr, "-b equiv split must be <= n\n");
-      return (1);
-    }
-  }
-  if ((unsigned int)(argc - arg) < n) {
-    fprintf(stderr, "need %u A-Cast strings\n", n);
-    return (1);
-  }
-
-  origSeed = shuffleSeed;
-
-  /* Read acasts, find max length for vLen */
-  vLen = 1;
-  memset(acasts, 0, sizeof (acasts));
   for (i = 0; i < n; ++i) {
-    unsigned int len;
-
-    len = (unsigned int)strlen(argv[arg]) + 1; /* include \0 */
-    if (len > MAX_VLEN) {
-      fprintf(stderr, "A-Cast too long: %s (max %d chars + \\0)\n",
-              argv[arg], MAX_VLEN - 1);
-      return (1);
-    }
-    memcpy(acasts[i], argv[arg], len);
-    if (len > vLen)
-      vLen = len;
-    ++arg;
-  }
-
-  /*----------------------------------------------------------------------*/
-  /*  Allocate per-process BKR94 ACS state                                   */
-  /*----------------------------------------------------------------------*/
-
-  /* vLen encoding: actual length = vLen, encoding = vLen - 1 */
-  acsSize = bkr94acsSz((unsigned int)(n - 1), (unsigned int)(vLen - 1), MAX_PHASES);
-
-  memset(processes, 0, sizeof (processes));
-  for (i = 0; i < n; ++i) {
-    processes[i] = calloc(1, acsSize);
-    if (!processes[i]) {
+    if (i == byz)
+      continue;
+    if (!(a[i] = calloc(1, sz))) {
       fprintf(stderr, "allocation failed\n");
-      exitCode = 1;
-      goto cleanup;
+      goto done;
     }
-    bkr94acsInit(processes[i], (unsigned char)(n - 1), (unsigned char)t,
-                 (unsigned char)(vLen - 1), MAX_PHASES, (unsigned char)i,
-                 demoCoin, 0);
-    bracha87RetryInit(&retry[i]);
-  }
-
-  /*----------------------------------------------------------------------*/
-  /*  Allocate message queue                                              */
-  /*  BKR94 ACS generates more messages than plain BA:             */
-  /*  N A-Cast broadcasts + N BA pipelines, each with rounds.    */
-  /*----------------------------------------------------------------------*/
-
-  if (qAlloc(64u * n * n * (unsigned int)MAX_PHASES * BRACHA87_ROUNDS_PER_PHASE + 1024)) {
-    fprintf(stderr, "queue allocation failed\n");
-    exitCode = 1;
-    goto cleanup;
-  }
-
-  /*----------------------------------------------------------------------*/
-  /*  Bootstrap: each process A-Casts its value                           */
-  /*                                                                      */
-  /*  bkr94acsAcast marks the local A-Cast Fig1 as the broadcast          */
-  /*  initiator and outputs one BKR94ACS_ACT_ACAST_SEND action (.type =   */
-  /*  BRACHA87_INITIAL) for the application to broadcast to all           */
-  /*  processes.  Retry thereafter is intrinsic to BPR                    */
-  /*  (bkr94acsRetryStep) -- no application bookkeeping required.         */
-  /*----------------------------------------------------------------------*/
-
-  for (i = 0; i < n; ++i) {
-    struct bkr94acsAct acastAct;
-    unsigned int nActs;
-
-    /* The -d process is the WAN laggard: only its OUTBOUND A-Cast is
-     * delayed.  It runs, receives, retries, and enters like everyone
-     * else; its INITIAL releases in the tick loop below. */
-    if (dproc >= 0 && i == (unsigned int)dproc)
-      continue;
-
-    /*
-     * The Byzantine process's own submission.  SILENT sends nothing at
-     * all.  EQUIV sends (initial, v) to [0..split) and (initial, v')
-     * to [split..n), v' being v with its first byte inverted, and then
-     * runs no state machine: an equivocator that went on to echo would
-     * change the n=4 outcome, so this one stops at the split.  POKE
-     * A-Casts honestly and is handled by the ordinary path below.
-     */
-    if (byzMode != BYZ_NONE && byzMode != BYZ_POKE
-     && i == (unsigned int)BYZ_PROCESS) {
-      if (byzMode == BYZ_EQUIV) {
-        unsigned char split[MAX_VLEN];
-
-        memcpy(split, acasts[i], vLen);
-        /* A different value, and one that stays printable: this demo
-         * renders its A-Casts as text, so flipping the case bit shows
-         * the equivocation in the output instead of hiding it behind a
-         * byte the terminal cannot draw. */
-        split[0] = (unsigned char)(split[0] ^ 0x20);
-        printf("process %u: Byzantine initiator equivocates -- \"%s\" to"
-               " processes [0..%u), \"%s\" to [%u..%u)\n",
-               i, acasts[i], byzSplit, split, byzSplit, n);
-        for (j = 0; j < n; ++j)
-          qPush(BKR94ACS_CLS_ACAST, (unsigned char)i, 0, 0,
-                BRACHA87_INITIAL, 0, 0,
-                (unsigned char)i, (unsigned char)j,
-                (j < byzSplit)
-                  ? (const unsigned char *)acasts[i]
-                  : (const unsigned char *)split,
-                vLen);
-      } else
-        printf("process %u: Byzantine SILENT -- no state machine, no"
-               " messages\n", i);
-      continue;
+    if (bkr94acsInit(a[i], n - 1, t, MSGLEN - 1, i, maxRounds, patience, abandon, coin, coinSeed + i, 0)) {
+      fprintf(stderr, "Init refused: abandon must be above patience\n");
+      goto done;
     }
-    nActs = bkr94acsAcast(processes[i],
-                            (const unsigned char *)acasts[i],
-                            &acastAct);
-    if (nActs != 1)
-      continue;
-    for (j = 0; j < n; ++j)
-      qPush(BKR94ACS_CLS_ACAST, acastAct.process, 0, 0,
-            BRACHA87_INITIAL, acastAct.accepted, 0,
-            (unsigned char)i, (unsigned char)j,
-            (const unsigned char *)acasts[i], vLen);
   }
+  outMax = bkr94acsOut(a[byz == 0 ? 1 : 0]);
+  workCap = 16 * outMax;
+  if (!(out = calloc(outMax, sizeof (*out))) || !(work = calloc(workCap, sizeof (*work)))) {
+    fprintf(stderr, "allocation failed\n");
+    goto done;
+  }
+  qcap = 64 * n * n * n + 64;
+  if (!(q = calloc(qcap, sizeof (*q)))) {
+    fprintf(stderr, "allocation failed\n");
+    goto done;
+  }
+  qhead = qtail = 0;
+  sweep = dropped = toByz = 0;
+  /* the queue holds one pass's sends and grows to fit them: a seat
+   * sends what its actions name, and this harness drops nothing but
+   * what -l loses */
 
-  if (shuffleSeed)
-    qShuffle(&shuffleSeed);
-
-  /*----------------------------------------------------------------------*/
-  /*  Drive to completion: drain ingress, tick, repeat -- the             */
-  /*  bkr94acs.h application loop.  A tick is one Retry call per          */
-  /*  process plus the two sweep-side protocol decisions, each paced      */
-  /*  by -g's patience in COMPLETED SWEEPS (0 = no deliberate wait;       */
-  /*  BPR.md, The Sweep-Side Decisions).                                  */
-  /*----------------------------------------------------------------------*/
-
-  released = (dproc < 0) ? 1 : 0;
-  tickCount = 0;
-  fanoutFires = 0;
-  quiesced = 0;
-  memset(quiescent, 0, sizeof (quiescent));
-  memset(quiesceTick, 0, sizeof (quiesceTick));
-  memset(turnSweeps, 0, sizeof (turnSweeps));
-  memset(fanoutSweeps, 0, sizeof (fanoutSweeps));
-  memset(lastSweeps, 0, sizeof (lastSweeps));
-  pokeArmed = 0;
-  pokeSent = 0;
-  pokeDelivered = 0;
-  pokeActs = 0;
-  pokeSampled = 0;
-  pokeInstances = 0;
-  pokeAimed = 0;
+  /* every honest seat broadcasts its message */
+  for (p = 0; p < n; ++p) {
+    if (p == byz)
+      continue;
+    memset(v, 0, sizeof (v));
+    strcpy((char *)v, argv[arg + 2 + p]);
+    nwork = bkr94acsBroadcast(a[p], v, work);
+    site = 0;
+    goto run;
+qDone:
+    ;
+  }
+  /* the Byzantine seat: the (initial, v) of its message, and its
+   * round-1 (initial, v) in every BA, two values */
+  if (byz < 256) {
+    for (to = 0; to < n; ++to) {
+      if (to == byz)
+        continue;
+      memset(&q[qtail], 0, sizeof (q[qtail]));
+      q[qtail].kind = BKR94ACS_INITIAL;
+      q[qtail].ba = q[qtail].q = q[qtail].from = byz;
+      q[qtail].to = to;
+      strcpy((char *)q[qtail].v, argv[arg + 2 + byz]);
+      ++qtail;
+    }
+    for (i = 0; i < n; ++i)
+      for (to = 0; to < n; ++to) {
+        if (to == byz)
+          continue;
+        memset(&q[qtail], 0, sizeof (q[qtail]));
+        q[qtail].kind = BKR94ACS_INITIAL;
+        q[qtail].ba = i;
+        q[qtail].q = byz;
+        q[qtail].k = 1;
+        q[qtail].from = byz;
+        q[qtail].value = to < split ? BKR94ACS_V1 : BKR94ACS_V0;
+        q[qtail].to = to;
+        ++qtail;
+      }
+  }
 
   for (;;) {
-    ++tickCount;
-
-    /*--------------------------------------------------------------------*/
-    /*  Drain ingress.  Deliveries BANK evidence and output the protocol's  */
-    /*  own echo/ready traffic; no decision fires here.                   */
-    /*--------------------------------------------------------------------*/
-
-    while (Qhead < Qtail) {
+    while (qhead < qtail) {
       struct msg *m;
-      struct bkr94acs *st;
-      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)]; /* encoded n */
-      unsigned int nacts;
-      unsigned int oldTail;
-      unsigned char cls;
-      unsigned char type;
-      unsigned char baValue;
 
-      m = &MsgQ[Qhead++];
-      /* A process that runs no state machine has nothing to deliver
-       * to; the wire is simply lost at its end. */
-      if (byzMode != BYZ_NONE && byzMode != BYZ_POKE
-       && m->to == (unsigned char)BYZ_PROCESS)
-        continue;
-      st = processes[m->to];
+      if (seed0) {
+        unsigned int r;
 
-      /* Unpack the wire byte back into class and Bracha87 type. */
-      cls = m->clsType & BKR94ACS_CLS_MASK;
-      type = m->clsType & BRACHA87_TYPE_MASK;
+        seed = seed * 1103515245u + 12345u;
+        r = qhead + ((seed >> 16) & 0x7FFF) % (qtail - qhead);
+        if (r != qhead) {
+          struct msg tmp;
 
-      /*
-       * Do NOT skip messages addressed to locally-complete processes.
-       * A process that has decided all N BAs must keep processing
-       * incoming messages so its Fig1 echoes/readys continue to
-       * reach processes still working on some BAs.  Skipping strands
-       * them -- the post-decide stall the library's own non-short-
-       * circuit avoids (see bkr94acs.c bkr94acsBaInput comment on
-       * a->complete).  The loop terminates on completion plus
-       * quiescence below, not when any one process reaches complete.
-       */
-      oldTail = Qtail;
-
-      /*
-       * Sender (m->from) is the authenticated message sender; for INITIAL
-       * messages the library checks it against the designated initiator
-       * (process for acasts, initiator for BA) and drops a
-       * forged non-initiator INITIAL, so this no-loss honest demo needs
-       * no extra filter here.  A deployment with Byzantine processes relies on
-       * that library check -- do NOT strip it by pre-validating away the
-       * 'from' argument.
-       */
-      if (cls == BKR94ACS_CLS_ACAST) {
-        if (verbose)
-          printf("process %u: recv ACAST %s(process=%u) from %u\n",
-                 (unsigned)m->to, typeName(type),
-                 (unsigned)m->process, (unsigned)m->from);
-
-        /*
-         * The whole clsType byte rides in as annot.  The library reads
-         * BKR94ACS_ACCEPTED and BKR94ACS_RECEIVED off it, and only on a
-         * READY: ACCEPTED says the sender has accepted this Fig1 and
-         * consumes no further (ready, v) from us; the ABSENCE of
-         * RECEIVED says the sender has not recorded OUR accept -- it
-         * would have suppressed us otherwise -- so it is un-suppressed
-         * for the next READY egress, which goes out marked.  Ordering
-         * the two against the message's own Fig1 input is the library's.
-         */
-        nacts = bkr94acsAcastInput(st, m->process, type, m->clsType,
-                                      m->from, m->value, acts);
-        /*
-         * The one part that stays here, because it is this program's
-         * parking policy and not the protocol's.
-         */
-        if (type == BRACHA87_READY && !(m->clsType & BKR94ACS_RECEIVED)) {
-          /*
-           * Leaving the rotation is PROVISIONAL: an unmarked READY is
-           * evidence that something IS still owed, and a process that
-           * stopped ticking can never re-send marked.  Re-enter --
-           * under loss this is what makes quiescence reachable, since
-           * a lost marked re-send is drawn again by the next unmarked
-           * one, and the unmarked one is worthless if nobody is left to hear it.
-           */
-          if (quiescent[m->to]) {
-            quiescent[m->to] = 0;
-            --quiesced;
-          }
-        }
-      } else {
-        /* Recover the BA binary value (+D_FLAG) from the wire byte. */
-        baValue = (unsigned char)
-          (((m->clsType >> 3) & 1) | (m->clsType & BRACHA87_D_FLAG));
-        if (verbose)
-          printf("process %u: recv BA %s(process=%u, round=%u, val=%u) from %u\n",
-                 (unsigned)m->to, typeName(type),
-                 (unsigned)m->process, (unsigned)m->round,
-                 (unsigned)baValue, (unsigned)m->from);
-
-        /* Same annotation ingress as the A-Cast class: the byte goes
-         * in as annot and the library routes both bits. */
-        nacts = bkr94acsBaInput(st, m->process, m->round,
-                                       m->initiator, type, m->clsType,
-                                       m->from, baValue, acts);
-        if (type == BRACHA87_READY && !(m->clsType & BKR94ACS_RECEIVED)) {
-          if (quiescent[m->to]) {
-            quiescent[m->to] = 0;
-            --quiesced;
-          }
+          tmp = q[qhead];
+          q[qhead] = q[r];
+          q[r] = tmp;
         }
       }
-
-      /* Enqueue output actions as network messages.  A duplicate
-       * (BPR-retried) delivery returns 0 acts -- Input dedup, the
-       * invariant a barren-sweep policy's progress reading relies
-       * on (BPR.md Termination and Abandonment); this demo ends by
-       * quiescence and maintains no progress counter. */
-      /* A poke is a duplicate READY.  Its Input return is what the
-       * barren-sweep policy would read, and it is the whole reason a
-       * poke costs the evidence stream nothing.  Only the pokes are
-       * counted: the poker's own honest traffic after it completed --
-       * the post-decide continuation's BA READYs -- returns acts on
-       * first arrival as it should, and under shuffled delivery some
-       * arrive after the poking starts. */
-      if (m->poke) {
-        ++pokeDelivered;
-        pokeActs += nacts;
-      }
-      qActs(acts, nacts, m->to, n, vLen, verbose, "");
-
-      if (shuffleSeed && Qtail > oldTail)
-        qShuffle(&shuffleSeed);
-    }
-
-    /* The queue is drained (Qhead == Qtail): reset the indices so the
-     * append-only store's capacity bounds one tick's traffic, not the
-     * whole run's -- without this a long retirement tail fills the
-     * queue and qPush's silent drop would fake quiescence. */
-    Qhead = Qtail = 0;
-
-    /*--------------------------------------------------------------------*/
-    /*  THE AIMED RE-SEND READING, taken once and only here.  A poke has  */
-    /*  just been delivered and its arm is placed; the egress whose       */
-    /*  marked re-send consumes it has not run yet.  This is the single   */
-    /*  configuration where the two READY masks diverge: the poker        */
-    /*  announced its own accept, so its RECEIVED bit is set, while the   */
-    /*  arm has taken it back out of SKIP -- and every other process is   */
-    /*  still suppressed.  The marked re-send therefore reaches the       */
-    /*  poker and nobody else.                                            */
-    /*                                                                    */
-    /*  The stable point is the poker's OWN quiescence: its masks fill    */
-    /*  only once every process has announced its accept and re-sent      */
-    /*  marked to the poker, so the honest exchange has settled by then   */
-    /*  and the only arm left standing anywhere is the one this tick's    */
-    /*  poke just placed.                                                 */
-    /*--------------------------------------------------------------------*/
-
-    if (byzMode == BYZ_POKE && pokeArmed && quiescent[BYZ_PROCESS]
-     && !pokeSampled) {
-      pokeSampled = 1;
-      for (i = 0; i < n; ++i) {
-        if (i == (unsigned int)BYZ_PROCESS)
+      if (loss) {
+        seed = seed * 1103515245u + 12345u;
+        if (((seed >> 16) & 0x7FFF) % 100 < loss) {
+          ++dropped;
+          ++qhead;
           continue;
-        for (j = 0; j < n; ++j) {
-          const struct bracha87Fig1 *f1;
-          const unsigned char *sk;
-          const unsigned char *rcv;
-          unsigned int q;
-
-          if (!(f1 = bkr94acsAcastFig1(processes[i], (unsigned char)j))
-           || !bkr94acsAcastValue(processes[i], (unsigned char)j))
-            continue;
-          sk = bracha87Fig1Skip(f1, BRACHA87_READY_ALL);
-          rcv = bracha87Fig1Received(f1);
-          if (!sk || !rcv)
-            continue;
-          ++pokeInstances;
-          if (BRACHA87_SKIP_TST(sk, BYZ_PROCESS)
-           || !BRACHA87_SKIP_TST(rcv, BYZ_PROCESS))
-            continue;
-          for (q = 0; q < n; ++q)
-            if (q != (unsigned int)BYZ_PROCESS && !BRACHA87_SKIP_TST(sk, q))
-              break;
-          if (q == n)
-            ++pokeAimed;
         }
       }
-    }
-
-    /*--------------------------------------------------------------------*/
-    /*  The delayed A-Cast releases at the first tick its own process     */
-    /*  observes step 2 leave HELD: the WAN knife edge.  Under patience   */
-    /*  at TOLERANCE -- the patience clock is counting completed          */
-    /*  sweeps and the next drain delivers the INITIAL, so step 1 wins.   */
-    /*  At -g 0 the patience elapses within the same tick that decides    */
-    /*  the n-t'th BA (it is evaluated on every tick), so the first       */
-    /*  observable state is MET: the door shut before the laggard's       */
-    /*  INITIAL could leave, and the release demonstrates the arrival     */
-    /*  that was one tick too late.                                       */
-    /*--------------------------------------------------------------------*/
-
-    if (!released
-     && bkr94acsFanoutDuty(processes[dproc]) != BKR94ACS_DUTY_HELD) {
-      struct bkr94acsAct acastAct;
-
-      released = 1;
-      printf("process %d: delayed A-Cast \"%s\" releases (tick %u)\n",
-             dproc, acasts[dproc], tickCount);
-      if (bkr94acsAcast(processes[dproc],
-                          (const unsigned char *)acasts[dproc],
-                          &acastAct) == 1)
-        for (j = 0; j < n; ++j)
-          qPush(BKR94ACS_CLS_ACAST, acastAct.process, 0, 0,
-                BRACHA87_INITIAL, acastAct.accepted, 0,
-                (unsigned char)dproc, (unsigned char)j,
-                (const unsigned char *)acasts[dproc], vLen);
-    }
-
-    /*--------------------------------------------------------------------*/
-    /*  The tick: one Retry call per process plus the sweep-side          */
-    /*  decisions, their tolerance clocks counting completed sweeps.      */
-    /*--------------------------------------------------------------------*/
-
-    for (i = 0; i < n; ++i) {
-      struct bkr94acsAct acts[BKR94ACS_MAX_ACTS(MAX_PROCESSES - 1)]; /* encoded n */
-      unsigned int nacts;
-      unsigned int p;
-      unsigned int sweepDone;
-      unsigned char duty;
-
-      /* A SILENT or equivocating process runs no state machine: it
-       * takes no tick, so nothing here is called on its behalf. */
-      if (byzMode != BYZ_NONE && byzMode != BYZ_POKE
-       && i == (unsigned int)BYZ_PROCESS)
+      m = &q[qhead++];
+      p = m->to;
+      if (p == byz) {
+        ++toByz;
         continue;
-
-      /* One retry call per process per TICK -- looping until idle
-       * would flood the network; see bracha87.h's flood warning.  A
-       * full BPR SWEEP -- one complete pass of the cursor over every
-       * sent Fig 1 instance -- spans many ticks, and its boundary
-       * here is what the tolerance clocks below count: the cursor's
-       * `sweeps` wrap count changing, or a quiescent tick (the pass
-       * it would have made owes nothing).
-       * Receivers dedup at Fig1Input, so under perfect delivery a
-       * retry's duplicates produce no new state; here it carries the
-       * -d laggard's late INITIAL and re-carries anything a lossy
-       * transport would have dropped.
-       *
-       * A 0 return past this process's own A-Cast is QUIESCENCE on its
-       * OWN evidence: a full pass of its cursor found every sent Fig 1
-       * retired, which for READY means every process has announced its
-       * accept and holds this one's.  It owes nothing to anyone, so it
-       * leaves the rotation.  Its ingress stays open -- quiescence
-       * bounds what a process OWES, never what it may still be told --
-       * and a turn or fanout below re-arms it, since either can seed a
-       * fresh Fig 1 for a round nobody has broadcast yet. */
-      sweepDone = 0;
-      if (!quiescent[i]) {
-        nacts = bkr94acsRetryStep(processes[i], &retry[i], acts);
-        /* The cursor's own wrap count IS the pass boundary; compare
-         * it, never assume it advanced by one (a single call can
-         * complete two passes).  Counting calls against
-         * bkr94acsFig1SentCount would close late, by the retired
-         * count, and that error grows as a run matures. */
-        if (retry[i].sweeps != lastSweeps[i]) {
-          lastSweeps[i] = retry[i].sweeps;
-          sweepDone = 1;
-        }
-        if (!nacts && bkr94acsFig1SentCount(processes[i])) {
-          quiescent[i] = 1;
-          quiesceTick[i] = tickCount;
-          ++quiesced;
-          if (verbose)
-            printf("process %u: QUIESCENT (tick %u)\n", i, tickCount);
-        }
-        qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [retry]");
-      } else
-        /* A quiescent process's pass owes nothing: an idle sweep
-         * completes every tick, so its tolerance clocks keep
-         * running. */
-        sweepDone = 1;
-
-      /*
-       * BA round turns, paced per (ACS state, BA): count COMPLETED
-       * SWEEPS while bkr94acsTurnDuty holds TOLERANCE, and call the
-       * turn once the count reaches -g -- evaluated on every tick,
-       * so zero patience spends no deliberate wait (bkr94acs.h: a
-       * clock that only advances at a sweep boundary fires one
-       * boundary late even at zero).  Zero patience is
-       * still not a firing at enabling (BPR.md, The Sweep-Side
-       * Decisions): turns fire from the sweep here, so a
-       * zero-patience round consumes whatever had validated by the
-       * tick, a superset of what a turn taken as evidence is banked
-       * consumes (bkr94acs.h, at bkr94acsTurn).  MET fires free --
-       * the full sample is in hand and waiting buys nothing.
-       * Patience is scoped to UNDECIDED BAs: once bkr94acsBaDecision
-       * reports a decision, post-decide continuation rounds have
-       * nothing left to choose (Lemma 9 fixes every sample they can
-       * meet), so holding them to the patience would only convoy the
-       * cohort (each process's round-k INITIAL waits on its own turn of
-       * k-1, and one process's stall holds everyone at n-t).  One
-       * turn per BA per tick, and the clock re-arms only when duty
-       * leaves TOLERANCE: a cascade that holds it continuously
-       * spends ONE patience across all of its rounds, one round per
-       * tick past the elapse; a later round pays its own patience
-       * only after a HELD dip (an evidence gap) resets the count.
-       */
-      for (p = 0; p < n; ++p) {
-        duty = bkr94acsTurnDuty(processes[i], (unsigned char)p);
-        if (duty == BKR94ACS_DUTY_TOLERANCE) {
-          if (sweepDone)
-            ++turnSweeps[i][p];
-        } else
-          turnSweeps[i][p] = 0;
-        if (duty == BKR94ACS_DUTY_MET
-         || turnSweeps[i][p] >= patience
-         || bkr94acsBaDecision(processes[i], (unsigned char)p) != 0xFF)
-          nacts = bkr94acsTurn(processes[i], (unsigned char)p, acts);
-        else
-          nacts = 0;
-        if (nacts) {
-          if (quiescent[i]) {
-            quiescent[i] = 0;
-            --quiesced;
-          }
-        }
-        qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [turn]");
       }
-
-      /*
-       * BKR94 step 2, paced the same way -- after the turns, because
-       * only a turn produces the decisions it counts.  While its
-       * TOLERANCE holds, the retry above is still carrying the
-       * delayed A-Cast: each one that completes enters 1 by step 1
-       * and leaves the unentered set before the fanout reads it.
-       */
-      duty = bkr94acsFanoutDuty(processes[i]);
-      if (duty == BKR94ACS_DUTY_TOLERANCE) {
-        if (sweepDone)
-          ++fanoutSweeps[i];
-      } else
-        fanoutSweeps[i] = 0;
-      if (fanoutSweeps[i] >= patience) {
-        nacts = bkr94acsFanout(processes[i], acts);
-        if (nacts) {
-          fanoutFires += nacts;
-          if (quiescent[i]) {
-            quiescent[i] = 0;
-            --quiesced;
-          }
-          printf("process %u: step 2 fires (tick %u) -- enter 0 in %u unentered BA(s)\n",
-                 i, tickCount, nacts);
-        }
-        qActs(acts, nacts, (unsigned char)i, n, vLen, verbose, " [step 2]");
-      }
+      if (abandonedAt[p])
+        continue;
+      ++sent[m->kind];
+      if (verbose)
+        printf("seat %u: %s of (ba %u, q %u, k %u) from %u%s%s\n", p,
+               m->kind == BKR94ACS_INITIAL ? "initial" : m->kind == BKR94ACS_ECHO ? "echo" : "ready",
+               m->ba, m->q, m->k, m->from, m->k ? "" : " carrying ", m->k ? "" : (char *)m->v);
+      nwork = bkr94acsInput(a[p], m->kind, m->ba, m->q, m->k, m->from, m->k ? &m->value : m->v, m->annot, work);
+      site = 1;
+      goto run;
+arrivalDone:
+      ;
     }
+    qhead = qtail = 0;
 
-    /*--------------------------------------------------------------------*/
-    /*  Terminate by QUIESCENCE: every process has left the rotation on   */
-    /*  its own evidence -- a full Retry pass owing nothing.  That is a   */
-    /*  stronger ending than the barren-sweep abandon gate, and it is     */
-    /*  available only because both READY annotations round-trip here:    */
-    /*  the barren gate reads the ABSENCE of progress, which a laggard's  */
-    /*  silence imitates exactly, while quiescence reads evidence every   */
-    /*  process supplied.  Completion is then an assertion rather than    */
-    /*  the gate -- an un-complete process is reported below and fails    */
-    /*  the run.  Abandonment remains the policy any deployment still     */
-    /*  needs (README.md "Abandonment"), since loss can hold the          */
-    /*  rotation open; the cap stands in for it here and is a harness     */
-    /*  guard, not protocol.                                              */
-    /*--------------------------------------------------------------------*/
-
-    /*--------------------------------------------------------------------*/
-    /*  THE POKE.  Once the poker has completed it re-sends, every tick,  */
-    /*  a READY for every A-Cast instance it accepted, stripped of the    */
-    /*  RECEIVED annotation -- the framer's own bit, cleared.  Each one   */
-    /*  is a duplicate the receiver's Input dedups to 0 acts, and each    */
-    /*  one re-arms a marked re-send that costs one masked READY per      */
-    /*  poked instance per sweep, aimed back at the poker alone.  The     */
-    /*  price is bounded by the poked instance count; what it buys is     */
-    /*  that no gate needing all n ever closes.                           */
-    /*--------------------------------------------------------------------*/
-
-    if (byzMode == BYZ_POKE && processes[BYZ_PROCESS]->complete) {
-      pokeArmed = 1;
-      for (j = 0; j < n; ++j) {
-        const unsigned char *pv;
-        unsigned int q;
-
-        if (!(pv = bkr94acsAcastValue(processes[BYZ_PROCESS],
-                                      (unsigned char)j)))
-          continue;
-        for (q = 0; q < n; ++q) {
-          unsigned int at;
-
-          if (q == (unsigned int)BYZ_PROCESS)
-            continue;
-          at = Qtail;
-          qPush(BKR94ACS_CLS_ACAST, (unsigned char)j, 0, 0,
-                BRACHA87_READY, 1 /* the poker did accept */,
-                0 /* RECEIVED stripped -- unmarked, so the receiver re-arms */,
-                (unsigned char)BYZ_PROCESS, (unsigned char)q, pv, vLen);
-          if (Qtail > at) {           /* the push may be declined when full */
-            MsgQ[at].poke = 1;
-            ++pokeSent;
-          }
-        }
-      }
+    ++sweep;
+    for (p = 0; p < n; ++p) {
+      if (p == byz || abandonedAt[p])
+        continue;
+      do {
+        more = bkr94acsSweep(a[p], out, &nout);
+        memcpy(work, out, nout * sizeof (*out));
+        nwork = nout;
+        site = 2;
+        goto run;
+sweepDone:
+        ;
+      } while (more);
     }
-
-    if (quiesced == n)
+    for (p = 0; p < n; ++p)
+      if (p != byz && !abandonedAt[p])
+        break;
+    if (p == n)
       break;
-    if (tickCount > 100000) {
-      /*
-       * The cap is a harness guard on the rotation, in TICKS -- not the
-       * abandonment policy's unit and carrying no evidence of anything.
-       * Without -b a run that reaches it failed to converge and says
-       * so.  With -b it is the EXPECTED ending: a Byzantine process
-       * holds every all-n gate open, so quiescence is unreachable by
-       * construction and the exit code reports the honest assertions
-       * instead.
-       */
-      if (!byzMode) {
-        fprintf(stderr, "no convergence within the tick cap\n");
-        exitCode = 1;
-      }
-      break;
+    if (sweep >= 1000 * abandon) {
+      /* a guard on this loop, carrying no evidence of anything */
+      fprintf(stderr, "harness guard: %u sweeps and not every honest seat abandoned\n", sweep);
+      goto done;
     }
   }
 
-  /*----------------------------------------------------------------------*/
-  /*  Output: each process's agreed common subset in sorted order            */
-  /*----------------------------------------------------------------------*/
+  printf("n=%u t=%u seed=%u loss=%u%% patience=%u abandon=%u rounds=%u",
+         n, t, seed0, loss, patience, abandon, maxRounds);
+  if (byz < 256)
+    printf(" Byzantine=%u split=%u", byz, split);
+  printf("\n");
+  for (p = 0; p < n; ++p) {
+    const unsigned char *sb;
 
-  printf("\n--- BKR94 ACS Results (n=%u, t=%u, seed=%u) ---\n", n, t, origSeed);
-
-  {
-    /* Verify all honest processes agree on the same subset and ordering */
-    int allAgree;
-    int haveBaseline;
-    unsigned char firstSubset[MAX_PROCESSES];
-    unsigned int firstCnt;
-
-    allAgree = 1;
-    haveBaseline = 0;
-    firstCnt = 0;
-
-    for (i = 0; i < n; ++i) {
-      unsigned char subset[MAX_PROCESSES];
-      unsigned int cnt;
-      const char *sorted[MAX_PROCESSES];
-
-      /* The designated Byzantine process is not part of the honest
-       * outcome: agreement and completion are claims about the
-       * processes the protocol is required to carry. */
-      if (byzMode != BYZ_NONE && i == (unsigned int)BYZ_PROCESS)
-        continue;
-
-      if (!processes[i]->complete) {
-        /*
-         * Distinguish exhaustion from other incompleteness causes:
-         * the library exposes 0xFE in bkr94acsBaDecision for BAs
-         * that hit BRACHA87_EXHAUSTED.  Listing them tells the
-         * operator exactly which BA(s) failed; a generic "did not
-         * complete" message would conflate this with a queue-drain
-         * race or other deployment-level cause.
-         */
-        unsigned int exhaustedCnt;
-
-        printf("Process %u: BKR94 ACS did not complete", i);
-        exhaustedCnt = 0;
-        for (j = 0; j < n; ++j) {
-          if (bkr94acsBaDecision(processes[i], (unsigned char)j) == 0xFE) {
-            printf("%s BA[%u]",
-                   exhaustedCnt ? "," : " (exhausted:",
-                   j);
-            ++exhaustedCnt;
-          }
-        }
-        if (exhaustedCnt)
-          printf(")");
-        printf("\n");
-        exitCode = 1;
-        continue;
-      }
-
-      cnt = bkr94acsSubset(processes[i], subset);
-      printf("Process %u: common subset (%u/%u A-Casts):\n", i, cnt, n);
-
-      /* Collect A-Cast strings for sorted output */
-      for (j = 0; j < cnt; ++j) {
-        const unsigned char *pv;
-
-        pv = bkr94acsAcastValue(processes[i], subset[j]);
-        sorted[j] = pv ? (const char *)pv : "(null)";
-      }
-
-      /* Sort lexicographically -- deterministic ordering */
-      qsort(sorted, cnt, sizeof (sorted[0]), strPtrCmp);
-
-      for (j = 0; j < cnt; ++j)
-        printf("  %s\n", sorted[j]);
-
-      /*
-       * Track the baseline by first-completion, not process index.
-       * If process 0 fails to complete (e.g. exhausted BA), comparing
-       * subsequent processes' subsets against an unset firstCnt would
-       * spuriously flag disagreement.
-       */
-      if (!haveBaseline) {
-        firstCnt = cnt;
-        memcpy(firstSubset, subset, cnt);
-        haveBaseline = 1;
-      } else {
-        if (cnt != firstCnt
-         || memcmp(subset, firstSubset, cnt))
-          allAgree = 0;
-      }
+    if (p == byz) {
+      printf("seat %u: Byzantine, sent \"%s\" and two values, holds nothing\n", p, argv[arg + 2 + byz]);
+      continue;
     }
-
-    printf("\nAll processes agree on subset: %s\n",
-           allAgree ? "ok" : "FAIL");
-    if (!allAgree)
-      exitCode = 1;
+    if (!(sb = bkr94acsSubSet(a[p]))) {
+      printf("seat %u: no subset, abandoned at sweep %u\n", p, abandonedAt[p]);
+      rc = 2;
+      continue;
+    }
+    printf("seat %u: subset at sweep %u, abandoned at sweep %u:", p, subsetAt[p], abandonedAt[p]);
+    for (j = 0; j < n; ++j) {
+      if (!BKR94ACS_BIT_TST(sb, j))
+        continue;
+      printf(" %u:\"%s\"", j, (const char *)bkr94acsValue(a[p], j));
+    }
+    printf("\n");
   }
-
-  /*----------------------------------------------------------------------*/
-  /*  How the run ended, per process.  QUIESCENT is the owing ending:      */
-  /*  that process's Retry pass owed nothing.  Reaching the cap instead    */
-  /*  is the harness standing in for an abandonment policy, and a failure  */
-  /*  here since this demo loses nothing.                                  */
-  /*----------------------------------------------------------------------*/
-
-  for (i = 0; i < n; ++i)
-    if (quiescent[i])
-      printf("Process %u: QUIESCENT at tick %u\n", i, quiesceTick[i]);
-    else
-      printf("Process %u: not quiescent (tick cap)\n", i);
-  printf("Ending: %u of %u processes QUIESCENT in %u ticks\n",
-         quiesced, n, tickCount);
-
-  /*----------------------------------------------------------------------*/
-  /*  The Byzantine mode's own verdict.  Each behavior states what the     */
-  /*  honest processes are owed under it, and the checks below are what    */
-  /*  the exit code reports.  The tick cap is the expected ending here --  */
-  /*  every gate that needs all n stands one bit short for good -- so a    */
-  /*  run that reached it is not a failure and does not say it is.         */
-  /*----------------------------------------------------------------------*/
-
-  if (byzMode != BYZ_NONE) {
-    unsigned char subset[MAX_PROCESSES];
-    unsigned int cnt;
-    unsigned int byzInSubset;
-    unsigned int accepted;
-    unsigned int agreed;
-    const unsigned char *ref;
-
-    printf("\n--- Byzantine mode (process %d) ---\n", BYZ_PROCESS);
-
-    cnt = 0;
-    byzInSubset = 0;
-    if (processes[1]->complete) {
-      cnt = bkr94acsSubset(processes[1], subset);
-      for (j = 0; j < cnt; ++j)
-        if (subset[j] == (unsigned char)BYZ_PROCESS)
-          byzInSubset = 1;
-    }
-
-    /* Bracha Lemma 2, composed: whichever value any honest process
-     * accepts for the faulty A-Cast, every honest process that accepts
-     * agrees with it -- or nobody accepts and the conditional is
-     * vacuous.  A disjunction, checked as one. */
-    accepted = 0;
-    agreed = 1;
-    ref = 0;
-    for (i = 1; i < n; ++i) {
-      const unsigned char *pv;
-
-      if (!(pv = bkr94acsAcastValue(processes[i], (unsigned char)BYZ_PROCESS)))
-        continue;
-      ++accepted;
-      if (!ref)
-        ref = pv;
-      else if (memcmp(ref, pv, vLen))
-        agreed = 0;
-    }
-    printf("Lemma 2 disjunction (all acceptors agree XOR nobody accepts): "
-           "%s -- %u of %u honest processes accepted\n",
-           agreed ? "ok" : "FAIL", accepted, n - 1);
-    if (!agreed)
-      exitCode = 1;
-    printf("Faulty A-Cast in the agreed subset: %s (%u of %u members)\n",
-           byzInSubset ? "INCLUDED" : "excluded", cnt, n);
-
-    if (byzMode == BYZ_POKE) {
-      /* no poke delivered would make the verdict vacuous */
-      printf("Poker: %u pokes sent, %u delivered, %u acts returned by "
-             "them; barren evidence stream %s\n",
-             pokeSent, pokeDelivered, pokeActs,
-             !pokeDelivered ? "NOT EXERCISED -- FAIL"
-             : pokeActs ? "DISTURBED -- FAIL" : "unaffected");
-      if (!pokeDelivered || pokeActs)
-        exitCode = 1;
-      printf("Aimed re-sends: %u of %u poked instances suppress every "
-             "process but the poker: %s\n",
-             pokeAimed, pokeInstances,
-             (pokeInstances && pokeAimed == pokeInstances) ? "ok" : "FAIL");
-      if (!pokeInstances || pokeAimed != pokeInstances)
-        exitCode = 1;
-    }
-
-    printf("Quiescence: %s (%u of %u) -- an all-n gate one bit short: %s\n",
-           quiesced < n ? "DEFEATED" : "reached", quiesced, n,
-           quiesced < n ? "ok" : "FAIL");
-    if (quiesced >= n)
-      exitCode = 1;
-    printf("Ending: tick cap at %u ticks -- the expected ending under -b\n",
-           tickCount);
-  }
-
-  /*----------------------------------------------------------------------*/
-  /*  The -d demonstration's verdict: included under patience, excluded   */
-  /*  at zero patience -- and in the zero-patience case the value still   */
-  /*  arrived everywhere, pinning that exclusion is participation loss,   */
-  /*  never value loss.                                                   */
-  /*----------------------------------------------------------------------*/
-
-  if (dproc >= 0) {
-    unsigned char subset[MAX_PROCESSES];
-    unsigned int cnt;
-    unsigned int inSubset;
-    unsigned int acceptedEverywhere;
-
-    cnt = bkr94acsSubset(processes[0], subset);
-    inSubset = 0;
-    for (j = 0; j < cnt; ++j)
-      if (subset[j] == (unsigned char)dproc)
-        inSubset = 1;
-    acceptedEverywhere = 1;
+  printf("%u sweeps; delivered %lu initial, %lu echo, %lu ready; %u lost; %u to the Byzantine discarded; %lu coin calls\n",
+         sweep, sent[BKR94ACS_INITIAL], sent[BKR94ACS_ECHO], sent[BKR94ACS_READY],
+         dropped, toByz, CoinCalls);
+  if (rc == 1)
+    rc = 0;
+done:
+  if (a)
     for (i = 0; i < n; ++i)
-      if (!bkr94acsAcastValue(processes[i], (unsigned char)dproc))
-        acceptedEverywhere = 0;
-    printf("\nDelayed process %d (patience %u sweeps, %u ticks): %s\n",
-           dproc, patience, tickCount,
-           inSubset
-             ? "INCLUDED -- patience let step 1 win"
-             : "EXCLUDED -- zero patience shut the door");
-    printf("step 2 fired %u enter-0 act(s); the delayed value was %s"
-           "accepted at every process%s\n",
-           fanoutFires,
-           acceptedEverywhere ? "" : "NOT ",
-           inSubset ? "" : " -- participation loss, not value loss");
+      free(a[i]);
+  free(a);
+  free(out);
+  free(work);
+  free(q);
+  free(subsetAt);
+  free(abandonedAt);
+  free(sent);
+  free(coinSeed);
+  return (rc);
+
+  /* run the actions in work[] at seat p, self by hand-back, return to site */
+run:
+  while (nwork) {
+    struct bkr94acsAct act;
+
+    act = work[--nwork];
+    switch (act.act) {
+    case BKR94ACS_DECIDED:
+      if (verbose)
+        printf("seat %u: BA %u decided %u (sweep %u)\n", p, act.ba, act.value, sweep);
+      continue;
+    case BKR94ACS_SUBSET:
+      subsetAt[p] = sweep + (site != 2);
+      if (verbose)
+        printf("seat %u: subset output (sweep %u)\n", p, subsetAt[p]);
+      continue;
+    case BKR94ACS_ABANDON:
+      abandonedAt[p] = sweep + (site != 2);
+      if (verbose)
+        printf("seat %u: abandon (sweep %u)\n", p, abandonedAt[p]);
+      continue;
+    case BKR94ACS_SEND_INITIAL:
+    case BKR94ACS_SEND_ECHO:
+    case BKR94ACS_SEND_READY:
+      break;
+    default:
+      fprintf(stderr, "seat %u: unknown action %u\n", p, act.act);
+      goto done;
+    }
+    /* a value broadcast's send carries its own bytes, off the instance */
+    cv = act.k ? &act.value
+       : bracha87Fig1Value(bkr94acsInstance(a[p], act.ba, act.q, 0),
+                           act.act == BKR94ACS_SEND_INITIAL ? BRACHA87_INITIAL_ALL
+                         : act.act == BKR94ACS_SEND_ECHO ? BRACHA87_ECHO_ALL : BRACHA87_READY_ALL);
+    /* INITIAL to the seats not heard from; a READY re-sent on a sweep to
+     * the seats the instance still owes it, carrying what it says */
+    inst = act.act != BKR94ACS_SEND_INITIAL ? bkr94acsInstance(a[p], act.ba, act.q, act.k) : 0;
+    recip = act.act == BKR94ACS_SEND_READY && site == 2;
+    for (to = 0; to < n; ++to) {
+      unsigned char kind;
+      unsigned char annot;
+
+      kind = act.act == BKR94ACS_SEND_INITIAL ? BKR94ACS_INITIAL
+           : act.act == BKR94ACS_SEND_ECHO ? BKR94ACS_ECHO : BKR94ACS_READY;
+      if (act.act == BKR94ACS_SEND_INITIAL) {
+        if (bkr94acsHolder(a[p], act.ba, act.q, act.k, to))
+          continue;
+      }
+      if (recip && !bracha87Fig1Recipient(inst, to))
+        continue;
+      if (act.act == BKR94ACS_SEND_ECHO && site == 2 && !bracha87Fig1EchoRecipient(inst, to))
+        continue;
+      /* every echo and ready says whether this seat holds the initial
+       * and what rode beside it; a ready says the rest */
+      annot = 0;
+      if (inst && HOLDS(bracha87Fig1State(inst)))
+        annot |= BRACHA87_ANN_HOLDING;
+      if (act.act == BKR94ACS_SEND_READY) {
+        if (bracha87Fig1State(inst) & BRACHA87_F1_ACCEPTED)
+          annot |= BRACHA87_ANN_ACCEPTED;
+        if (BRACHA87_BIT_TST(bracha87Fig1Received(inst), to))
+          annot |= BRACHA87_ANN_RECEIVED;
+      }
+      if (to == p) {
+        /* the hand-back is an input like any other; who this sweep's
+         * re-sends go to stands until the next sweep, so its place in
+         * this loop does not matter */
+        if (nwork + outMax > workCap) {
+          fprintf(stderr, "harness guard: hand-back cascade too deep\n");
+          goto done;
+        }
+        nout = bkr94acsInput(a[p], kind, act.ba, act.q, act.k, p, cv, annot, out);
+        for (w = 0; w < nout; ++w)
+          work[nwork++] = out[w];
+        continue;
+      }
+      if (qtail + 1 > qcap) {
+        struct msg *grown;
+
+        if (!(grown = realloc(q, 2 * qcap * sizeof (*q)))) {
+          fprintf(stderr, "queue growth failed at %u entries\n", qcap);
+          goto done;
+        }
+        q = grown;
+        qcap *= 2;
+      }
+      memset(&q[qtail], 0, sizeof (q[qtail]));
+      q[qtail].kind = kind;
+      q[qtail].ba = act.ba;
+      q[qtail].q = act.q;
+      q[qtail].k = act.k;
+      q[qtail].from = p;
+      q[qtail].value = act.value;
+      q[qtail].annot = annot;
+      q[qtail].to = to;
+      if (!act.k)
+        memcpy(q[qtail].v, cv, MSGLEN);
+      ++qtail;
+    }
   }
-
-  /*----------------------------------------------------------------------*/
-  /*  Cleanup                                                             */
-  /*----------------------------------------------------------------------*/
-
-cleanup:
-  for (i = 0; i < n; ++i)
-    free(processes[i]);
-  qFree();
-
-  return (exitCode);
+  switch (site) {
+  case 0: goto qDone;
+  case 1: goto arrivalDone;
+  default: goto sweepDone;
+  }
 
 usage:
   fprintf(stderr,
-    "usage: example_bkr94acs [-v] [-s seed] [-d process] [-g patience]"
-    " [-b mode] n t acast0 acast1 ...\n"
-    "  n            total processes (1-%d)\n"
-    "  t            max Byzantine faults\n"
-    "  acast*      per-process A-Cast strings\n"
-    "  -v           verbose: trace every message\n",
-    MAX_PROCESSES);
+    "usage: example_bkr94acs [-v] [-s seed] [-l loss] [-b seat] [-x split]"
+    " [-p patience] [-a abandon] [-r rounds] n t message...\n"
+    "  n           seats, 1..64, above 3t; then one message per seat, 1..63 bytes\n"
+    "  t           faulty seats the run tolerates\n"
+    "  -v          trace every delivery, decision, subset and abandon\n"
+    "  -s seed     reorder deliveries by seed (0: in order)\n"
+    "  -l loss     lose that percent of deliveries, by seed\n");
   fprintf(stderr,
-    "  -s seed      shuffle seed (0 = ordered delivery)\n"
-    "  -d process   hold that process's A-Cast until step 2 first\n"
-    "               enables (the WAN laggard; needs t >= 1)\n"
-    "  -g patience  patience for the sweep-side decisions,\n"
-    "               in completed BPR sweeps -- full Retry-cursor\n"
-    "               passes (0 = no deliberate wait, not a firing at\n"
-    "               enabling; with -d, -g 1 includes the laggard in\n"
-    "               SubSet)\n");
-  fprintf(stderr,
-    "  -b mode      process %d is Byzantine (needs t >= 1; does not\n"
-    "               compose with -d / -g).  The tick cap is then the\n"
-    "               expected ending and the exit code reports the\n"
-    "               honest assertions.  mode is one of:\n",
-    BYZ_PROCESS);
-  fprintf(stderr,
-    "                 silent    runs no state machine, sends nothing\n"
-    "                 equiv<S>  sends (initial, v) to processes\n"
-    "                           [0..S) and v with its first byte's\n"
-    "                           case bit flipped to [S..n), then stops\n"
-    "                 poke      participates honestly through\n"
-    "                           COMPLETE, then re-sends READYs with\n"
-    "                           the RECEIVED annotation stripped\n");
+    "  -b seat     that seat is Byzantine: it sends its message and two values\n"
+    "              of its round-1 broadcast, then nothing (needs t > 0)\n"
+    "  -x split    the Byzantine sends value 1 to seats below split, 0 to the rest\n"
+    "  -p sweeps   patience (default 2)\n"
+    "  -a sweeps   abandon, above patience (default 32)\n"
+    "  -r rounds   rounds a BA may run, 1..255, taken up to whole phases\n"
+    "              of 3 (default 6)\n");
   return (1);
 }

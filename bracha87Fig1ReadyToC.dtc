@@ -1,0 +1,35 @@
+# Bridge from bracha87Fig1Ready.dtc to C symbols, as bracha87Fig1ToC.dtc
+# is for the main dispatch.  "accepted" is Figure 1's, a C local set
+# from the instance after the main dispatch's steps are applied.
+
+@"the arrival is (ready, v)",~readyArrival
+yes,1
+no,0
+
+@"carries RECEIVED",~carriesReceived
+yes,1
+no,0
+
+@"accepted",~accepted
+yes,1
+no,0
+
+@"the arrival is (initial, v) or BESIDE",~initialArrival
+yes,1
+no,0
+
+@"holds both",~holdsBoth
+yes,1
+no,0
+
+@"have echoed",~echoedBefore
+yes,1
+no,0
+
+@~armSender,"arm the sender"
+1,yes
+0,no
+
+@~armEcho,"arm the echo to p"
+1,yes
+0,no

@@ -12,8 +12,7 @@ The historical-context and unrelated-domain examples (RISC,
 Lampson's open OS, magnetic-tape backup) are noted in passing only.
 Page numbers below follow the authors' reprint (pages 1-10), not
 the ACM pagination.  The T1-T5, E1-E2 and P1-P3 labels below are
-THIS FILE'S structuring, not the paper's numbering -- the repo cites
-them, so they are kept stable.
+THIS FILE'S structuring, not the paper's numbering.
 
 
 The principle (paper p. 2)

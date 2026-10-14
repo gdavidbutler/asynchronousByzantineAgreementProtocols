@@ -19,750 +19,457 @@
  */
 
 /*
- * bracha87Fig1.c -- Standalone demonstration of Bracha 1987 Figure 1:
- * Reliable Broadcast (Theorem 1).
+ * Bracha 1987 Figure 1: one seat shares a message with the others,
+ * over an in-memory queue that loses and reorders by seed.  The
+ * message is v, and the report is the message each seat holds at the
+ * end.
  *
- * What Figure 1 brings to the table:
+ * Beside the message rides the caller's own byte to each seat, re-sent
+ * with it by BPR until that seat is heard from.  Each seat's caller
+ * records the sweep it first held the message and the byte from p.
+ * The message is what every seat accepts alike, and no seat echoes
+ * it before it holds the byte, however many others have: the others'
+ * echoes and readies take a seat through steps 1 to 3 only once the
+ * byte is in hand, and p's re-send is what brings the byte.  A seat
+ * that never held the byte never accepted; the report says so for
+ * that seat.
  *
- *   Lemma 2: If two correct processes accept u and v, then u = v.
- *   Lemma 3: If a correct process accepts v, every correct process
- *            eventually accepts v.
- *   Lemma 4: If a correct process p broadcasts v, all correct
- *            processes accept v.
+ * Every process here is one caller with one instance and no knowledge
+ * of the others: it feeds what arrives, sends what its actions name,
+ * and hands its own messages straight back to itself -- the hand-back
+ * is local, never on the queue, and the actions it returns are run
+ * like any other.
  *
- * Together: a Byzantine initiator cannot show different values to
- * different correct processes and have any of them accept different
- * things.  Either all correct processes converge on one v, or none
- * accept anything.  This is the all-or-nothing property, and it is
- * what authenticated point-to-point channels alone cannot give under
- * a Byzantine sender.
+ * How it ends: by abandon at each process, the abandon count of sweeps
+ * after it started.  Before that the re-sends fall silent: a (ready, v)
+ * carries two bits of this caller's, that its sender has accepted and
+ * that it holds the recipient's accept, and a seat re-sends its ready
+ * only to the seats not yet recorded as having accepted, and once more
+ * to a seat whose ready arrived without the second bit.  The report
+ * shows the sweep of each seat's last re-send of any kind against its
+ * abandon.
  *
- * This demo runs ONE Fig 1 instance per process per initiator, with one
- * designated initiator.  The value carried is multi-byte (vLen+1 bytes,
- * supplied on the command line).
- *
- * Optional Byzantine initiator (`-b split`) -- initiator sends the supplied
- * value to processes [0..split-1] and that value with the first byte
- * inverted (XOR 0xFF) to processes [split..n-1].  Verifies Lemma 2:
- * whichever value any correct process accepts (if any), every correct
- * process that accepts agrees with it.
- *
- * Scope: synchronous in-memory queue, every message delivered, no
- * loss; delivery order is deterministic unless -s is given.
- * Exercises the Fig 1 state machine and the BPR sweep that carries
- * it to quiescence; does NOT exercise BPR retry under loss.  See
- * README.md for the full deployment story.
- *
- * How a run ends -- the taxonomy, and which half this demo shows:
- *
- *   QUIESCENT   the owing ending (BPR.md Quiescence), demonstrated
- *               here -- no exit decision at all.  Every process
- *               announces its own accept on the READY it is already
- *               retrying (the ACCEPTED wire bit below) and confirms
- *               the ones it has recorded (the RECEIVED bit), so each
- *               instance's suppress mask reaches all n, READY retires
- *               with it, and a full bracha87Fig1RetryStep pass owes
- *               nothing -- the 0 return.  The process leaves the
- *               sweep rotation and the wire falls silent.  Both bits
- *               are load-bearing: without the second, a process that
- *               records an accept before announcing its own suppresses
- *               the very (ready, v) the announcement rides on, and the
- *               other end waits forever.
- *   ABANDONED   the policy backstop (README.md "Abandonment").  No
- *               run here takes it -- this demo implements no gate.
- *               What the `-b split` runs reach is the sweep cap
- *               below: a Byzantine initiator holds no Fig 1 state,
- *               so it never announces an accept and the all-n gate
- *               can never close.  That residue is what a
- *               deployment's policy would end; the cap only stands
- *               where the policy would be.
- *   sweep cap   a harness guard, not protocol: a bound on the
- *               rotation, carrying no evidence of anything.
- *
- * Deliberately not exercised: loss itself.  A lost announcement no
- * longer strands the process that missed it -- its next (ready, v)
- * arrives here unmarked, un-suppressing it for the next tick's
- * marked re-send -- but every marked re-send in this demo is
- * delivered, so nothing here shows the retry that fair loss needs.
- *
- * Usage:
- *   ./example_bracha87Fig1 [-v] [-s seed] [-o initiator] [-b split] n t value
+ * usage: example_bracha87Fig1 [-v] [-s seed] [-l loss] [-o initiator]
+ *                             [-a abandon] n t value
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "bracha87.h"
+#include "bracha87Fig1.h"
 
-/*--------------------------------------------------------------------------*/
-/*  Constants                                                               */
-/*--------------------------------------------------------------------------*/
-
-#define MAX_PROCESSES 16
-#define MAX_VLEN  64
-
-/*
- * Harness guard on the sweep rotation.  A run whose instances can
- * quiesce needs a handful of sweeps; this bounds one that cannot.
- * EVERY `-b split` run is such a run, the splits where all correct
- * processes accept included: what holds the gate open is the
- * Byzantine initiator announcing no accept, not the echo count.
- * It is not a protocol quantity.
- */
-#define SWEEP_CAP 1000
-
-/*
- * This demo's wire ACCEPTED bit.  bracha87.h fixes the Fig 1 type in
- * bits 0-1 (BRACHA87_TYPE_MASK) and leaves the higher bits to the
- * framer; bit 4 is where the ACS packer reserves the same annotation,
- * so a bare-layer framer that may later carry ACS traffic picks it up
- * unchanged.  Set on a retried READY whose instance has ACCEPTED
- * (struct bracha87Fig1Act.accepted), read back into
- * bracha87Fig1ProcessAccepted on ingress.
- */
-#define WIRE_ACCEPTED 0x10
-
-/*
- * This demo's wire RECEIVED bit, bit 5 where the ACS packer reserves
- * BKR94ACS_RECEIVED.  Decided per RECIPIENT, not per sender: set on a
- * (ready, v) to process j iff bit j is in the instance's RECEIVED mask
- * (bracha87Fig1Received / struct bracha87Fig1Act.received), meaning "I have
- * recorded YOUR accept."  Its ABSENCE is what the receiver acts on --
- * bracha87Fig1ProcessResend on ingress -- so a framer that drops this bit
- * makes every READY unmarked, every receiver re-arms, and the honest
- * run never falls silent.
- */
-#define WIRE_RECEIVED 0x20
-
-/*--------------------------------------------------------------------------*/
-/*  Message queue                                                           */
-/*--------------------------------------------------------------------------*/
+#define HOLDS(st) (((st) & (BRACHA87_F1_INITIAL | BRACHA87_F1_BESIDE)) == (BRACHA87_F1_INITIAL | BRACHA87_F1_BESIDE))
 
 struct msg {
-  unsigned char type;     /* wire byte: BRACHA87_INITIAL / ECHO / READY
-                           * in bits 0-1, + WIRE_ACCEPTED / WIRE_RECEIVED
-                           * on a READY */
+  unsigned char kind;
   unsigned char from;
   unsigned char to;
-  unsigned char value[MAX_VLEN];
+  unsigned char beside;   /* the byte beside (initial, v), on BESIDE */
+  unsigned char annot;    /* the annotations, on ECHO and READY */
+  unsigned char value[1]; /* vLen bytes */
 };
-
-static struct msg *MsgQ;
-static unsigned int Qcap;
-static unsigned int Qhead;
-static unsigned int Qtail;
-static unsigned int Vlen;  /* actual payload length: vLen + 1 */
-
-static int
-qAlloc(
-  unsigned int cap
-){
-  MsgQ = calloc(cap, sizeof (struct msg));
-  if (!MsgQ)
-    return (-1);
-  Qcap = cap;
-  Qhead = Qtail = 0;
-  return (0);
-}
-
-static void
-qFree(
-  void
-){
-  free(MsgQ);
-  MsgQ = 0;
-}
-
-static void
-qPush(
-  unsigned char type
- ,unsigned char accepted  /* READY only: act's .accepted -> WIRE_ACCEPTED */
- ,unsigned char received  /* READY only: RECEIVED mask bit 'to' -> WIRE_RECEIVED */
- ,unsigned char from
- ,unsigned char to
- ,const unsigned char *value
-){
-  if (Qtail >= Qcap)
-    return;
-  MsgQ[Qtail].type = (unsigned char)(type | (accepted ? WIRE_ACCEPTED : 0)
-                                          | (received ? WIRE_RECEIVED : 0));
-  MsgQ[Qtail].from = from;
-  MsgQ[Qtail].to = to;
-  memcpy(MsgQ[Qtail].value, value, Vlen);
-  ++Qtail;
-}
-
-static void
-qShuffle(
-  unsigned int *seed
-){
-  unsigned int n;
-  unsigned int i;
-
-  n = Qtail - Qhead;
-  if (n < 2)
-    return;
-  for (i = n - 1; i > 0; --i) {
-    unsigned int j;
-    struct msg tmp;
-
-    *seed = *seed * 1103515245u + 12345u;
-    j = ((*seed >> 16) & 0x7FFF) % (i + 1);
-    tmp = MsgQ[Qhead + i];
-    MsgQ[Qhead + i] = MsgQ[Qhead + j];
-    MsgQ[Qhead + j] = tmp;
-  }
-}
-
-/*--------------------------------------------------------------------------*/
-/*  Verbose helpers                                                         */
-/*--------------------------------------------------------------------------*/
-
-static const char *
-typeName(
-  unsigned char type
-){
-  switch (type) {
-  case BRACHA87_INITIAL: return ("INITIAL");
-  case BRACHA87_ECHO:    return ("ECHO");
-  case BRACHA87_READY:   return ("READY");
-  default:               return ("???");
-  }
-}
-
-/*
- * Print a value as printable string if all bytes are printable,
- * else as hex.  No trailing newline.
- */
-static void
-printValue(
-  const unsigned char *v
-){
-  unsigned int i;
-  int printable;
-
-  printable = 1;
-  for (i = 0; i < Vlen; ++i) {
-    if (v[i] < 0x20 || v[i] >= 0x7F) {
-      printable = 0;
-      break;
-    }
-  }
-  if (printable) {
-    fputc('"', stdout);
-    for (i = 0; i < Vlen; ++i)
-      fputc(v[i], stdout);
-    fputc('"', stdout);
-  } else {
-    fputs("0x", stdout);
-    for (i = 0; i < Vlen; ++i)
-      printf("%02x", v[i]);
-  }
-}
-
-/*--------------------------------------------------------------------------*/
-/*  Main                                                                    */
-/*--------------------------------------------------------------------------*/
 
 int
 main(
   int argc
  ,char *argv[]
 ){
+  struct bracha87Fig1 **f;
+  unsigned char *q;         /* struct msg array, msz bytes each */
+  unsigned int *held;       /* sweep a process first held both, 0 = not yet */
+  unsigned int *accepted;   /* sweep a process accepted, 0 = not yet */
+  unsigned int *abandoned;  /* sweep a process abandoned, 0 = not yet */
+  unsigned int *lastResend; /* sweep of a process's last re-send, 0 = none */
+  const unsigned char *value;
+  const unsigned char *cv;
+  int resend;               /* a READY re-sent on a sweep */
+  unsigned char besideHeld[256];  /* per process: a beside message kept ahead of its initial */
+  unsigned long sz;
+  unsigned long msz;
+  unsigned int abandon;
   unsigned int n;
   unsigned int t;
+  unsigned int vLen;
   unsigned int initiator;
-  unsigned int byzSplit;
+  unsigned int seed;
+  unsigned int seed0;       /* as given, for the report */
+  unsigned int loss;
   unsigned int verbose;
-  unsigned int shuffleSeed;
-  unsigned int origSeed;
-
-  unsigned char honestVal[MAX_VLEN];
-  unsigned char byzVal[MAX_VLEN];
-
-  struct bracha87Fig1 *fig1[MAX_PROCESSES]; /* one instance per process */
-  unsigned char accepted[MAX_PROCESSES];    /* 1 if process accepted */
-  unsigned char acceptVal[MAX_PROCESSES][MAX_VLEN];
-
-  unsigned long f1sz;
+  unsigned int qcap;
+  unsigned int qhead;
+  unsigned int qtail;
+  unsigned int sweep;
+  unsigned int now;         /* the sweep an event is charged to */
+  unsigned int dropped;
+  unsigned int p;           /* the process whose actions are being run */
+  unsigned int site;        /* where to return to after running them */
   unsigned int i;
   unsigned int j;
+  unsigned int k;
+  unsigned int nout;
+  unsigned int nwork;
+  unsigned int a;
+  unsigned char annot;
+  unsigned char out[BRACHA87_FIG1_OUT];
+  unsigned char work[64];   /* actions still to run at p; a hand-back adds */
   int arg;
-  int exitCode;
-
-  unsigned int acceptCount;
-  int lemma2ok;
-  int lemma4ok;
-  unsigned char firstAccVal[MAX_VLEN];
-  int haveFirstAcc;
-
-  unsigned char quiescent[MAX_PROCESSES];   /* left the sweep rotation */
-  unsigned int quiesceSweep[MAX_PROCESSES]; /* the sweep it left at */
-  unsigned int inRotation;
-  unsigned int quiesced;
-  unsigned int sweepCount;
-  int wireSilent;
-
-  /*----------------------------------------------------------------------*/
-  /*  Parse command line                                                  */
-  /*----------------------------------------------------------------------*/
+  int rc;
 
   verbose = 0;
-  shuffleSeed = 0;
+  seed = 0;
+  loss = 0;
   initiator = 0;
-  byzSplit = 0;
-  exitCode = 0;
+  abandon = 32;
+  rc = 1;
+  f = 0;
+  q = 0;
+  held = accepted = abandoned = lastResend = 0;
 
   arg = 1;
-  while (arg < argc && argv[arg][0] == '-') {
-    if (argv[arg][1] == 'v' && argv[arg][2] == '\0') {
+  while (arg < argc && argv[arg][0] == '-' && argv[arg][1] && argv[arg][2] == '\0') {
+    switch (argv[arg][1]) {
+    case 'v':
       verbose = 1;
       ++arg;
-    } else if (argv[arg][1] == 's' && argv[arg][2] == '\0') {
-      ++arg;
-      if (arg >= argc) goto usage;
-      shuffleSeed = (unsigned int)atoi(argv[arg]);
-      ++arg;
-    } else if (argv[arg][1] == 'o' && argv[arg][2] == '\0') {
-      ++arg;
-      if (arg >= argc) goto usage;
-      initiator = (unsigned int)atoi(argv[arg]);
-      ++arg;
-    } else if (argv[arg][1] == 'b' && argv[arg][2] == '\0') {
-      ++arg;
-      if (arg >= argc) goto usage;
-      byzSplit = (unsigned int)atoi(argv[arg]);
-      ++arg;
-    } else {
+      continue;
+    case 's':
+    case 'l':
+    case 'o':
+    case 'a':
+      if (arg + 1 >= argc)
+        goto usage;
+      switch (argv[arg][1]) {
+      case 's': seed = atoi(argv[arg + 1]); break;
+      case 'l': loss = atoi(argv[arg + 1]); break;
+      case 'o': initiator = atoi(argv[arg + 1]); break;
+      default:  abandon = atoi(argv[arg + 1]); break;
+      }
+      arg += 2;
+      continue;
+    default:
       goto usage;
     }
   }
-
-  if (argc - arg < 3) goto usage;
-  n = (unsigned int)atoi(argv[arg++]);
-  t = (unsigned int)atoi(argv[arg++]);
-
-  if (n < 1 || n > MAX_PROCESSES) {
-    fprintf(stderr, "n must be 1..%d\n", MAX_PROCESSES);
-    return (1);
+  if (argc - arg != 3)
+    goto usage;
+  n = atoi(argv[arg]);
+  t = atoi(argv[arg + 1]);
+  value = (const unsigned char *)argv[arg + 2];
+  vLen = strlen(argv[arg + 2]);
+  if (!vLen) {
+    fprintf(stderr, "value must not be empty\n");
+    goto done;
   }
-  if (n <= 3 * t) {
-    fprintf(stderr, "need n > 3t (n=%u, t=%u)\n", n, t);
-    return (1);
+  if (loss > 99) {
+    fprintf(stderr, "loss is a percent below 100\n");
+    goto done;
   }
-  if (initiator >= n) {
-    fprintf(stderr, "initiator must be < n\n");
-    return (1);
+  if (n < 1 || n > 256 || vLen > 256 || initiator >= n || n <= 3 * t) {
+    fprintf(stderr, "n is 1..256 and above 3t, the message 1..256 bytes, the initiator below n\n");
+    goto done;
   }
-  if (byzSplit > n) {
-    fprintf(stderr, "split must be <= n\n");
-    return (1);
+  sz = bracha87Fig1Sz(n - 1, vLen - 1, t + 1);
+  if (!(f = calloc(n, sizeof (*f))) || !(held = calloc(n, sizeof (*held)))
+   || !(accepted = calloc(n, sizeof (*accepted)))
+   || !(abandoned = calloc(n, sizeof (*abandoned)))
+   || !(lastResend = calloc(n, sizeof (*lastResend)))) {
+    fprintf(stderr, "allocation failed\n");
+    goto done;
   }
-
-  /* The honest value is the user-supplied string, NUL-padded. */
-  memset(honestVal, 0, sizeof (honestVal));
-  Vlen = (unsigned int)strlen(argv[arg]);
-  if (Vlen == 0 || Vlen > MAX_VLEN) {
-    fprintf(stderr, "value length must be 1..%d\n", MAX_VLEN);
-    return (1);
-  }
-  memcpy(honestVal, argv[arg], Vlen);
-
-  /* The Byzantine equivocation value: first byte XOR 0xFF.  Distinct
-   * from honestVal under any non-empty value. */
-  memcpy(byzVal, honestVal, Vlen);
-  byzVal[0] ^= 0xFF;
-
-  origSeed = shuffleSeed;
-
-  /*----------------------------------------------------------------------*/
-  /*  Allocate per-process Fig 1 instance                                    */
-  /*----------------------------------------------------------------------*/
-
-  /* vLen encoding: actual = vLen + 1; we have Vlen bytes. */
-  f1sz = bracha87Fig1Sz(n - 1, Vlen - 1);
-
-  memset(fig1, 0, sizeof (fig1));
-  memset(accepted, 0, sizeof (accepted));
-  memset(acceptVal, 0, sizeof (acceptVal));
-
+  memset(besideHeld, 0, sizeof (besideHeld));
   for (i = 0; i < n; ++i) {
-    /* Byzantine initiator holds no Fig 1 state -- it sends arbitrary
-     * messages and never runs the protocol. */
-    if (byzSplit && i == initiator)
-      continue;
-    fig1[i] = calloc(1, f1sz);
-    if (!fig1[i]) {
+    if (!(f[i] = calloc(1, sz))) {
       fprintf(stderr, "allocation failed\n");
-      exitCode = 1;
-      goto cleanup;
+      goto done;
     }
-    bracha87Fig1Init(fig1[i], (unsigned char)(n - 1),
-                     (unsigned char)t, (unsigned char)(Vlen - 1));
-  }
-
-  /*----------------------------------------------------------------------*/
-  /*  Allocate message queue                                              */
-  /*                                                                      */
-  /*  One broadcast round is 3 * n^2 messages (INITIAL/ECHO/READY from    */
-  /*  n processes to n processes); the retry tick re-sends un-retired     */
-  /*  actions, so size the queue with headroom for those sweeps.          */
-  /*----------------------------------------------------------------------*/
-
-  if (qAlloc(16u * n * n)) {
-    fprintf(stderr, "queue allocation failed\n");
-    exitCode = 1;
-    goto cleanup;
-  }
-
-  /*----------------------------------------------------------------------*/
-  /*  Bootstrap: initiator broadcasts INITIAL                                */
-  /*----------------------------------------------------------------------*/
-
-  if (byzSplit) {
-    /* Byzantine initiator equivocates: honestVal to first split processes,
-     * byzVal to the rest. */
-    for (j = 0; j < n; ++j)
-      qPush(BRACHA87_INITIAL, 0, 0, (unsigned char)initiator,
-            (unsigned char)j, (j < byzSplit) ? honestVal : byzVal);
-    if (verbose) {
-      printf("initiator %u (BYZANTINE): sending ", initiator);
-      printValue(honestVal);
-      printf(" to processes [0..%u), ", byzSplit);
-      printValue(byzVal);
-      printf(" to processes [%u..%u)\n", byzSplit, n);
-    }
-  } else {
-    /* Honest initiator: same value to all. */
-    bracha87Fig1Initiator(fig1[initiator], honestVal);
-    for (j = 0; j < n; ++j)
-      qPush(BRACHA87_INITIAL, 0, 0, (unsigned char)initiator,
-            (unsigned char)j, honestVal);
-    if (verbose) {
-      printf("initiator %u (honest): broadcasting ", initiator);
-      printValue(honestVal);
-      printf("\n");
+    if (abandon < 1
+     || bracha87Fig1Init(f[i], n - 1, t, vLen - 1, t + 1, initiator, i, abandon, 1)) {
+      fprintf(stderr, "abandon is at least 1 sweep\n");
+      goto done;
     }
   }
+  msz = sizeof (struct msg) - 1 + vLen;
+  qcap = 8 * n * n + 8;
+  if (!(q = calloc(qcap, msz))) {
+    fprintf(stderr, "allocation failed\n");
+    goto done;
+  }
+  qhead = qtail = 0;
+#define Q(x) ((struct msg *)(q + (x) * msz))
+  seed0 = seed;
+  sweep = 0;
+  dropped = 0;
 
-  if (shuffleSeed)
-    qShuffle(&shuffleSeed);
-
-  /*----------------------------------------------------------------------*/
-  /*  Drive to quiescence: drain ingress, tick the sweep, repeat.         */
-  /*                                                                      */
-  /*  In a real deployment the BPR retry is called once per tick, paced   */
-  /*  by the application's sleep(tickMs).  Looping until idle would       */
-  /*  flood the network -- Bracha BPR retries persist, so every sent      */
-  /*  Fig 1 has actions until its gates close; a tight loop empties the   */
-  /*  cursor as fast as the CPU runs, offering the transport more than    */
-  /*  the retry exists to recover from.  One tick per process per pass    */
-  /*  of this loop is that rate.                                          */
-  /*                                                                      */
-  /*  Each process's instance space here is a single Fig 1, so ONE        */
-  /*  bracha87Fig1RetryStep call IS a full sweep of it: the 0 return is   */
-  /*  the completed traversal that found nothing owed, and                */
-  /*  bracha87Fig1SentCount separates that from the pre-broadcast idle    */
-  /*  the same 0 also reports.  A process meeting both is QUIESCENT and   */
-  /*  leaves the rotation.  It owes nothing to anyone -- READY, the one   */
-  /*  action with no local retire, retires only once every process has    */
-  /*  announced its accept AND holds this one's -- so no process left     */
-  /*  behind is waiting on it.                                            */
-  /*  Its ingress stays open: quiescence bounds what a process OWES,      */
-  /*  never what it may still be told, and every later delivery to an     */
-  /*  accepted instance is a dedup no-op.                                 */
-  /*----------------------------------------------------------------------*/
-
-  memset(quiescent, 0, sizeof (quiescent));
-  memset(quiesceSweep, 0, sizeof (quiesceSweep));
-  inRotation = 0;
-  for (i = 0; i < n; ++i)
-    if (fig1[i])
-      ++inRotation;
-  quiesced = 0;
-  sweepCount = 0;
-  wireSilent = 0;
+  /* step 0: (initial, v) and the byte beside it to all, self by hand-back */
+  if (bracha87Fig1Initiator(f[initiator], value)) {
+    fprintf(stderr, "Initiator refused\n");
+    goto done;
+  }
+  if (verbose)
+    printf("initiator %u: (initial, \"%s\") and one byte beside it to all\n",
+           initiator, argv[arg + 2]);
+  p = initiator;
+  now = 1;
+  nwork = 0;
+  for (j = 0; j < n; ++j) {
+    if (j == p) {
+      nout = bracha87Fig1Input(f[p], BRACHA87_INITIAL, p, value, 0, out);
+      for (k = 0; k < nout; ++k)
+        work[nwork++] = out[k];
+      nout = bracha87Fig1Input(f[p], BRACHA87_BESIDE, p, 0, 0, out);
+      for (k = 0; k < nout; ++k)
+        work[nwork++] = out[k];
+      continue;
+    }
+    Q(qtail)->kind = BRACHA87_INITIAL;
+    Q(qtail)->from = p;
+    Q(qtail)->to = j;
+    memcpy(Q(qtail)->value, value, vLen);
+    ++qtail;
+    Q(qtail)->kind = BRACHA87_BESIDE;
+    Q(qtail)->from = p;
+    Q(qtail)->to = j;
+    Q(qtail)->beside = j ^ 0x5A;
+    ++qtail;
+  }
+  site = 0;
+  goto run;
+step0done:
 
   for (;;) {
-    ++sweepCount;
-
-    while (Qhead < Qtail) {
+    /* deliver, in an order the seed decides, losing by the seed */
+    while (qhead < qtail) {
       struct msg *m;
-      struct bracha87Fig1 *f1;
-      unsigned char out[3];
-      unsigned char type;
-      unsigned int nout;
-      unsigned int k;
-      unsigned int oldTail;
-      const unsigned char *cv;
 
-      m = &MsgQ[Qhead++];
+      if (seed0) {
+        unsigned int r;
 
-      /* Skip messages to the Byzantine initiator -- it has no state. */
-      if (byzSplit && m->to == initiator)
-        continue;
-      if (m->to >= n || m->from >= n)
-        continue;
+        seed = seed * 1103515245u + 12345u;
+        r = qhead + ((seed >> 16) & 0x7FFF) % (qtail - qhead);
+        if (r != qhead) {
+          unsigned char *x;
+          unsigned char *y;
+          unsigned long b;
 
-      type = (unsigned char)(m->type & BRACHA87_TYPE_MASK);
+          for (x = q + qhead * msz, y = q + r * msz, b = 0; b < msz; ++b, ++x, ++y) {
+            unsigned char c;
 
-      /*
-       * INITIAL sender obligation (bracha87Fig1Input header, Note
-       * 17): the bare Fig 1 entry does not know its designated
-       * initiator, so the CALLER must drop any INITIAL whose
-       * authenticated sender is not it -- a forged non-initiator INITIAL
-       * would ride the echo cascade to a false ACCEPT.  bkr94acs
-       * enforces this inside its Input entries; a bare-layer caller
-       * filters here.
-       */
-      if (type == BRACHA87_INITIAL && m->from != initiator)
-        continue;
-
-      f1 = fig1[m->to];
-      oldTail = Qtail;
-
-      if (verbose) {
-        printf("process %u: recv %s value=", (unsigned)m->to, typeName(type));
-        printValue(m->value);
-        printf(" from %u\n", (unsigned)m->from);
-      }
-
-      /* The two wire bits ride Input (bracha87Fig1.dtc's BPR rows read
-       * them beside the paper rules).  The hand-back to self carries them
-       * too, which is how this process's own accept is recorded for the
-       * all-n gate. */
-      nout = bracha87Fig1Input(f1, type, m->from, m->value,
-                               m->type & WIRE_ACCEPTED, m->type & WIRE_RECEIVED,
-                               out);
-
-      /*
-       * Leaving the rotation is PROVISIONAL, and this is the whole
-       * reason ingress stays open: an unmarked READY is evidence that
-       * something IS still owed, and a process that has stopped
-       * ticking can never re-send marked.  Re-enter.  Under loss this
-       * is the path that makes quiescence reachable rather than
-       * merely hoped for -- a lost marked re-send is drawn again by
-       * the next unmarked one, and the unmarked one is worthless if
-       * nobody is left to hear it.
-       */
-      if (type == BRACHA87_READY && !(m->type & WIRE_RECEIVED)
-       && quiescent[m->to]) {
-        quiescent[m->to] = 0;
-        --quiesced;
-      }
-
-      for (k = 0; k < nout; ++k) {
-        cv = bracha87Fig1Value(f1);
-        if (!cv)
-          continue;
-
-        if (out[k] == BRACHA87_ACCEPT) {
-          accepted[m->to] = 1;
-          memcpy(acceptVal[m->to], cv, Vlen);
-          if (verbose) {
-            printf("process %u: ACCEPT value=", (unsigned)m->to);
-            printValue(cv);
-            printf("\n");
-          }
-          continue;
-        }
-
-        /* ECHO_ALL or READY_ALL: relay the echoed value to all processes,
-         * minus the BPR per-process suppress set (processes that have already
-         * echoed/readied/accepted no longer consume this action). */
-        if (verbose) {
-          printf("process %u: -> %s value=", (unsigned)m->to,
-                 (out[k] == BRACHA87_ECHO_ALL) ? "ECHO_ALL" : "READY_ALL");
-          printValue(cv);
-          printf("\n");
-        }
-        {
-          const unsigned char *skip;
-          const unsigned char *received;
-
-          skip = bracha87Fig1Skip(f1, out[k]);
-          received = (out[k] == BRACHA87_READY_ALL)
-                   ? bracha87Fig1Received(f1) : 0;
-          for (j = 0; j < n; ++j) {
-            if (skip && BRACHA87_SKIP_TST(skip, j))
-              continue;
-            qPush((out[k] == BRACHA87_ECHO_ALL)
-                    ? BRACHA87_ECHO : BRACHA87_READY,
-                  0,
-                  received && BRACHA87_SKIP_TST(received, j),
-                  m->to, (unsigned char)j, cv);
+            c = *x;
+            *x = *y;
+            *y = c;
           }
         }
       }
-
-      if (shuffleSeed && Qtail > oldTail)
-        qShuffle(&shuffleSeed);
+      if (loss) {
+        seed = seed * 1103515245u + 12345u;
+        if (((seed >> 16) & 0x7FFF) % 100 < loss) {
+          ++dropped;
+          ++qhead;
+          continue;
+        }
+      }
+      m = Q(qhead++);
+      if (verbose)
+        printf("process %u: %s from %u\n", m->to,
+               m->kind == BRACHA87_INITIAL ? "(initial, v)"
+             : m->kind == BRACHA87_ECHO ? "(echo, v)"
+             : m->kind == BRACHA87_READY ? "(ready, v)" : "beside", m->from);
+      p = m->to;
+      now = sweep + 1;
+      /* what rode beside is kept until the (initial, v) it is validated
+       * against is held, and fed as BESIDE then */
+      if (m->kind == BRACHA87_BESIDE && !(bracha87Fig1State(f[p]) & BRACHA87_F1_INITIAL)) {
+        besideHeld[p] = 1;
+        continue;
+      }
+      nwork = bracha87Fig1Input(f[p], m->kind, m->from, m->value, m->annot, work);
+      if (m->kind == BRACHA87_INITIAL && besideHeld[p]) {
+        besideHeld[p] = 0;
+        nwork += bracha87Fig1Input(f[p], BRACHA87_BESIDE, m->from, 0, 0, work + nwork);
+      }
+      site = 1;
+      goto run;
+arrivalDone:
+      ;
     }
+    qhead = qtail = 0;
 
-    /* The queue is drained (Qhead == Qtail): reset the indices so the
-     * append-only store's capacity bounds one sweep's traffic, not the
-     * whole run's -- a silent qPush drop would fake the silence
-     * quiescence is read from. */
-    Qhead = Qtail = 0;
-
+    /* sweep */
+    ++sweep;
     for (i = 0; i < n; ++i) {
-      struct bracha87Fig1 *processArr[1];
-      struct bracha87Retry retry;
-      struct bracha87Fig1Act pacts[BRACHA87_FIG1_RETRY_MAX_ACTS];
-      unsigned int n_pacts;
-      unsigned int p;
-
-      if (!fig1[i] || quiescent[i])
+      if (abandoned[i])
         continue;
-
-      processArr[0] = fig1[i];
-      bracha87RetryInit(&retry);
-      n_pacts = bracha87Fig1RetryStep(processArr, 1, &retry, pacts);
-      if (!n_pacts && bracha87Fig1SentCount(processArr, 1)) {
-        quiescent[i] = 1;
-        quiesceSweep[i] = sweepCount;
-        ++quiesced;
-        if (verbose)
-          printf("process %u: QUIESCENT (sweep %u)\n", i, sweepCount);
-        continue;
-      }
-      for (p = 0; p < n_pacts; ++p)
-        for (j = 0; j < n; ++j) {
-          if (pacts[p].skip && BRACHA87_SKIP_TST(pacts[p].skip, j))
-            continue;
-          qPush(pacts[p].act == BRACHA87_INITIAL_ALL ? BRACHA87_INITIAL
-              : pacts[p].act == BRACHA87_ECHO_ALL    ? BRACHA87_ECHO
-              :                                        BRACHA87_READY,
-                pacts[p].accepted,
-                pacts[p].received
-                  && BRACHA87_SKIP_TST(pacts[p].received, j),
-                (unsigned char)i, (unsigned char)j,
-                pacts[p].value);
-        }
+      p = i;
+      now = sweep;
+      nwork = bracha87Fig1Input(f[p], BRACHA87_SWEEP, 0, 0, 0, work);
+      site = 2;
+      goto run;
+sweepDone:
+      ;
     }
-
-    if (quiesced == inRotation) {
-      /* Nothing was output by the sweep that emptied the rotation, so
-       * the wire is silent at the exit -- the observable half of the
-       * claim the 0 returns make. */
-      wireSilent = (Qtail == Qhead);
-      break;
-    }
-    if (sweepCount >= SWEEP_CAP) {
-      /*
-       * The cap stands in for the abandonment policy a deployment
-       * would run here.  A Byzantine initiator holds no Fig 1 state,
-       * so it never announces an accept and the all-n gate can never
-       * close -- README.md's Byzantine-silent scenario, where the
-       * retry tail is correct and only abandonment ends it.  With an
-       * honest initiator every process announces, so reaching the cap
-       * is a real failure of the run.
-       */
-      fprintf(stderr,
-              "sweep cap (%u) reached: %u of %u processes quiescent\n",
-              (unsigned)SWEEP_CAP, quiesced, inRotation);
-      if (!byzSplit)
-        exitCode = 1;
-      break;
-    }
-  }
-
-  /*----------------------------------------------------------------------*/
-  /*  Verify Lemma 2 and Lemma 4                                          */
-  /*----------------------------------------------------------------------*/
-
-  /* Lemma 2: all correct processes that accept agree on the value. */
-  acceptCount = 0;
-  haveFirstAcc = 0;
-  lemma2ok = 1;
-  memset(firstAccVal, 0, sizeof (firstAccVal));
-  for (i = 0; i < n; ++i) {
-    if (byzSplit && i == initiator)
-      continue;
-    if (accepted[i]) {
-      ++acceptCount;
-      if (!haveFirstAcc) {
-        memcpy(firstAccVal, acceptVal[i], Vlen);
-        haveFirstAcc = 1;
-      } else if (memcmp(firstAccVal, acceptVal[i], Vlen) != 0) {
-        lemma2ok = 0;
-      }
-    }
-  }
-
-  /* Lemma 4: "if a correct process p broadcasts v then all correct
-   * processes accept v" -- the VALUE is part of the lemma, so checking
-   * the accepted bytes against honestVal is checking Lemma 4 itself and
-   * not some stronger property. */
-  lemma4ok = 1;
-  if (!byzSplit) {
     for (i = 0; i < n; ++i)
-      if (!accepted[i] || memcmp(acceptVal[i], honestVal, Vlen) != 0)
-        lemma4ok = 0;
-  }
-
-  /*----------------------------------------------------------------------*/
-  /*  Output summary                                                      */
-  /*----------------------------------------------------------------------*/
-
-  printf("\n--- Results (n=%u, t=%u, initiator=%u, seed=%u) ---\n",
-         n, t, initiator, origSeed);
-  for (i = 0; i < n; ++i) {
-    if (byzSplit && i == initiator) {
-      printf("Process %u: Byzantine initiator (equivocating, split=%u)\n",
-             i, byzSplit);
-    } else if (accepted[i]) {
-      printf("Process %u: accepted ", i);
-      printValue(acceptVal[i]);
-      if (quiescent[i])
-        printf(", quiescent at sweep %u\n", quiesceSweep[i]);
-      else
-        printf(", not quiescent (sweep cap)\n");
-    } else {
-      printf("Process %u: did not accept%s\n", i,
-             quiescent[i] ? ", quiescent" : ", not quiescent (sweep cap)");
+      if (!abandoned[i])
+        break;
+    if (i == n)
+      break;
+    if (sweep >= 1000 * abandon) {
+      /* a guard on this loop, carrying no evidence of anything */
+      fprintf(stderr, "harness guard: %u sweeps and not every process abandoned\n", sweep);
+      goto done;
     }
   }
-  printf("Accept count: %u of %u correct processes\n",
-         acceptCount, byzSplit ? (n - 1) : n);
-  printf("Lemma 2 (accepts agree): %s\n",
-         (acceptCount > 1) ? (lemma2ok ? "ok" : "FAIL")
-                           : "n/a (fewer than 2 accepts)");
-  if (!byzSplit)
-    printf("Lemma 4 (correct initiator -> all accept v): %s\n",
-           lemma4ok ? "ok" : "FAIL");
-  printf("Ending: %u of %u processes QUIESCENT in %u sweeps%s\n",
-         quiesced, inRotation, sweepCount,
-         wireSilent ? ", wire silent" : "");
 
-  if (!lemma2ok || !lemma4ok)
-    exitCode = 1;
+  printf("n=%u t=%u initiator=%u seed=%u loss=%u%% abandon=%u\n",
+         n, t, initiator, seed0, loss, abandon);
+  k = 0;
+  for (i = 0; i < n; ++i) {
+    cv = bracha87Fig1Value(f[i], BRACHA87_ACCEPT);
+    printf("seat %u: holds ", i);
+    if (cv) {
+      printf("\"");
+      for (j = 0; j < vLen; ++j)
+        putchar(cv[j] >= 0x20 && cv[j] < 0x7F ? cv[j] : '.');
+      printf("\"");
+    } else
+      printf("nothing");
+    if (held[i])
+      printf(", held it and the byte from the initiator at sweep %u", held[i]);
+    else {
+      printf(", never held the byte");
+      ++k;
+    }
+    printf(", accepted at sweep %u, last re-send of any kind at sweep %u, abandoned at sweep %u\n",
+           accepted[i], lastResend[i], abandoned[i]);
+    if (!cv || memcmp(cv, value, vLen))
+      rc = 2;
+  }
+  printf("%u of %u seats never held the byte; the initiator accepted at sweep %u\n",
+         k, n, accepted[initiator]);
+  printf("%u sweeps, %u deliveries lost\n", sweep, dropped);
+  if (rc == 1)
+    rc = 0;
+done:
+  if (f)
+    for (i = 0; i < n; ++i)
+      free(f[i]);
+  free(f);
+  free(q);
+  free(held);
+  free(accepted);
+  free(abandoned);
+  free(lastResend);
+  return (rc);
 
-  /*----------------------------------------------------------------------*/
-  /*  Cleanup                                                             */
-  /*----------------------------------------------------------------------*/
-
-cleanup:
-  for (i = 0; i < n; ++i)
-    free(fig1[i]);
-  qFree();
-
-  return (exitCode);
+  /*
+   * Run the actions in work[] at process p: record an accept or an
+   * abandon, send the rest to every process it names -- self by
+   * hand-back, whose own actions join work[] -- and return to site.
+   */
+run:
+  while (nwork) {
+    a = work[--nwork];
+    if (a == BRACHA87_ACCEPT) {
+      accepted[p] = now;
+      if (verbose)
+        printf("process %u: accept, sweep %u\n", p, now);
+      continue;
+    }
+    if (a == BRACHA87_ABANDON) {
+      abandoned[p] = now;
+      if (verbose)
+        printf("process %u: abandon, sweep %u\n", p, now);
+      continue;
+    }
+    cv = bracha87Fig1Value(f[p], a);
+    /* INITIAL to the processes not heard from; a READY re-sent on a
+     * sweep to the processes still owed it */
+    resend = a == BRACHA87_READY_ALL && site == 2;
+    if (site == 2)
+      lastResend[p] = now;
+    if (verbose)
+      printf("process %u: %s %s\n", p, site == 2 ? "re-send" : "send",
+             a == BRACHA87_INITIAL_ALL ? "(initial, v) and the byte beside it"
+           : a == BRACHA87_ECHO_ALL ? "(echo, v)" : "(ready, v)");
+    for (j = 0; j < n; ++j) {
+      if (a == BRACHA87_INITIAL_ALL && bracha87Fig1Holder(f[p], j))
+        continue;
+      if (resend && !bracha87Fig1Recipient(f[p], j))
+        continue;
+      if (a == BRACHA87_ECHO_ALL && site == 2 && !bracha87Fig1EchoRecipient(f[p], j))
+        continue;
+      /* every echo and ready says whether this process holds the
+       * initial and the message beside it; a ready says the rest */
+      annot = 0;
+      if (a != BRACHA87_INITIAL_ALL && HOLDS(bracha87Fig1State(f[p])))
+        annot |= BRACHA87_ANN_HOLDING;
+      if (a == BRACHA87_READY_ALL) {
+        if (bracha87Fig1State(f[p]) & BRACHA87_F1_ACCEPTED)
+          annot |= BRACHA87_ANN_ACCEPTED;
+        if (BRACHA87_BIT_TST(bracha87Fig1Received(f[p]), j))
+          annot |= BRACHA87_ANN_RECEIVED;
+      }
+      if (j == p) {
+        /* the hand-back is an input like any other; who this sweep's
+         * re-sends go to stands until the next sweep, so its place in
+         * this loop does not matter */
+        if (nwork + 2 * BRACHA87_FIG1_OUT > sizeof (work) / sizeof (work[0])) {
+          fprintf(stderr, "harness guard: hand-back cascade too deep\n");
+          goto done;
+        }
+        nout = bracha87Fig1Input(f[p],
+                                 a == BRACHA87_INITIAL_ALL ? BRACHA87_INITIAL
+                               : a == BRACHA87_ECHO_ALL ? BRACHA87_ECHO : BRACHA87_READY,
+                                 p, cv, annot, out);
+        for (k = 0; k < nout; ++k)
+          work[nwork++] = out[k];
+        if (a == BRACHA87_INITIAL_ALL) {
+          nout = bracha87Fig1Input(f[p], BRACHA87_BESIDE, p, 0, 0, out);
+          for (k = 0; k < nout; ++k)
+            work[nwork++] = out[k];
+        }
+        continue;
+      }
+      if (qtail + 2 > qcap)
+        continue;
+      Q(qtail)->kind = a == BRACHA87_INITIAL_ALL ? BRACHA87_INITIAL
+                     : a == BRACHA87_ECHO_ALL ? BRACHA87_ECHO : BRACHA87_READY;
+      Q(qtail)->from = p;
+      Q(qtail)->to = j;
+      Q(qtail)->annot = annot;
+      memcpy(Q(qtail)->value, cv, vLen);
+      ++qtail;
+      if (a == BRACHA87_INITIAL_ALL) {
+        Q(qtail)->kind = BRACHA87_BESIDE;
+        Q(qtail)->from = p;
+        Q(qtail)->to = j;
+        Q(qtail)->beside = j ^ 0x5A;
+        ++qtail;
+      }
+    }
+  }
+  if (!held[p]) {
+    k = bracha87Fig1State(f[p]);
+    if ((k & BRACHA87_F1_INITIAL) && (k & BRACHA87_F1_BESIDE))
+      held[p] = now;
+  }
+  switch (site) {
+  case 0: goto step0done;
+  case 1: goto arrivalDone;
+  default: goto sweepDone;
+  }
 
 usage:
   fprintf(stderr,
-    "usage: example_bracha87Fig1 [-v] [-s seed] [-o initiator] [-b split]"
-    " n t value\n"
-    "  n            total processes (1-%d)\n"
-    "  t            max Byzantine faults\n"
-    "  value        multi-byte payload to broadcast (1-%d bytes, string)\n",
-    MAX_PROCESSES, MAX_VLEN);
+    "usage: example_bracha87Fig1 [-v] [-s seed] [-l loss] [-o initiator]"
+    " [-a abandon] n t message\n"
+    "  n           seats, 1..256\n"
+    "  t           faulty seats the run tolerates, n > 3t; none here is\n"
+    "  message     what the initiator shares, 1..256 bytes\n");
   fprintf(stderr,
-    "  -v           verbose: trace every message\n"
-    "  -s seed      shuffle seed (0 = ordered delivery)\n"
-    "  -o initiator designated initiator process (default 0)\n"
-    "  -b split     initiator is Byzantine: sends value to processes\n"
-    "               [0..split-1], value with first byte XOR 0xFF to\n"
-    "               [split..n-1]\n");
+    "  -v          trace every delivery and action\n"
+    "  -s seed     reorder deliveries by seed (0: in order)\n"
+    "  -l loss     lose that percent of deliveries, by seed\n"
+    "  -o seat     the initiator (default 0)\n"
+    "  -a sweeps   abandon, sweeps from a process's Init (default 32)\n");
   return (1);
 }

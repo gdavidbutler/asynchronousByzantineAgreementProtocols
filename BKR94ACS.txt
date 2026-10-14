@@ -4,7 +4,7 @@ PODC '94, pages 183-192
 
 Scope of this extract: Section 4 ("Agreement on a Common Subset"),
 plus the Section 2 facts (communication and adversary model) that bear
-on an ACS caller. The paper's secret sharing (USS/AVSS), linear
+on ACS taken alone. The paper's secret sharing (USS/AVSS), linear
 combination, multiplication, Equality ZK Proof machinery, and the
 overall MPC construction are unrelated to ACS as a standalone
 primitive and are deliberately not summarized here.
@@ -62,9 +62,7 @@ ACS takes one subprotocol as input:
   BA -- binary asynchronous Byzantine Agreement.  Protocol
     Agreement[Q] (Figure 3) is three steps and every one of them is
     a BA operation; the Lemma 2 proof consumes BA's correctness,
-    termination and agreement properties and nothing else.  ACS is
-    generic in it -- any binary BA with those properties works, and
-    the construction is not part of the ACS interface.  The paper
+    termination and agreement properties and nothing else.  The paper
     lists BA among its tools as "Fast Asynchronous Byzantine
     Agreement (BA) was devised by [CR93]", which is the
     instantiation BKR94's own MPC uses.
@@ -75,9 +73,6 @@ ACS takes one subprotocol as input:
     on the secret-sharing side (USS-Share).  Section 4 does not
     mention it.  What Agreement[Q] needs instead is the second
     assumption on Q below: that every player eventually learns Q(j).
-    How that learning happens is the caller's; this repo carries it
-    over Bracha 1987 Figure 1 A-Casts, which is our construction, not
-    the paper's.
 
 
 Problem setup
@@ -128,9 +123,7 @@ players for whom Q = 1.
 The predicate Q is application-supplied. In BKR94's own MPC
 construction, Q is "player P_j has properly shared his input" -- Q(j)
 becomes 1 for honest P_j after P_j's USS-Share completes, and honest
-players learn this by observing the shared state. ACS is generic in Q;
-any monotone predicate that is eventually 1 for every honest player,
-and whose assigned values eventually reach every honest player, works.
+players learn this by observing the shared state.
 
 
 Protocol Agreement[Q]  (Figure 3)
@@ -156,12 +149,6 @@ of Figure 3 is garbled and they are normalized against it: it reads
 "input O" for input 0, "SubSe~" for SubSet, and flattens the
 subscripts ("BAj", "SubSeti").  So quote them freely as the paper's
 words; only those renderings are this file's.
-
-The "2t+1" threshold in step 2 equals n - t only at n = 3t+1. The
-paper's regime is t < n/3, and its Section 4 opener writes the
-relation as an inequality -- a subset "of size at least n - t >=
-2t + 1" (the scan's relation glyph is a tilde) -- so above
-n = 3t+1 the two part company and 2t+1 is the looser of the pair.
 
 The paper cites [BOEY91] for a technique that runs the N BAs with an
 O(log n) factor saving over naive independent execution; it does not
@@ -209,11 +196,11 @@ Proof structure
 
 The paper's proof is the three paragraphs above.  The [Part A]..[Part D]
 labels and the case (i)/(ii) split below are THIS FILE'S structuring
-of it, not the paper's numbering -- the repo cites them, so they are
-kept stable.  The proof consumes "the correctness property of the BA
-protocol" (the paper's term), BA termination, the agreement it means
-by "the properties of the Byzantine Agreement protocol" at Part C,
-and the two assumptions about Q.  Nothing else.
+of it, not the paper's numbering.  The proof consumes "the
+correctness property of the BA protocol" (the paper's term), BA
+termination, the agreement it means by "the properties of the
+Byzantine Agreement protocol" at Part C, and the two assumptions
+about Q.  Nothing else.
 
 [Part A] At least 2t+1 BA instances terminate with output 1.
 
@@ -225,9 +212,8 @@ and the two assumptions about Q.  Nothing else.
     player Ph (assumption Q(h)=1 eventually), every honest player's
     input to BA_h is 1 (step 1). By the correctness property of the BA
     protocol, the output of each such BA_h is 1.
-    There are at least n - t honest players, so at least n - t BAs
-    output 1 -- the paper writes the count as 2t+1, which n - t meets
-    at n = 3t+1 and exceeds above it.
+    As this holds for every honest player, at least 2t+1 BAs output
+    1.
 
 [Part B] All n BA instances terminate.
 
@@ -251,28 +237,20 @@ and the two assumptions about Q.  Nothing else.
   fires on knowing Q(j) = 1.
 
 
-Remarks for implementers
-------------------------
+Reading notes
+-------------
 
 - The protocol is expressed in terms of what a single honest player
   does as events happen. Nothing is scheduled; all actions are
-  triggered by completions (learning Q(j)=1, however the caller
-  carries that; BA terminations). The three steps describe "input to
-  BA_j when you learn Q(j)=1", "input 0 to still-open BAs after 2t+1
-  1-outputs", and "read outputs once all n BAs finish."
+  triggered by completions (learning Q(j)=1; BA terminations). The
+  three steps describe "input to BA_j when you learn Q(j)=1", "input
+  0 to still-open BAs after 2t+1 1-outputs", and "read outputs once
+  all n BAs finish."
 
 - Step 1 and step 2 can fire concurrently for different j values.
   Once a BA has received an input from Pi (1 from step 1 or 0 from
   step 2), step 1 and step 2 stop touching it -- BA semantics demand
   a single input per player.
-
-- The 2t+1 threshold in step 2 is the paper's way of writing the
-  honest count, which is n-t (the two coincide at n = 3t+1). It
-  cannot be lowered: without it a mass of 0-inputs could force BA_j
-  to output 0 for all j (SubSet empty). It cannot be raised to
-  require unanimity either: n-t is the maximum guarantee honest
-  players have in an asynchronous network (they cannot wait for the
-  t faulty players).
 
 - Lemma 2 is silent about *which* players end up in SubSet beyond
   "Q(j) = 1", and membership runs both ways.  Section 4 opens by
@@ -283,8 +261,8 @@ Remarks for implementers
   missing inputs are not necessarily of the faulty players" (the scan
   reads "n - tof", "comput at ion", "necessarily y of").  So
   SubSet need not contain every honest player: an honest P_h whose
-  "Q(h)=1" evidence reaches fewer than n-t honest players before
-  step 2 fires for them may be excluded.
+  "Q(h)=1" reaches the other honest players only after step 2 has
+  fired for them may be excluded.
 
 - Per the paper, "To save a log n factor of running the n BAs, the
   techniques of [BOEY91] are employed." That is an optimization for

@@ -12,6 +12,11 @@
 #
 # Usage:
 #   awk -f psu.awk file.psu > file.c
+#   awk -v prefix=f3 -f psu.awk file.psu > file.c
+#
+# With a prefix every label is prefixed (f3L10, f3Ldone), so that more
+# than one snippet can be #include'd in one C function: C labels are
+# function-scoped and two snippets' L10 would collide.
 #
 # Output is a bare snippet: labels, gotos, tests, assignments, preceded by
 # a two-line provenance comment carrying the .psu's D row -- dtc's depth
@@ -89,12 +94,12 @@ END {
     if (line ~ /^L,/) {
       lab = f[2]
       if (lab != "0" && jt[lab])
-        print "L" lab ":;"
+        print prefix "L" lab ":;"
     } else if (line ~ /^T,/) {
       var = f[2]; val = f[3]; lab = f[4]
       if (substr(var, 1, 1) == "~") {
         print "  if (" substr(var, 2) " == " val ")"
-        print "    goto L" lab ";"
+        print "    goto " prefix "L" lab ";"
       } else {
         # Should not occur in a clean bridge; surface as a build-stopping comment.
         print "#error \"unbridged test on '" var "' = '" val "' -> L" lab "\""
@@ -102,9 +107,9 @@ END {
     } else if (line ~ /^J,/) {
       lab = f[2]
       if (lab == "0")
-        print "  goto Ldone;"
+        print "  goto " prefix "Ldone;"
       else
-        print "  goto L" lab ";"
+        print "  goto " prefix "L" lab ";"
     } else if (line ~ /^R,/) {
       var = f[2]; val = f[3]
       if (substr(var, 1, 1) == "~") {
@@ -117,5 +122,5 @@ END {
     }
   }
   # Single exit label so 'J,0' resolves cleanly even when label 0 is suppressed.
-  print "Ldone:;"
+  print prefix "Ldone:;"
 }

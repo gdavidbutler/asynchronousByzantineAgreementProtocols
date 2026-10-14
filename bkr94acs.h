@@ -1,5 +1,5 @@
 /*
- * asynchronousByzantineAgreementProtocols - BKR94 Asynchronous Common Subset
+ * asynchronousByzantineAgreementProtocols - BKR94 Agreement on a Common Subset
  * Copyright (C) 2026 G. David Butler <gdb@dbSystems.com>
  *
  * This file is part of asynchronousByzantineAgreementProtocols
@@ -18,1184 +18,360 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-/*
- * BKR94 Asynchronous Common Subset
- *
- * Direct implementation of Ben-Or/Kelmer/Rabin 1994, "Asynchronous
- * Secure Computations with Optimal Resilience (Extended Abstract),"
- * PODC '94, pages 183-192, Section 4 Figure 3 (Protocol
- * Agreement[Q]).  See BKR94ACS.txt for the line-by-line paper
- * extract this header and its companion .c file are aligned to.
- *
- * Composes Bracha87 Figure 1 (reliable broadcast) with Bracha87
- * Figure 4 (binary BA) into multi-value agreement on a common
- * subset.  N reliable broadcasts distribute A-Casts; N binary
- * BAs decide inclusion.
- *
- * BKR94 parameterizes the protocol by a predicate Q(j).  Under the
- * two paper assumptions -- (1) Q eventually equals 1 for every honest
- * process, (2) when Q(j) is assigned, every honest process eventually
- * learns that value (the paper says nothing about a j never assigned
- * one) -- Protocol Agreement[Q] produces a common subset of size >= n-t of
- * processes for whom Q(j) = 1.
- *
- *   This deployment: Q(j) = "Fig1 reliable broadcast for process j
- *   has ACCEPTED" (the BKR94 MPC-construction equivalent is "P_j has
- *   properly shared his input").  Reliable broadcast gives both Q
- *   assumptions for free: Bracha87 Fig1 eventually accepts every
- *   honest broadcast at every honest receiver (Lemma 4, assumption
- *   (1)), and any accept at one honest receiver eventually reaches
- *   every honest receiver (Lemma 3, assumption (2)).
- *
- * The three Figure 3 steps, per process P_i:
- *
- *   Step 1. For each j where you know Q(j)=1, enter 1 in BA_j.
- *   Step 2. When 2t+1 BAs have terminated with output 1, enter 0 in
- *           every BA where you have not yet entered a value.
- *   Step 3. Once all N BAs terminate, SubSet = { j : BA_j = 1 }.
- *
- * The "2t+1" in Step 2 equals n-t only at n = 3t+1, the lower edge
- * of the paper's t < n/3 regime; above it the two part company and
- * n-t is the larger.  n-t is the implementation threshold for all
- * supported (n, t) -- a paper-vs-code divergence recorded as
- * Implementation Note 15 in README.md.
- *
- * Step 2's "upon" is enabling evidence in the paper's asynchronous
- * model (unbounded finite delay, no clocks), not a moment: the
- * count makes the fanout SOUND; the caller decides WHEN, pacing it
- * from the BPR sweep (bkr94acsFanoutDuty / bkr94acsFanout).
- * Firing at enabling -- the instant the count holds -- closes
- * SubSet against every honest process whose A-Cast is still in
- * flight.
- *
- * The same reading governs the BA round turn.  Each Fig4 step's wait
- * on n-t validations of its own round is enabling evidence too, and the
- * turn computes the round -- majority, the decide thresholds --
- * over a validated sample that is still growing (n-t up to n).  So
- * the arrival path only BANKS evidence (bkr94acsBaInput stores,
- * validates, cascades); the turn fires from the BPR sweep
- * (bkr94acsTurnDuty / bkr94acsTurn), caller-paced under the same
- * patience discipline, and BA_DECIDED / COMPLETE / BA_EXHAUSTED
- * emerge from turns, never from inputs.
- *
- * Pure state machine: no I/O, no threads, no dynamic allocation.
- * Caller provides memory and delivers messages.
- *
- * Two message classes on the network:
- *   BKR94ACS_CLS_ACAST  -- Fig1 messages carrying A-Cast values
- *   BKR94ACS_CLS_BA -- Fig1 messages for per-process binary BA
- *
- * Operational limits:
- *   n:         unsigned char, encodes process count 1..256 (n + 1)
- *   t:         unsigned char, max 85 (n + 1 > 3t required)
- *   vLen:      unsigned char, encodes A-Cast length 1..256 (vLen + 1)
- *   maxPhases: unsigned char, for binary BA (per BKR94 BA instance)
- */
-
 #ifndef BKR94ACS_H
 #define BKR94ACS_H
 
-#include "bracha87.h"
-
 /*
- * Maximum processes for BKR94 ACS.
- * Bounded by the Bracha87 Fig1/Fig4 limits (unsigned char addressing).
+ * Ben-Or, Kelmer, Rabin 1994, "Asynchronous Secure Computations with
+ * Optimal Resilience", PODC '94.  Extract: BKR94ACS.txt.  Section 4,
+ * Protocol Agreement[Q], Figure 3, with Bracha 1987 Figure 4 as its BA
+ * and Bracha's Figures 3 and 1 beneath that.  Extract: Bracha87.txt.
+ *
+ * One seat.  Everything here is one player, Pi, holding what the four
+ * figures say a process holds and nothing about any other process:
+ *
+ *   bkr94acs.dtc       Agreement[Q]: enter 1 on Q(j), enter 0 past
+ *                      n - t decisions of 1 and the patience, output
+ *                      the subset at n, with the value of every j in it
+ *   bracha87Fig4.dtc   each BA_j: N at a round's turn, the decision,
+ *                      and the witness VALID reads
+ *   bracha87Fig3.dtc   each round of a BA: validate, and the turn
+ *   bracha87Fig1.dtc   each broadcast of a round: the six rows, the
+ *                      caller's wait at step 1, the re-sends; with bracha87Fig1Ready.dtc, the
+ *                      arm a (ready, v) sets
+ *
+ * Five dispatches, one per file, each compiled alone by dtc with its
+ * own bridge and run in that order on every event; Figure 1's two run
+ * inside bracha87Fig1Input, the instance's own library, and the other
+ * three are included here.  The names one file produces and the next
+ * reads are C locals between them.  Read the five .dtc files for the
+ * rules.  Nothing here waits on a named process, reads absence as
+ * information, or keeps time.
+ *
+ * What is agreed is values.  Every player broadcasts one value, of
+ * vLen bytes, by Figure 1, and Q(j) = 1 at a seat is that seat having
+ * accepted j's value.  So the paper's two assumptions on Q are Bracha's
+ * Lemmas 4 and 3, and a faulty P_j is held to one value at every seat
+ * that accepts it or to none (Theorem 1): the subset's j each have one
+ * value, the same at every correct seat.  The value broadcast is the
+ * only way a player's message enters; nothing a player sends outside
+ * it is agreed.
+ *
+ * The seat's instance space is n value broadcasts and n BAs, each BA
+ * of up to maxRounds rounds, each round n Figure 1 instances, one per
+ * broadcaster, carrying a one-byte value: 0, 1, (d, 0), (d, 1).
+ * Rounds are the paper's, 1-based, 3i+1, 3i+2, 3i+3 for phase i, and
+ * fit a byte: 85 phases are rounds 1..255.  Round 0 of (j, j) is j's
+ * value broadcast, before BA_j.  A BA decides only at a phase's third
+ * round, so maxRounds is taken up to the next multiple of 3: 1..3 is
+ * 3, 4..6 is 6.  A BA that would need a round past
+ * maxRounds is not run further: a decided one stops short of its last
+ * phase, an undecided one needs what the seat cannot hold and the seat
+ * abandons.
+ *
+ * Two events, as in Figure 1: an arrival, tagged by the BA, the
+ * broadcaster q and the round k of the Figure 1 instance it belongs
+ * to, and the sweep.  The sweep is a pass of a
+ * cursor over every live instance, one instance per call, because a
+ * pass may owe more re-sends than any one return holds; the pass
+ * completing is what advances the seat's counters.
+ *
+ * Patience is a wait's: a round's, counted from the round's start and
+ * read by the round's turn; and Agreement[Q]'s step 2, counted from the
+ * n - t'th decision of 1.  Abandon is the seat's, counted from Init,
+ * and everything the seat holds stops with it: after the sweep that
+ * returns ABANDON the seat records nothing and returns nothing.  To the
+ * other players an abandoned seat is one of the t.
+ *
+ * At t = 0 the subset is all players or, by abandon, none: step 2's
+ * count is the honest count n - t, which is all n.
+ *
+ * The caller's message beside a value broadcast.  As in Figure 1
+ * (bracha87Fig1.h), a caller may send a message of its own to each
+ * player beside its value's (initial, v); with the beside flag set at
+ * Init, a seat echoes a player's (initial, v) only holding the BESIDE
+ * for it, the caller's validation, and runs the figure as printed
+ * otherwise: on the others' echoes and readies, and at steps 2 and 3,
+ * so Theorem 1 and the two assumptions on Q hold as printed.  It is
+ * not agreed and the library never sees it.  The caller validates it
+ * against the value the instance holds, so with the flag set a BESIDE
+ * ahead of its (initial, v) is refused.  Nothing rides beside a BA's
+ * broadcast: those instances are made with Figure 1's flag clear, as a
+ * value's is when this seat's is, and a BESIDE for either is refused.
+ *
+ * The coin at Figure 4's step 3 (iii) is the caller's: a callback and
+ * its context, given at Init, answering 0 or 1.
+ *
+ * Nothing here aborts.  A refused argument is a 0 or -1 return and no
+ * state change.
  */
-#define BKR94ACS_MAX_PROCESSES 256
 
-/**************************************************************************/
-/*  Message classes                                                       */
-/*                                                                        */
-/*  CANONICAL PACKED WIRE BYTE.  Every network message carries a Bracha87 */
-/*  type (BRACHA87_INITIAL/ECHO/READY) and one of these two classes.  The */
-/*  constant values are chosen bit-disjoint so an application that frames */
-/*  its own wire format can pack the whole per-message discriminator into */
-/*  ONE byte with no shifts.  The library never serializes -- it consumes */
-/*  class structurally (which entry function the caller invokes), not as  */
-/*  a stored value -- so these positions are a CONTRACT FOR PACKERS, not  */
-/*  a format the library reads or writes.  The bundled example,           */
-/*  example/bkr94acs.c, frames to this layout; new framers should too.    */
-/*                                                                        */
-/*    bit:  7      | 6     | 5         | 4        | 3  | 2   | 1 0       */
-/*          D_FLAG   (app)   RECEIVED    ACCEPTED   cv   cls   type       */
-/*                                                                        */
-/*  Fixed by library constants:                                           */
-/*    type     bits 0-1  (BRACHA87_TYPE_MASK = 0x03): INITIAL/ECHO/READY. */
-/*    cls      bit  2    (BKR94ACS_CLS_MASK  = 0x04): ACAST=0x00,         */
-/*                       BA=0x04.                                         */
-/*    D_FLAG   bit  7    (BRACHA87_D_FLAG = 0x80): on a BA message,       */
-/*                       the Fig4 decision-candidate flag.                */
-/*    ACCEPTED bit  4    (BKR94ACS_ACCEPTED = 0x10): on a READY message,  */
-/*                       the sender has accepted this Fig1 instance, so   */
-/*                       the receiver retires its per-process READY retry */
-/*                       to the sender (BPR; struct bkr94acsAct.accepted  */
-/*                       on egress, the annot argument of                 */
-/*                       bkr94acs*Input on ingress).                      */
-/*                       Unlike D_FLAG it is class-independent -- valid   */
-/*                       on an ACAST or BA READY (every Fig1 has an       */
-/*                       accept).                                         */
-/*    RECEIVED bit  5    (BKR94ACS_RECEIVED = 0x20): on a READY message,  */
-/*                       the sender has already recorded THIS RECIPIENT'S */
-/*                       accept -- "your accept was received here."       */
-/*                       Class-independent like ACCEPTED, but decided     */
-/*                       per recipient rather than per sender: the        */
-/*                       framer sets it for recipient p iff bit p is set  */
-/*                       in struct bkr94acsAct.received.  Its ABSENCE is  */
-/*                       the live signal -- the receiver hands the byte   */
-/*                       to bkr94acs*Input as annot, and the absence      */
-/*                       un-suppresses the sender for one READY egress    */
-/*                       so the announcement it is waiting for finally    */
-/*                       goes out.                                        */
-/*  Convention (not forced by a constant, but shared by all examples):    */
-/*    cv       bit  3:   a BA message's binary value.  Placed             */
-/*                       adjacent to cls.                                 */
-/*    bit  6:            free for application message classes.            */
-/*                                                                        */
-/*  Compose / recover a library message:                                  */
-/*    byte = cls | type [ | (cv << 3) | (value & BRACHA87_D_FLAG) ]       */
-/*    type = byte & BRACHA87_TYPE_MASK                                    */
-/*    cls  = byte & BKR94ACS_CLS_MASK                                     */
-/*    BA value = ((byte >> 3) & 1) | (byte & BRACHA87_D_FLAG)             */
-/*                                                                        */
-/*  A BA message's entire payload is just those two live bits             */
-/*  (value + D_FLAG), so folding them into this byte lets a BA            */
-/*  message carry NO value bytes on the wire -- the dominant message      */
-/*  class in ACS, so the saving compounds.  An ACAST message carries      */
-/*  its vLen+1-byte value as the payload.                                 */
-/**************************************************************************/
+/* Kinds fed to bkr94acsInput, each tagging a Figure 1 instance
+ * (ba, q, k). */
+#define BKR94ACS_INITIAL 0  /* (initial, v) from q, the broadcaster */
+#define BKR94ACS_ECHO    1  /* (echo, v) from any process */
+#define BKR94ACS_READY   2  /* (ready, v) from any process */
+#define BKR94ACS_BESIDE  3  /* the caller's message beside a value's
+                             * (initial, v): round 0 only, under the
+                             * beside flag */
 
-#define BKR94ACS_CLS_ACAST  0x00 /* Fig1 reliable broadcast of A-Casts */
-#define BKR94ACS_CLS_BA     0x04 /* Fig1 messages for binary BA */
-#define BKR94ACS_CLS_MASK   0x04 /* recover class from a packed byte */
-#define BKR94ACS_ACCEPTED   0x10 /* on a READY: sender accepted this Fig1
-                                  * instance (BPR per-process READY retire) */
-#define BKR94ACS_RECEIVED   0x20 /* on a READY: sender has recorded the
-                                  * RECIPIENT's accept of this Fig1 instance
-                                  * -- "your accept was received here" */
+/* Values a BA's message carries. */
+#define BKR94ACS_V0  0
+#define BKR94ACS_V1  1
+#define BKR94ACS_D0  2  /* (d, 0) */
+#define BKR94ACS_D1  3  /* (d, 1) */
 
-/*************************************************************************/
-/*  Output actions                                                       */
-/*                                                                       */
-/*  Returned in struct bkr94acsAct array from bkr94acsAcastInput,        */
-/*  bkr94acsBaInput, bkr94acsRetryStep, and bkr94acsAcast calls.         */
-/*  Caller sends the described messages on the network.                  */
-/*************************************************************************/
-
-#define BKR94ACS_ACT_ACAST_SEND    1  /* send A-Cast Fig1 msg: .type, .value, .process */
-#define BKR94ACS_ACT_BA_SEND     2  /* send BA Fig1 msg: .type, .baValue, .process, .round, .initiator */
-#define BKR94ACS_ACT_BA_DECIDED   3  /* BA for .process decided .baValue */
-#define BKR94ACS_ACT_COMPLETE     4  /* all N BAs decided; common subset final */
-#define BKR94ACS_ACT_BA_EXHAUSTED 5  /* BA for .process reached maxPhases with no decision; this ACS instance cannot complete */
+/* Actions, in struct bkr94acsAct.act. */
+#define BKR94ACS_SEND_INITIAL 0  /* (initial, value) of (ba, self, k) to every
+                                  * process that is not a bkr94acsHolder; what
+                                  * the caller sends beside it is its own */
+#define BKR94ACS_SEND_ECHO    1  /* (echo, value) of (ba, q, k) to all;
+                                  * from bkr94acsSweep, to each
+                                  * bracha87Fig1EchoRecipient of the
+                                  * instance (bkr94acsInstance); either
+                                  * way carrying the annotation the
+                                  * instance says (bracha87Fig1.h) */
+#define BKR94ACS_SEND_READY   2  /* (ready, value) of (ba, q, k) to all;
+                                  * from bkr94acsSweep, to each
+                                  * bracha87Fig1Recipient of the
+                                  * instance (bkr94acsInstance); either
+                                  * way carrying the annotations the
+                                  * instance says (bracha87Fig1.h) */
+#define BKR94ACS_DECIDED      3  /* BA_ba decided value, 0 or 1 */
+#define BKR94ACS_SUBSET       4  /* the subset is output, the value of every
+                                  * j in it accepted here: bkr94acsSubSet,
+                                  * bkr94acsValue */
+#define BKR94ACS_ABANDON      5  /* the seat is done */
 
 /*
- * struct bkr94acsAct
- *
- * BA_DECIDED and COMPLETE are success signals -- a decision was
- * reached -- and are NOT stop conditions: post-decide continuation
- * requires the process to keep broadcasting past both, through the
- * phase after the decision (bracha87Fig4Round), and to keep echoing,
- * readying and retrying for as long as the application runs.  BA_EXHAUSTED
- * reports that the BA can issue no new phase/round and so will never
- * decide -- COMPLETE is unreachable.  Stopping is unspecified by the
- * library under unbounded latency; it is the application's
- * abandonment policy.
- *
- * Field usage by act:
- *   ACAST_SEND     .process, .type (BRACHA87_INITIAL/ECHO/READY), .value (vLen+1 bytes)
- *   BA_SEND      .process, .round, .initiator, .type, .baValue (binary)
- *   BA_DECIDED    .process, .baValue (0=excluded, 1=included)
- *   COMPLETE      (no fields)
- *   BA_EXHAUSTED  .process (BA's Fig4 returned BRACHA87_EXHAUSTED;
- *                 BKR94 Lemma 2 Part B's "all BAs terminate"
- *                 assumption is violated for this instance, so
- *                 the local process cannot reach BKR94ACS_ACT_COMPLETE.
- *                 No safe in-protocol recovery: any unilateral
- *                 substitute decision could disagree with a remote
- *                 process's actual decision, breaking SubSet agreement
- *                 (Part C).  The application surfaces it as the run's
- *                 failure cause and exits through its abandonment
- *                 policy.
- *                 Output exactly once per BA per ACS instance.)
- *
- * .value is a borrowed pointer into library-owned storage (the
- * Fig1's echoed-value slot -- populated as soon as INITIATOR, Rule
- * 1, 2, or 3 echoes a value, i.e. while ECHOED is set, before
- * ACCEPT).  Valid until the next call into the library on the
- * same struct bkr94acs that mutates state.  Caller must copy if
- * persistence beyond that boundary is needed.
- *
- * Distinct from bkr94acsAcastValue, which queries the same
- * physical slot but is ACCEPT-gated for non-self processes so
- * application reads see only Bracha-Lemma-2-protected values.
- * ACAST_SEND outputs need the sent bytes pre-ACCEPT for the
- * protocol's ECHO/READY traffic to carry, so this field exposes
- * the broader gate.
+ * A send at round 0 is of ba's value broadcast, and its vLen bytes do
+ * not fit here: they are bracha87Fig1Value of bkr94acsInstance(a, ba,
+ * ba, 0), for BRACHA87_INITIAL_ALL, BRACHA87_ECHO_ALL or
+ * BRACHA87_READY_ALL as the send is SEND_INITIAL, SEND_ECHO or
+ * SEND_READY.  The value echoed or readied can differ from the one
+ * accepted, so a send carries its own.
  */
 struct bkr94acsAct {
-  const unsigned char *value; /* ACAST_SEND: vLen+1 bytes; otherwise 0 */
-  const unsigned char *skip;  /* ACAST_SEND/BA_SEND: BPR per-process suppress
-                               * mask (process p skipped iff bit p set), or 0 =
-                               * broadcast to all; bracha87Fig1Skip.  Borrowed,
-                               * valid until the next mutating library call. */
-  const unsigned char *received;/* ACAST_SEND/BA_SEND READY: per-recipient
-                                 * RECEIVED mask -- set BKR94ACS_RECEIVED for
-                                 * recipient p iff bit p is set
-                                 * (BRACHA87_SKIP_TST reads it); 0 on any other
-                                 * act, meaning no recipient is marked.  Where
-                                 * .accepted is one fact about the sender, this
-                                 * is one bit per recipient; bracha87Fig1Received.
-                                 * Borrowed, same lifetime as .skip. */
-  unsigned char act;          /* BKR94ACS_ACT_* */
-  unsigned char process;       /* which process this relates to */
-  unsigned char round;        /* BA round (BA_SEND only) */
-  unsigned char type;         /* BRACHA87_INITIAL/ECHO/READY (ACAST_SEND, BA_SEND) */
-  unsigned char baValue;     /* binary value (BA_SEND, BA_DECIDED) */
-  unsigned char initiator;  /* who initiated this Fig1 broadcast (BA_SEND) */
-  unsigned char accepted;     /* ACAST_SEND/BA_SEND READY: 1 = set the
-                               * BKR94ACS_ACCEPTED wire bit (this instance has
-                               * accepted); 0 otherwise.  The receiving process
-                               * feeds it back on the annot argument of
-                               * bkr94acs*Input. */
+  unsigned char act;
+  unsigned char ba;
+  unsigned char q;      /* the broadcaster; self for SEND_INITIAL */
+  unsigned char k;      /* the round, 1..maxRounds; 0 for ba's value */
+  unsigned char value;  /* BKR94ACS_V0 .. BKR94ACS_D1; 0 at round 0 */
 };
 
-/*************************************************************************/
-/*  BKR94 ACS state                                                      */
-/*************************************************************************/
+/* Test bit 'p' of the bitmap from bkr94acsSubSet. */
+#define BKR94ACS_BIT_TST(mask, p) \
+  ((mask)[(p) >> 3] & (1 << ((p) & 7)))
 
-struct bkr94acs {
-  unsigned char n;          /* process count encoding: actual = n + 1 */
-  unsigned char t;          /* max Byzantine (n + 1 > 3t) */
-  unsigned char vLen;       /* A-Cast value length encoding: actual = vLen + 1 */
-  unsigned char maxPhases;  /* per binary BA instance */
-  unsigned char self;       /* this process's index (needed for BA routing) */
-  unsigned char complete;   /* boolean: all N BAs decided (Step 3); set
-                             * once, never cleared.  A stand-alone byte,
-                             * not a flag bitmap: it is the struct's one
-                             * boolean, and completion is the caller's
-                             * primary query -- read a->complete
-                             * directly. */
-  /*
-   * The BKR94 step-2 / step-3 decision counts are not stored: a
-   * stored counter is a denormalization of baDecision[], and one held
-   * in an unsigned char would wrap on the 256th decision, so
-   * BKR94ACS_ACT_COMPLETE could never fire at 256 processes.  They
-   * are derived by scanning baDecision[] on demand: the step-3 count
-   * once per BA decision (bkr94acsTurn's DECIDE branch, a rare
-   * event), the step-2 count at every bkr94acsFanoutDuty query --
-   * once per sweep for a paced caller, an O(N) walk that is the
-   * price of not storing a wrappable counter.
-   *
-   * pad puts data[] at offset 8 -- a multiple of sizeof (void *) on
-   * all common 32- and 64-bit ABIs -- so data[] starts at the
-   * alignment required by the function-pointer fields in the
-   * Fig1/Fig4 instances carved out of it.
-   */
-  unsigned char pad[2];
-  unsigned char data[1];    /* variable: see bkr94acsSz */
-};
-
-/* data[] is the variable tail; see bkr94acs.c for layout. */
+struct bkr94acs;
 
 /*
- * Size in bytes needed for a BKR94 ACS instance, or 0 if the
- * configuration cannot be built -- the same refusal every bracha87*Sz
- * makes.  n and vLen are refused for the reason stated at
- * bracha87Fig1Sz: they are WIDER here than bkr94acsInit's unsigned
- * char, so Sz is the only entry that can see one out of range.
- * maxPhases outside 1..BRACHA87_MAX_PHASES is refused, as it is at
- * bracha87Fig4Sz.  bkr94acsInit refuses the same values by returning
- * 0, so the allocation and the machine decline together.
+ * Bytes to allocate for a seat of n players with values of vLen bytes,
+ * holding maxRounds rounds per BA, taken up to a multiple of 3 as Init
+ * takes it: n x maxRounds x n Figure 1 instances of a one-byte value,
+ * bracha87Fig1Sz(n - 1, 0, K) bytes each rounded up to 8, K the lesser
+ * of 4 and (n - 1) / 3 + 1, the most t + 1 can be; n more of vLen bytes
+ * with K = (n - 1) / 3 + 1; and the seat's own state.  In bytes, with
+ * one-byte values: 15176 at n = 7 with 6 rounds, 94677160 at n = 256
+ * with 6, 4015825576 at n = 256 with 255.  The caller sizes the
+ * rounds.  n - 1, vLen - 1 and maxRounds are bytes, 0..255 for
+ * 1..256 players and bytes of value, and 0 refused for rounds.  The
+ * total is the one quantity here that can pass 32 bits, so it alone is
+ * an unsigned long.  0 if maxRounds is 0, or where an unsigned long
+ * cannot hold the total, and bkr94acsInit refuses both.
  */
 unsigned long
 bkr94acsSz(
-  unsigned int             /* n: actual process count = n + 1; > 255 refused */
- ,unsigned int             /* vLen: actual A-Cast length = vLen + 1;
-                             * > 255 refused */
- ,unsigned int             /* maxPhases: per binary BA instance;
-                             * 0 or > BRACHA87_MAX_PHASES (85) refused */
+  unsigned char  /* n - 1 */
+ ,unsigned char  /* vLen - 1 */
+ ,unsigned char  /* maxRounds, 1..255 */
 );
 
 /*
- * Initialize a BKR94 ACS instance. Caller has allocated bkr94acsSz bytes.
- *
- * Returns 1 initialized, 0 REFUSED, and a refusal writes NOTHING -- the
- * caller still holds its raw allocation.  Refused: a null instance, a
- * null coin, maxPhases 0 or above BRACHA87_MAX_PHASES, self outside
- * 0..n, and a configuration Bracha's model does not admit (n + 1 > 3t
- * is required).  Same contract as every bracha87Fig*Init.
- *
- * The N binary BAs share the single (coin, coin closure) supplied here.
- * Each is given the process index it decides on as its bracha87CoinFn
- * instance argument, so the coin can name them apart -- without that a
- * global coin would hand every BA in a phase the identical value.  The
- * index is the BA's identity, not this process's, so it is the same
- * name at every process, which is what a global coin must agree on.  A
- * local coin ignores it and draws fresh entropy per call.
+ * Initialize a seat: n players, t faulty (n > 3t), values of vLen
+ * bytes, this player, maxRounds per BA, the two sweep counts (abandon
+ * > patience), the coin and its context, and whether a value's step
+ * 1 waits for the caller's BESIDE (non-zero) or not.  0, or -1 with
+ * the seat untouched.
  */
-unsigned int
+int
 bkr94acsInit(
   struct bkr94acs *
- ,unsigned char            /* n: actual process count = n + 1 */
- ,unsigned char            /* t */
- ,unsigned char            /* vLen: actual A-Cast length = vLen + 1 */
- ,unsigned char            /* maxPhases */
- ,unsigned char            /* self: this process's index */
- ,bracha87CoinFn           /* coin function, must be non-null */
- ,void *                   /* coin closure */
+ ,unsigned char        /* n - 1 */
+ ,unsigned char        /* t */
+ ,unsigned char        /* vLen - 1 */
+ ,unsigned char        /* self */
+ ,unsigned char        /* maxRounds, 1..255, taken up to a multiple of 3 */
+ ,unsigned int         /* patience, sweeps */
+ ,unsigned int         /* abandon, sweeps */
+ ,unsigned char (*)(void *)  /* coin: answers 0 or 1 */
+ ,void *               /* the coin's context */
+ ,unsigned char        /* beside: non-zero iff a value's step 1 waits for BESIDE */
 );
 
 /*
- * Maximum output actions from a single library call.
- *
- * A-Cast input (BKR94ACS_CLS_ACAST):
- *   up to 2 ACAST_SEND (echo/ready) + 1 BA_SEND (enter-1 from BKR94 Step 1
- *   on accept).  Step 2's enter-0 fanout lives on the BPR sweep
- *   (bkr94acsFanout), not here.  Bound: 3.
- *
- * BA input (BKR94ACS_CLS_BA):
- *   up to 2 (echo/ready) from the Fig1 input.  The input only BANKS
- *   evidence (Fig3 store/validate/cascade); round turns and their
- *   acts live on the BPR sweep (bkr94acsTurn), not here.  Bound: 2.
- *
- * Turn (bkr94acsTurn, one BA round fired from the sweep):
- *   1 BA_SEND (next-round INITIAL) + 1 of BA_DECIDED or BA_EXHAUSTED
- *   + 1 COMPLETE.  Bound: 3.
- *
- * Fanout (bkr94acsFanout, BKR94 Step 2 fired from the sweep):
- *   one BA_SEND per BA unentered at the call.  Bound: N = n + 1.
- *
- * BKR94ACS_MAX_ACTS is the umbrella -- the exact maximum over every
- * entry above, so one out[] sized by it serves a whole caller loop.
- * Fanout is the only entry that is not bounded by 3, which is why the
- * umbrella scales with n at all; the max() floor matters only where
- * n + 1 falls below 3, at the one- and two-process configurations t=0
- * admits.
- *
- * Where that array lives is the caller's -- the library never
- * allocates.  It is not the memory that matters here: struct bkr94acs
- * is O(N^2 * maxRounds) Fig 1 instances, so at every configuration
- * that can actually be allocated the act array is negligible beside
- * the state it reports on.
- */
-#define BKR94ACS_MAX_ACTS(n) \
-  ((unsigned int)(n) + 1 > 3u ? (unsigned int)(n) + 1 : 3u)
-
-/*
- * Maximum output actions from a single bkr94acsRetryStep call.
- *
- * The cursor visits one Fig1 instance per retry call, and a Fig 1 has
- * three retryable actions (INITIAL_ALL + ECHO_ALL + READY_ALL), which
- * is what BRACHA87_FIG1_RETRY_MAX_ACTS already names.  This entry only
- * re-tags them as struct bkr94acsAct (ACAST_SEND or BA_SEND, with
- * process / round / initiator / type filled from the cursor position),
- * so the bound is that one, spelled at this layer rather than
- * duplicated as a second literal.
- */
-#define BKR94ACS_RETRY_MAX_ACTS  BRACHA87_FIG1_RETRY_MAX_ACTS
-
-/*
- * Process an A-Cast broadcast message (BKR94ACS_CLS_ACAST).
- *
- * These are Fig1 messages carrying A-Cast values.
- * Returns number of actions written to out[].
- * Caller provides out[] with room for BKR94ACS_MAX_ACTS(n) entries.
- *
- * On BKR94ACS_ACT_ACAST_SEND:
- *   Caller broadcasts an A-Cast Fig1 message of .type
- *   (BRACHA87_INITIAL/ECHO/READY) for .process.  Bytes to send:
- *   .value (vLen+1 bytes, borrowed pointer into the library's
- *   echoed-value slot -- see struct bkr94acsAct.value).
- *
- * On BKR94ACS_ACT_BA_SEND:
- *   Caller broadcasts a BA Fig1 message.
- *   Fields: .process, .round, .initiator, .type, .baValue.
- *
- * annot carries the READY annotations this message arrived with --
- * BKR94ACS_ACCEPTED and BKR94ACS_RECEIVED.  Only those two bits are
- * read, and only when type is BRACHA87_READY, so a caller may pass the
- * whole packed discriminator byte unmasked and every other bit is
- * ignored.
- *
- * 0 IS NOT A NEUTRAL ANNOT.  On a READY the ABSENCE of RECEIVED is
- * itself a claim -- "I do not hold your accept" -- and it arms the
- * re-send described below.  A driver that does not model the exchange
- * at all passes BKR94ACS_RECEIVED, which arms nothing; passing 0
- * instead re-arms every post-accept READY, so the suppress mask never
- * holds and the READY retire never converges.
- *
- * THE ANNOTATIONS RIDE THE FIG 1'S INPUT: this entry hands the two
- * bits to bracha87Fig1Input on every message, where bracha87Fig1.dtc's
- * BPR rows read them beside the paper rules -- the arm chained on the
- * accept the same message may cause.  Self is a sender like any other:
- * its accept arrives on its own READY hand-back carrying ACCEPTED, so
- * the hand-back carries the same two bits.
- *
- * Byzantine-safe both ways.  A forged ACCEPTED marks only its own
- * sender, so it retires this process's retry to the liar alone and can
- * never strand a correct laggard.  A forged missing RECEIVED
- * un-suppresses only its own sender, buying the forger one masked READY
- * per instance per sweep of the RECEIVING process's cursor, aimed at
- * itself.  Neither is the cheap way to hold an instance open: a process
- * that simply never announces buys the same rate for no messages at
- * all, so the re-arming forgery costs its sender one unmarked READY per
- * instance per sweep to sustain what silence gets free.  Why the rate is
- * the receiver's and not the sender's is BPR.md's (*Suppression and the
- * Announcements*).
- *
- * CALLER OBLIGATION, the one the library cannot absorb: a caller that
- * parks a process on bkr94acsRetryStep's quiescent 0 return must
- * un-park it when an unmarked READY arrives -- type == BRACHA87_READY
- * with no BKR94ACS_RECEIVED, the same two bits handed in as annot.
- * The library re-opens the READY retire here, but only a tick can
- * re-send, and a parked process never ticks.  Skipping the re-entry
- * costs nothing while nothing is lost, and forfeits the whole
- * fair-loss recovery the moment a marked re-send is dropped: its
- * target re-sends unmarked forever into a process that has stopped
- * listening.
+ * Actions one call can return at most: the room the caller gives
+ * bkr94acsInput and bkr94acsSweep.  Derived from the seat: a broadcast
+ * at every round of every BA, since an entry's turn chains through the
+ * rounds already stored when patience is 0 and step 2 enters every BA
+ * it can in one call; a decision per BA; the instance's own three
+ * sends; the subset; abandon.  n x (maxRounds + 1) + 8.  0 for a null
+ * seat.
  */
 unsigned int
-bkr94acsAcastInput(
+bkr94acsOut(
+  const struct bkr94acs *
+);
+
+/*
+ * Feed an arrival and take the actions it fires.  The instance is
+ * (ba, q, k) and from is the sender.  At k = 0 it is ba's value
+ * broadcast, q is ba, and value is vLen bytes, not read for BESIDE; at
+ * k >= 1 it is a BA's broadcast, value is one byte, one of the four,
+ * and BESIDE is refused.  annot is the BRACHA87_ANN_* bits an ECHO or
+ * a READY carries, ignored otherwise.  A duplicate records nothing but
+ * the annotations and runs the dispatches all the same; an abandoned
+ * seat records nothing and runs nothing.  A message about this seat's
+ * own broadcast before the seat has made it is dropped, as is an
+ * INITIAL or BESIDE from other than q, a BESIDE with the beside flag
+ * clear, and one with it set before ba's (initial, v) is held here;
+ * none of these makes the instance.
+ *
+ * Writes up to bkr94acsOut actions and returns how many: the
+ * instance's sends in Figure 1's order, then the sends and decisions
+ * the validation chain and the turns fire, then SUBSET, then ABANDON.
+ * The accept of a value broadcast returns no action of its own: it is
+ * Q(ba) = 1, and what Agreement[Q] does with that is returned.
+ * 0 for a null seat, out or value, a kind outside the four, ba, q,
+ * from outside 0..n-1, k above maxRounds, q other than ba at k = 0, or
+ * a BA's value outside the four.
+ */
+unsigned int
+bkr94acsInput(
   struct bkr94acs *
- ,unsigned char            /* process: whose A-Cast */
- ,unsigned char            /* type: BRACHA87_INITIAL/ECHO/READY */
- ,unsigned char            /* annot: READY annotations as received --
-                             * BKR94ACS_ACCEPTED / BKR94ACS_RECEIVED;
-                             * the raw wire byte is accepted */
- ,unsigned char            /* from: sender of this message */
- ,const unsigned char *    /* value: vLen + 1 bytes */
- ,struct bkr94acsAct *     /* out: actions, room for BKR94ACS_MAX_ACTS(n) */
+ ,unsigned char          /* kind */
+ ,unsigned char          /* ba */
+ ,unsigned char          /* q: the broadcaster */
+ ,unsigned char          /* k: the round; 0 for ba's value */
+ ,unsigned char          /* from: the sender */
+ ,const unsigned char *  /* value: vLen bytes at k = 0, one byte above */
+ ,unsigned char          /* annot: BRACHA87_ANN_* on an ECHO or a READY */
+ ,struct bkr94acsAct *   /* out: room for bkr94acsOut */
 );
 
 /*
- * Process a BA message (BKR94ACS_CLS_BA).
- *
- * These are Fig1 messages for the binary BA on process's inclusion.
- * Returns number of actions written to out[].
- * Caller provides out[] with room for BKR94ACS_MAX_ACTS(n) entries.
- *
- * The BA for each process is a full Fig1+Fig3+Fig4 pipeline; this
- * entry BANKS evidence only -- the Fig1 input's echo/ready traffic
- * (at most 2 BKR94ACS_ACT_BA_SEND acts, which the caller sends to
- * all processes) and, on a Fig1 ACCEPT, the Fig3 store/validate/
- * cascade.  It never turns a round: BA_DECIDED / COMPLETE /
- * BA_EXHAUSTED emerge from bkr94acsTurn on the BPR sweep, where the
- * caller paces the sample each round is computed over.
- *
- * annot is the same argument bkr94acsAcastInput takes, read the same
- * way and routed at the same point -- see it there, including why 0 is
- * not a neutral value and the parking obligation an unmarked READY
- * carries.  The only difference is which Fig1 the annotations reach:
- * the (process, round, initiator) instance this call names.
+ * Step 0 of this seat's value broadcast: take value, vLen bytes, as
+ * what this player contributes.  Returns the one action, SEND_INITIAL
+ * of (self, self, 0), written to out; the send to all the players,
+ * self included by hand-back, is the caller's, as is whatever it sends
+ * beside it, and the sweep re-sends both.  0 for a null seat, value or
+ * out, an abandoned seat, or a second call: a player broadcasts once.
  */
 unsigned int
-bkr94acsBaInput(
+bkr94acsBroadcast(
   struct bkr94acs *
- ,unsigned char            /* process: which process's BA */
- ,unsigned char            /* round: BA round (0-based) */
- ,unsigned char            /* initiator: who initiated this Fig1 broadcast */
- ,unsigned char            /* type: BRACHA87_INITIAL/ECHO/READY */
- ,unsigned char            /* annot: READY annotations as received --
-                             * BKR94ACS_ACCEPTED / BKR94ACS_RECEIVED;
-                             * the raw wire byte is accepted */
- ,unsigned char            /* from: sender of this message */
- ,unsigned char            /* value: binary BA value */
- ,struct bkr94acsAct *     /* out: actions, room for BKR94ACS_MAX_ACTS(n) */
+ ,const unsigned char *  /* value: vLen bytes */
+ ,struct bkr94acsAct *   /* out: room for bkr94acsOut */
 );
 
 /*
- * Query: get the decided common subset.
- * Returns count of included processes.
- * Fills processes[] with the included process indices (caller provides n + 1 entries).
- * Only valid after a->complete is non-zero.
+ * One step of the sweep: the re-sends the next live instance in the
+ * seat's rotation owes, written to out, their count returned in nout.
+ * Returns 1 while the pass continues and 0 when it has completed,
+ * which is when the seat's counters advance and the abandon count can
+ * return ABANDON.  The completing step also returns what the turns the
+ * patience now allows fire, their chains among them, and so can return
+ * a ceiling ABANDON.  A caller sweeps by calling until 0.  nout may
+ * be 0 on a step that owes nothing.  Returns 0 with nout 0 for a null
+ * seat, out or nout, or an abandoned seat.
  */
-unsigned int
-bkr94acsSubset(
-  const struct bkr94acs *
- ,unsigned char *          /* processes out, n + 1 entries */
-);
-
-/*
- * Query: get the accepted A-Cast value for a process.
- * Returns pointer to the vLen + 1 byte value, or 0 if not yet
- * accepted (or, for self-process, not yet A-Cast).
- *
- * Reads the same physical slot as struct bkr94acsAct.value, but
- * ACCEPT-gated for non-self processes so callers see only values
- * Bracha 1987 Lemma 2 protects against Byzantine equivocation.
- * Pre-ACCEPT echoed values can disagree across honest processes and
- * are intentionally hidden here.
- *
- * Under the hold at Input (bkr94acsAcastAllReadied) a process that
- * never receives an initiator's payload never accepts that A-Cast, so
- * this stays 0 there while the BA can still decide 1 on the other
- * processes' entries -- and every other process's READY toward it
- * never retires, the never-announcer residue of BPR.md (Quiescence).
- * The application reads the value from the side channel in that case.
- */
-const unsigned char *
-bkr94acsAcastValue(
-  const struct bkr94acs *
- ,unsigned char            /* process */
-);
-
-/*
- * Submit this process's A-Cast value.
- *
- * Marks the local A-Cast Fig1 (process = self) as the broadcast
- * initiator and stores the value to be broadcast.  Returns one
- * action (BKR94ACS_ACT_ACAST_SEND with .process = self,
- * .type = BRACHA87_INITIAL) for the caller to broadcast
- * immediately.  Thereafter bkr94acsRetryStep keeps outputting the same
- * ACAST_SEND/INITIAL on every sweep until that INITIAL retires; once
- * the local loopback or process echoes set F1_ECHOED, ACAST_SEND/ECHO
- * is output alongside it, and once F1_RDSENT is set, ACAST_SEND/READY
- * joins too.  The three streams retire INDEPENDENTLY, each at the
- * point it is provably owed to no correct process (Implementation
- * Note 11, and the retry banner in bracha87.h, which states the gates):
- *   INITIAL  at ACCEPTED, or once every process has echoed
- *   ECHO     at ACCEPTED
- *   READY    never on local state -- only on the remote fact that
- *            every process has accepted AND holds this instance's
- *            accept
- * The sent flags themselves are never cleared, so "the flag is set" is
- * NOT the retry condition; the gates above are.  What the gates have in
- * common is that each is strictly stronger than local saturation:
- * BPR's purpose is to help OTHER processes progress, so stopping a
- * stream because this process is done with it would strand them.
- *
- * Caller reads the value back via bkr94acsAcastValue(self).
- *
- * Returns 0 if a is null.  Idempotent on the value pointer:
- * re-calling overwrites the stored value.
- */
-unsigned int
-bkr94acsAcast(
+int
+bkr94acsSweep(
   struct bkr94acs *
- ,const unsigned char *    /* value: vLen + 1 bytes */
- ,struct bkr94acsAct *     /* out: room for 1 entry */
+ ,struct bkr94acsAct *   /* out: room for bkr94acsOut */
+ ,unsigned int *         /* nout */
 );
 
 /*
- * Bracha Phase Retry retry tick.
- *
- * End-to-end argument applied to BKR94 ACS (Saltzer/Reed/Clark
- * 1984; see SRC84.txt and BPR.md, the governing statement): the
- * "still owed" predicate combines Bracha's sent flags with
- * this layer's per-process BA-decided state, all of which live
- * at the BKR endpoint.
- *
- * Same one-call-per-tick semantic as bracha87Fig1RetryStep -- see
- * the network flood warning in bracha87.h.  The cursor (struct
- * bracha87Retry) lives in caller storage, initialized with
- * bracha87RetryInit; it walks the (A-Cast, then BA by
- * process x round x initiator) Fig1 instance space, finds the
- * next sent instance, and outputs its actions as struct
- * bkr94acsAct entries.
- *
- * Returns 0 only when a full sweep finds nothing to output: no sent
- * instance yet (pre-broadcast / shutdown state), or every sent
- * instance has retired all its retries -- quiescence, which under
- * fair loss is REACHABLE rather than guaranteed, since the honest
- * residue bracha87.h's retry banner names (a process that abandons
- * early, or never announces) holds the READY gate open for good.
- * Neither is a per-tick termination signal, and an unmarked READY
- * arriving later re-opens one instance's READY retry for the tick
- * whose re-send goes out marked -- so a caller that leaves the
- * rotation on the 0 return must re-enter it when an unmarked READY
- * arrives (the obligation at bkr94acs{Acast,Ba}Input, which is where
- * the library takes the arm).  Termination is an application choice;
- * the library prescribes no policy (see BPR.md).
- *
- * No application-layer retry bookkeeping is needed.  Per-instance
- * destination masks, per-process evidence tracking, and retry
- * scheduling over an external instance list are all absent; the retry
- * state is entirely intrinsic -- Bracha's own per-instance state (the
- * sent flags, and the announcement bitmaps behind the READY retire)
- * plus this layer's per-process BA decision byte.
- *
- * THE VERDICT GATE, this layer's one addition to Bracha's retires.
- * Before walking an A-Cast Fig1 the sweep consults bkr94acsBaDecision
- * for that process:
- *   undecided (0xFF) -> retry.  Other processes may still learn
- *     Q(j) = 1, and their Fig1 needs these echoes and readys.
- *   decided 1         -> retry.  Post-decide continuation: a process
- *     that has not yet observed the accept still needs the traffic, or
- *     its own BA can reach 0 through step 2 and SubSet agreement breaks.
- *   exhausted (0xFE)  -> retry.  No decision was made; earlier-round
- *     traffic may still help others.
- *   decided 0         -> SKIP.  The process is excluded from SubSet at
- *     every correct process (BA agreement), so nobody needs its
- *     A-Cast; this process's own entry -- 0 by step 2, or 1 by step
- *     1 before the BA went the other way -- is spent.
- * The BA Fig1 walk is ungated; Bpr returns 0 on unsent instances.
- *
- * The decided-0 skip is itself a retire, and it OUTRANKS the annotation
- * exchange: a gated instance stops being served whether or not its
- * announcement evidence ever completed.  So its evidence can stay
- * permanently short while its value is accepted everywhere.  That is
- * intended.  It also bounds the quiescence claim below -- an instrument
- * that reads the const accessors to CHECK that every sent instance
- * retired READY on full coverage must exempt the gated ones, or it
- * reports a defect against a correct machine.
- *
- * Out actions:
- *   BKR94ACS_ACT_ACAST_SEND for A-Cast Fig1 retries
- *     (.process = which A-Cast, .type = INITIAL/ECHO/READY,
- *      .value = vLen+1 bytes).
- *   BKR94ACS_ACT_BA_SEND for BA Fig1 retries
- *     (.process = which BA, .round, .initiator, .type =
- *      INITIAL/ECHO/READY, .baValue read from Fig1Value).
- *
- * Caller provides out[] with room for BKR94ACS_RETRY_MAX_ACTS
- * entries.
+ * Non-zero iff process p is recorded as holding q's (initial, v) of
+ * (ba, q, k) and what rode beside it, an echo or ready from it carrying
+ * BRACHA87_ANN_HOLDING: SEND_INITIAL goes to the processes that are
+ * not.  0 for a null seat, an instance outside the space, one no
+ * message has made yet, or p outside 0..n-1.  At k = 0, with q = ba,
+ * ba's value broadcast.
  */
-unsigned int
-bkr94acsRetryStep(
-  struct bkr94acs *
- ,struct bracha87Retry *    /* cursor; init with bracha87RetryInit */
- ,struct bkr94acsAct *     /* out: room for BKR94ACS_RETRY_MAX_ACTS */
-);
-
-/*
- * The sweep-side decisions and their shared trichotomy.
- *
- * In the papers' asynchronous model (unbounded finite delay, no
- * clocks) a rule's "upon" / "wait until" names the evidence that
- * ENABLES an action, never the moment it is taken -- the model has
- * no moments.  Two of this layer's decisions consume evidence that
- * is still growing when it first suffices, so their firing is paced
- * by the caller from the BPR sweep tick, the deployment's only
- * time-like notion:
- *
- *   the enter-0 fanout  (BKR94 step 2)      bkr94acsFanoutDuty/Fanout
- *   the BA round turn   (Bracha Fig4 round)  bkr94acsTurnDuty/Turn
- *
- * Both duty queries classify with the same trichotomy, and both
- * firings take their decision from the same rows, the BPR sub-tables of
- * bkr94acs.dtc:
- *
- *   BKR94ACS_DUTY_HELD       not enabled: firing now would be
- *                            unsound or is impossible; elapsed
- *                            time is irrelevant -- wait.
- *   BKR94ACS_DUTY_TOLERANCE  enabled, and waiting could still
- *                            improve the outcome; the caller
- *                            counts sweeps against its patience
- *                            and fires when it elapses.
- *   BKR94ACS_DUTY_MET        nothing left to wait for: the turn's
- *                            firing is free, the fanout's is moot
- *                            (and reached whatever the count).
- *
- * Caller discipline: per decision, count completed sweeps while
- * duty is TOLERANCE; call the firing when the count reaches the
- * deployment's patience (count >= patience; at zero, the first
- * attempt at TOLERANCE).  The library holds only the safety half of
- * the decision -- a firing called at HELD returns 0 having changed
- * nothing -- and the liveness half, WHETHER to call while the duty
- * is TOLERANCE, is the caller's alone: it reads the duty and either
- * calls or does not, and nothing is passed in for the library to
- * re-derive.  Zero patience is not a firing at enabling (BPR.md, The
- * Sweep-Side Decisions): it spends no deliberate wait -- provided
- * the caller tests its count against the patience on EVERY attempt,
- * since a clock that only advances at a sweep boundary fires one
- * boundary late even at zero -- and it does not by itself name a
- * sample: WHERE the call is made does.  A turn taken at the
- * delivery that completes the round consumes the sample that
- * delivery leaves: n-t, the smallest legal sample (bracha87.h, at
- * bracha87Fig4Round), or more when a cascade banked beside it; one
- * taken from the sweep consumes whatever had validated by then, a
- * superset.  Both are read as proof-covered,
- * and the difference is coin luck, never safety -- BPR.md (The
- * Sweep-Side Decisions) argues why.
- *
- * WHAT THE DEFERRAL CANNOT COST.  Deferring an enabled firing costs
- * liveness only, never safety, at both seams, so whether and when
- * the caller calls is a participation and liveness decision and a
- * caller cannot break the protocol with it in either direction.
- * The license is one-sided and covers exactly these two seams --
- * step 1's enter-1 fires on arrival, and no pacing claim attaches
- * to it.  The grounds, one per seam, are BPR.md's (The Sweep-Side
- * Decisions).
- *
- * THE UNIT IS THE FULL SWEEP -- one complete pass of the Retry
- * cursor over every sent Fig 1 instance, read off the cursor's own
- * wrap count (below), the same unit an abandonment policy counts
- * barren sweeps in.  That is what makes patience worth anything: a pass re-sends
- * each sent instance exactly once, so a delayed A-Cast's INITIAL
- * goes back on the wire once per sweep.  While TOLERANCE holds, the
- * same sweeps are re-carrying that traffic, so the wait is spent on
- * the recovery that can improve what the firing consumes -- but at
- * the CURSOR'S RATE, one instance per call: a budget denominated in
- * calls rather than passes re-sends only its own count out of
- * bkr94acsFig1SentCount and can buy nothing at all.
- *
- * CLOSING A SWEEP: read the cursor's `sweeps` counter, which the
- * library advances on every wrap and is the pass boundary EXACTLY.
- * Save it, and close a pass whenever it differs from the saved value:
- *
- *   if (retry.sweeps != lastSweeps) { lastSweeps = retry.sweeps;
- *                                     sweepDone = 1; }
- *
- * COMPARE, never assume +1 -- one call can complete two passes (one
- * to finish a partial pass that had actions, one more to establish
- * the next is empty and return 0).
- *
- * Do NOT count calls against bkr94acsFig1SentCount.  That count is an
- * UPPER bound on the calls a pass costs, never the count itself: the
- * cursor walks past an instance whose retries have all retired without
- * spending a call on it, while the count still includes it (sent flags
- * are never cleared).  Since a live pass always has some instance with
- * output, the 0 return does not fire, and a call-counting caller
- * closes late by the retired count -- which GROWS as a run matures,
- * as instances reach the READY coverage gate (an instance is walked
- * past only once every one of its actions has retired).  The patience
- * unit
- * would silently stretch over the run.  The counter has none of that,
- * and costs no walk.
- *
- * The one term that remains the caller's: a process parked on an
- * earlier 0 return makes no call at all, so no library counter can
- * advance for it.  Such a caller counts one idle pass per tick, since
- * the pass it would have made owes nothing.
- *
- * PARKING IS AN OPTIMIZATION, NOT A REQUIREMENT, and skipping it is
- * what removes that term: a caller that keeps calling every tick
- * closes its passes on the counter alone, the whole rule in one
- * comparison.  What it pays is a full walk of the Fig 1 instance space
- * per tick, since a quiescent process finds nothing and returns 0 only
- * at the end of the pass -- bounded by that space, and a tick is a wire
- * rate limit rather than a compute budget.
- * Park to save that, or to report quiescence as the bundled example
- * does; do not park believing the boundary requires it.
- *
- * Count the closings, not the calls.  Both the duty patience above
- * and an abandonment policy's barren counter advance on this
- * boundary, which is the premise the fanout's ordering rests on.
- *
- * Two sizings follow, neither independent of the patience:
- *   the cursor length -- bkr94acsFig1SentCount grows as the BAs
- *     advance, so a budget priced in calls shrinks in real terms
- *     over a run while one priced in passes does not;
- *   the caller's own abandonment gate -- waiting is not progress,
- *     so a patience clock and a barren clock advance on the same
- *     boundaries, and patience that does not expire strictly
- *     before the abandon gate fires the decision into a caller that
- *     is already leaving.  Size that gate above the patience and
- *     the FANOUT's ordering is structural: its window opens on a
- *     BA output of 1, an act the caller counts as progress, so the
- *     barren count stands at zero on the boundary that first
- *     charges the patience.  The ROUND TURN's window opens with no
- *     acts at all, so there the ordering stays a caller obligation.
- *     BPR.md (The Abandon Boundary) carries the sizing: one knob,
- *     the patience, with the gate derived from it.
- */
-#define BKR94ACS_DUTY_HELD      0
-#define BKR94ACS_DUTY_TOLERANCE 1
-#define BKR94ACS_DUTY_MET       2
-
-/*
- * BKR94 Step 2 -- the enter-0 fanout.
- *
- * The paper's rule: "Upon completing 2t+1 BA protocols with output
- * 1, enter input 0 to all BA protocols for which you haven't entered
- * a value yet" (normalized against the scan as BKR94ACS.txt's
- * rendering note records).  Fired at the instant the local count
- * crosses, the fastest n-t processes close SubSet against every
- * honest process whose A-Cast is still in flight.
- *
- * bkr94acsFanoutDuty (derived by scanning baDecision[] and the
- * entered set; nothing stored):
- *   HELD       unentered BAs remain and BA-output-1 count < n-t:
- *              entering 0 is unsound below the floor (Lemma 2 Part
- *              A's floor is 2t+1, this library's n-t --
- *              Implementation Note 15).
- *   TOLERANCE  count holds and unentered BAs remain: each delayed
- *              A-Cast that completes inside the patience window
- *              enters 1 by Step 1 and leaves the unentered set.
- *   MET        nothing unentered, tested before the count: moot.
- *              A run whose every A-Cast enters 1 by Step 1 before
- *              n-t BAs decide goes from HELD to MET without ever
- *              reaching TOLERANCE.
- *
- * bkr94acsFanout(a, out) enters 0 into every BA still unentered at
- * the call, outputting one BKR94ACS_ACT_BA_SEND per entry.  It fires
- * iff duty is TOLERANCE, and returns 0 having changed nothing
- * otherwise -- so an unconditional call is safe, and one on every
- * tick is the simplest zero-patience caller.  A paced caller reads
- * bkr94acsFanoutDuty and calls only when its patience has elapsed.
- * Firing empties the unentered set, so once-per-instance is
- * structural.
- *
- * Same shape as bkr94acsTurn, deliberately: both seams hold the
- * safety gate and leave the pacing to the caller.  They differ only
- * in what MET means -- Turn's MET is a full sample and fires free,
- * this one's is an empty unentered set and is moot, so an
- * unconditional call at MET returns 0 because there is nothing left
- * to enter.
- */
-unsigned char
-bkr94acsFanoutDuty(
+int
+bkr94acsHolder(
   const struct bkr94acs *
+ ,unsigned char  /* ba */
+ ,unsigned char  /* q */
+ ,unsigned char  /* k */
+ ,unsigned char  /* p */
 );
 
-unsigned int
-bkr94acsFanout(
-  struct bkr94acs *
- ,struct bkr94acsAct *     /* out: room for n + 1 entries (BKR94ACS_MAX_ACTS covers it) */
-);
+struct bracha87Fig1;
 
 /*
- * The BA round turn -- Bracha Fig4, one round of one process's BA.
- *
- * Bracha's Fig4 steps each wait on n-t validations of their own round
- * ("Wait until validate n - t (3i+1)-messages", and its 3i+2 and 3i+3
- * counterparts) and then compute over that set -- the majority at
- * (3i+1), the decide/adopt thresholds at (3i+3).  The set keeps
- * growing past n-t (cascades, late arrivals) and the proofs are
- * read as holding for ANY >= n-t sample (BPR.md, The Sweep-Side
- * Decisions) -- so the sample a turn consumes is purely a function
- * of WHEN the turn fires.  A turn fired at enabling takes what the
- * completing delivery leaves, n-t absent a cascade; a paced turn
- * harvests more validated messages.  At (3i+3)
- * the gain is one-directional: the decide/
- * adopt counts are monotone thresholds (per-sender dedup: counts
- * only grow), so a fuller sample can only convert coin phases into
- * deterministic decides, never the reverse.  At (3i+1) the
- * majority is a comparison, not a threshold -- a fuller sample can
- * flip it -- but every >= n-t sample is read as proof-covered
- * either way (BPR.md, The Sweep-Side Decisions), so the flip trades
- * between sound broadcasts, never against safety.
- *
- * bkr94acsTurnDuty(a, process):
- *   HELD       the BA's next round is not complete (below n-t
- *              validated), or its round space is spent: the
- *              ceiling, or for a decided BA the step 3 of the phase
- *              after its decision (bracha87.h, at bracha87Fig4Round).
- *              A process that first decided in that phase opens one
- *              more and can read HELD there for good, short of n-t
- *              once the earlier deciders stop -- a decided BA's HELD
- *              is never a fault.
- *   TOLERANCE  complete at >= n-t but < n validated: turnable,
- *              and waiting could still enlarge the sample.
- *   MET        complete with all n validated: the full sample is
- *              in hand, waiting buys nothing.
- *
- * bkr94acsTurn(a, process, out) performs at most ONE round turn:
- * fires iff duty is not HELD.  Returns acts written: 0 when it did
- * not fire, and 0 from the one fired turn that writes no act -- a
- * decided BA's last turn, the step 3 of the phase after its decision
- * (bracha87.h, at bracha87Fig4Round), which ends its round space, so
- * the duty reads HELD from then on and a drain on > 0 leaves nothing
- * owed.  A paced caller reads bkr94acsTurnDuty and calls at MET
- * (firing is free) or when its patience has elapsed at TOLERANCE.
- * Acts: BKR94ACS_ACT_BA_SEND (the next round's INITIAL, self as
- * initiator), BKR94ACS_ACT_BA_DECIDED or BKR94ACS_ACT_BA_EXHAUSTED,
- * and BKR94ACS_ACT_COMPLETE -- at most 3; these acts emerge ONLY
- * here, never from bkr94acsBaInput, whose BA_SENDs are ECHO and
- * READY only.  Post-decide continuation:
- * turns continue past DECIDE through the phase after the decision.
- * A caller firing at enabling drains: while (bkr94acsTurn(a, p,
- * out)) per process after each Input that banks evidence.  Cascaded
- * validation can make several successive rounds turnable at once;
- * each turn is its own call, and nothing here re-arms the caller's
- * clock when one fires, so a paced caller spends ONE patience
- * crossing a whole cascade rather than one per round.  Re-arming per
- * round is the caller's to add and is not advised: it prices a
- * catch-up the cohort has already earned.
- * Scope patience to UNDECIDED BAs (bkr94acsBaDecision == 0xFF):
- * post-decide continuation rounds have nothing left to choose --
- * Lemma 9 fixes every sample they can meet -- while their turn feeds
- * the NEXT process's round -- holding them to the patience convoys
- * the cohort, since one process's stall holds everyone else at n-t;
- * and a second-wave decider's phase r+2 can read TOLERANCE but never
- * MET (a first-wave decider never sends that round), so a caller
- * that waited for MET on a decided BA would wait for good.
- * The bundled example's sweep loop is the reference discipline for
- * a paced caller.
- */
-unsigned char
-bkr94acsTurnDuty(
-  const struct bkr94acs *
- ,unsigned char            /* process: which process's BA */
-);
-
-unsigned int
-bkr94acsTurn(
-  struct bkr94acs *
- ,unsigned char            /* process: which process's BA */
- ,struct bkr94acsAct *     /* out: room for 3 entries (BKR94ACS_MAX_ACTS covers it) */
-);
-
-/*************************************************************************/
-/*  Diagnostic accessors                                                 */
-/*                                                                       */
-/*  Read-only views into ACS state for monitoring, debugging, and        */
-/*  cadence tuning.  None affect protocol semantics.                     */
-/*************************************************************************/
-
-/*
- * Decision state for a single BA (process's binary BA):
- *   0xFF -> undecided
- *   0xFE -> exhausted (Fig4 reached maxPhases with no decision;
- *           see BKR94ACS_ACT_BA_EXHAUSTED)
- *   0    -> excluded from common subset
- *   1    -> included in common subset
- *
- * Returns 0xFF on null state or out-of-range process.
- */
-unsigned char
-bkr94acsBaDecision(
-  const struct bkr94acs *
- ,unsigned char            /* process */
-);
-
-/*
- * Returns 1 iff this process has entered a value into the BA for
- * 'process' -- 1 from BKR94 step 1 ("For each Pj for whom you know
- * that Q(j) = 1, participate in BA_j with input 1") or 0 from step
- * 2's fanout -- else 0, and 0 on null state or out-of-range process.
- *
- * The complement is step 2's own set -- the BAs "for which you
- * haven't entered a value yet" (the paper's step 2).
- * bkr94acsFanoutDuty reads it (MET is nothing unentered) and
- * bkr94acsFanout empties it, one BKR94ACS_ACT_BA_SEND per entry.
- *
- * Latched, because BA semantics admit one input per player: once step
- * 1 has entered 1 or step 2 has entered 0, neither step touches that
- * BA again -- step 1 fires only where no value is entered, and step 2
- * enters only into the BAs the paper's own clause above names.  Set
- * once, never cleared; no BA is entered twice.  (BKR94ACS.txt draws
- * the consequence out under Remarks for implementers; the rule itself
- * is the two steps' guards.)
- *
- * BA_self is included: step 1 makes no exception for j == self, so
- * this process enters BA_self on the same evidence (Q(self) = 1) as
- * any other BA.
- *
- * WHICH value was entered is not answered.  The entered value is the
- * BA's input and a BA past its first round no longer holds it
- * (struct bracha87Fig4.value is the current estimate); the decided
- * value is bkr94acsBaDecision.
- *
- * This is what THIS process did.  BKR94's entered facts are local --
- * Lemma 2 Part D reads a single honest player's entry -- so nothing
- * here licenses an inference about another process's entries, its
- * Q values, or its correctness.
- */
-unsigned int
-bkr94acsBaEntered(
-  const struct bkr94acs *
- ,unsigned char            /* process: which process's BA */
-);
-
-/*
- * The validated set for one BA's next round -- the messages Fig 3 has
- * placed in VALID^k for the round bkr94acsTurnDuty classifies and
- * bkr94acsTurn would compute over.  "Wait till a set S of n - t
- * k-messages have been validated" (Bracha87 Fig 3): the duty query
- * answers the size of that set, this answers the set.
- *
- * Returns the count and fills senders[] and values[] (caller provides
- * n + 1 entries each), forwarding bracha87Fig3GetValid for the BA's Fig 3
- * at its next round.  A VALID set's elements are the paper's
- * (q, k, v), so senders and values are answered together; k is fixed
- * by the round.  values are the BA's binary values, carrying
- * BRACHA87_D_FLAG in a 3i+2 round (Bracha's "(d, v)").
- *
- * The count is the one bkr94acsTurnDuty classifies from: >= n-t is
- * its TOLERANCE-or-MET boundary, == n its MET.
- *
- * The round is implicit and is the BA's next -- this surface names a
- * BA round nowhere else (bkr94acsTurnDuty and bkr94acsTurn take none;
- * a round reaches the caller on struct bkr94acsAct.round alone).  A
- * VALID set only grows within its round, but a turn advances the
- * round, so successive calls across a turn answer different sets and
- * the count is not monotone across one.  A BA whose round space is
- * spent -- exhausted (bkr94acsBaDecision 0xFE), or decided and past
- * the phase after its decision, or decided on its last phase
- * (bkr94acsTurn) -- has no next round: 0.
- *
- * A VALID set is one process's own -- the paper's VALID^k_p.  A
- * message validated here is validated at every correct process
- * EVENTUALLY, never at the instant of this call, and nothing about
- * another process's set is readable from this one.  Bracha87 Lemma 6
- * states the equality itself -- "if p and q are correct then
- * VALID^k_p = VALID^k_q" -- and it is the LEMMA 6 PROOF, and Lemma 7,
- * that supply the eventually: q "will eventually accept m".
- *
- * Returns 0 on null state, out-of-range process, or a null senders[]
- * or values[].
- */
-unsigned int
-bkr94acsBaGetValid(
-  const struct bkr94acs *
- ,unsigned char            /* process: which process's BA */
- ,unsigned char *          /* senders out, n + 1 entries */
- ,unsigned char *          /* values out, n + 1 entries */
-);
-
-/*
- * Returns 1 iff a READY on process's A-Cast has been recorded here from
- * every one of the n processes (distinct ready senders == n, this
- * process's own hand-back included), else 0 (and 0 on null state or
- * out-of-range process).
- *
- * Application use: a process that pairs a side-channel payload (e.g. a
- * PSK or a signature) with its own A-Cast must keep retrying the
- * payload until this returns 1 for process == self.  THE HOLD IS AT
- * INPUT: a receiver feeds NO row of process's A-Cast -- INITIAL, ECHO
- * or READY -- to bkr94acsAcastInput until it holds the payload, and
- * drops the rows meanwhile (the READY re-send and the t+1-readys rule
- * re-bootstrap it; BPR.md, Termination and Abandonment).  Dropping is
- * the whole discipline; nothing need be stashed.  A correct readied
- * process therefore holds the payload, and an ACCEPT at a correct
- * process witnesses t+1 correct holders -- 2t+1 readys, at most t of
- * them Byzantine, at every admitted n and t.  Withholding only the
- * ECHO's wire copies does NOT do this: bracha87Fig1Input sets ECHOED
- * whatever the caller sends, so a machine fed the rows readies and
- * accepts without the payload -- by Rule 4 when its own withheld echo
- * is still handed back to itself (at n=4 t=1 a Byzantine initiator
- * that hands its payload to one correct process is then accepted
- * everywhere: self + initiator + holder is the threshold), and by
- * Rule 5 on t+1 readys with no echo count at all.
- *
- * The readied set is the one that closes -- not by a process's own
- * retry, which is suppressed toward this initiator the moment this
- * initiator's accept announcement is recorded there, possibly before
- * its READY ever arrived here, but by the annotation exchange
- * (bracha87.h at bracha87Fig1ProcessResend; BPR.md, Suppression and
- * the Announcements): this initiator keeps re-sending READY, unmarked,
- * to every process whose accept it has not recorded, and once such a
- * process has accepted each unmarked arrival re-arms its READY toward
- * here for one marked egress.  So every correct process's READY
- * eventually reaches the initiator.  The echoed set does not close --
- * ECHO is suppressed toward readied processes and retires at
- * ACCEPTED, so a process whose first echo fires after this initiator's
- * READY reached it is never recorded here -- which is why the retire
- * reads READY and not ECHO.  The A-Cast's own ACCEPTED is not the stop
- * either: 2t+1 readys, up to t of them Byzantine, leave correct
- * processes that still lack the payload.  Under <= t silent processes
- * this never returns 1, so the payload retries until the application
- * abandons -- the conservative, correct default.  The verdict gate
- * outranks it at both ends, as it outranks the A-Cast's own retry:
- * once BA_self decides 0 the A-Cast is excluded and nobody needs the
- * payload, and a receiver whose BA for this process decided 0 stops
- * its own READY re-send on this A-Cast, so the set can stay short of
- * it while BA agreement brings the same 0 here.
- */
-unsigned int
-bkr94acsAcastAllReadied(
-  const struct bkr94acs *
- ,unsigned char            /* process */
-);
-
-/*
- * The readied set of process's A-Cast: the A-Cast Fig 1's ECHO_ALL
- * suppress mask, bracha87Fig1Skip(bkr94acsAcastFig1(a, process),
- * BRACHA87_ECHO_ALL), the same bitmap -- bit p set iff process p's
- * READY on it has been recorded here, this process's own hand-back
- * included; BRACHA87_SKIP_TST reads it -- or 0 for a null/out-of-range
- * argument.  The per-process refinement of bkr94acsAcastAllReadied:
- * under the hold at Input a process proves it holds the paired payload
- * the moment it readies, and the side channel stops re-sending to it
- * then.  Same borrowed-pointer lifetime as bracha87Fig1Skip (valid
- * until the next mutating library call).
- */
-const unsigned char *
-bkr94acsAcastReadied(
-  const struct bkr94acs *
- ,unsigned char            /* process */
-);
-
-/*
- * Borrowed read-only access to an owned Fig1 instance: the A-Cast Fig1
- * for 'process', or the BA Fig1 for (process, round, initiator) -- the
- * same keys bkr94acsBaInput routes a message on.  Returns 0 for a
- * null or out-of-range argument.  Same borrowed lifetime as the mask
- * accessors: valid until the next mutating library call.
- *
- * READ-ONLY, structurally: the pointer is const, and inputs go through
- * the bkr94acs entries, which route wire facts to the right instance
- * and take the composition-level side effect (the step-1 enter) no
- * bare Fig1 call knows to make.
- *
- * What this is for: the quiescence ending claim is PER-INSTANCE
- * evidence -- a sent Fig1 retires its READY only when its READY
- * suppress mask, bracha87Fig1Skip(BRACHA87_READY_ALL), covers all n:
- * every process's accept announced (bracha87Fig1Received) AND no arm
- * outstanding -- while the retry's 0 return is the weaker derived
- * fact: a machine that retired READY on the forbidden LOCAL accept
- * (Notes 10/13) also returns 0, sooner.  A caller or instrument that
- * CHECKS the claim rather than infers it reads the instance:
- * bracha87Fig1Value non-null is the sent test (both ready paths
- * require ECHOED, so RDSENT implies it, and an INITIATOR carries its
- * value), and a sent instance whose READY mask covers all n retired
- * its READY on the remote gate -- the distinction the 0 return cannot
- * show.  The RECEIVED mask alone can cover all n with the READY still
- * owed: an arm outstanding (BPR.md, the re-arming forger's residue).
- * Every other bracha87Fig1 reader (Skip, AllEchoed) composes the same
- * way.
- *
- * SCOPE THE CHECK TO THE INSTANCES THE RETRY STILL SERVES.  An A-Cast
- * whose BA decided 0 is skipped by the verdict gate (see
- * bkr94acsRetryStep), and the gate outranks the annotation exchange, so its
- * evidence may never complete.  A checker that asserts full coverage
- * over every sent instance reds against the correct machine; filter on
- * bkr94acsBaDecision != 0 first.
- *
- * The paired side channel is NOT read this way -- it has its own two
- * entries above (bkr94acsAcastAllReadied, bkr94acsAcastReadied), which
- * say what they are for in their names and keep a Fig 1 out of the
- * caller.
+ * The Figure 1 instance (ba, q, k), for what the caller frames on a
+ * (ready, v) of it: bracha87Fig1State for BRACHA87_ANN_ACCEPTED,
+ * bracha87Fig1Received for BRACHA87_ANN_RECEIVED per recipient, and
+ * after a sweep step that returned SEND_READY, bracha87Fig1Recipient
+ * for who it goes to, an answer that stands until the instance's next
+ * sweep step; and at k = 0, with q = ba, ba's value broadcast,
+ * for bracha87Fig1Value of what a send of it carries.  Borrowed from
+ * the seat.  0 for a null seat, an instance outside the space, or one
+ * no message has made yet.
  */
 const struct bracha87Fig1 *
-bkr94acsAcastFig1(
+bkr94acsInstance(
   const struct bkr94acs *
- ,unsigned char            /* process */
-);
-
-const struct bracha87Fig1 *
-bkr94acsBaFig1(
-  const struct bkr94acs *
- ,unsigned char            /* process: which process's BA */
- ,unsigned char            /* round: BA round */
- ,unsigned char            /* initiator: who initiated this Fig1 broadcast */
+ ,unsigned char  /* ba */
+ ,unsigned char  /* q */
+ ,unsigned char  /* k */
 );
 
 /*
- * Number of Fig1 instances currently sent (any of F1_INITIATOR,
- * F1_ECHOED, F1_RDSENT set).  Walks the N A-Cast Fig1s plus the
- * full BA Fig1 space -- sent state is NOT bounded by
- * this process's own BA progress: a faster process's INITIAL for a round
- * this process's Fig4 has not yet entered fires Rule 1 here, leaving
- * that ahead-round Fig1 ECHOED (and retry-retried) while the local
- * baNextRound lags.
- *
- * DIAGNOSTIC, and an UPPER BOUND -- never the length of a sweep.  The
- * sent flags are never cleared, so this keeps counting an instance
- * whose retries have all retired, while bkr94acsRetryStep walks past that
- * instance inside a call without spending one on it.  The gap is the
- * retired count and it GROWS as a run matures.  Do not close a pass by
- * counting calls against this: read the cursor's `sweeps` wrap count,
- * which is the boundary exactly (see the sweep-side banner above).
- *
- * What it is still good for, both resting on the bound rather than on
- * an equality:
- *   - Disambiguating a 0 return.  Retry returns 0 both before anything
- *     has been sent and once every sent instance has retired; a
- *     nonzero count here separates quiescence from the pre-broadcast
- *     idle.
- *   - A worst-case time bound.  A pass costs AT MOST this many calls,
- *     so an abandonment gate of S sweeps fires within
- *     S * count * tick.  The over-estimate is what makes it sound for
- *     a worst case, and useless for a schedule.
- *   - Cadence sizing, read the same way: a sent instance is revisited
- *     at most every count calls, so tick * count bounds its retry
- *     interval from above.
- *
- * Returns 0 on null state.
+ * The subset, once SUBSET has been returned: bit j for each BA_j that
+ * decided 1, whose value is bkr94acsValue.  0 before that or for a
+ * null seat.
  */
+const unsigned char *
+bkr94acsSubSet(
+  const struct bkr94acs *
+);
+
+/*
+ * The value of j's broadcast as accepted at this seat, vLen bytes
+ * borrowed from the seat, or 0 before it is accepted.  Every correct
+ * seat that has one for j has the same one.  Once SUBSET has been
+ * returned it is there for every j in the subset.  0 for a null seat
+ * or j outside 0..n-1.
+ */
+const unsigned char *
+bkr94acsValue(
+  const struct bkr94acs *
+ ,unsigned char  /* j */
+);
+
+/*
+ * BA_ba's decision: BKR94ACS_V0 or BKR94ACS_V1 once DECIDED has been
+ * returned for it, else -1.  -1 for a null seat or ba outside 0..n-1.
+ */
+int
+bkr94acsDecision(
+  const struct bkr94acs *
+ ,unsigned char  /* ba */
+);
+
+/* The seat's sweeps since Init.  0 for a null seat. */
 unsigned int
-bkr94acsFig1SentCount(
+bkr94acsSweeps(
+  const struct bkr94acs *
+);
+
+/* Non-zero once the seat has abandoned.  0 for a null seat. */
+int
+bkr94acsAbandoned(
   const struct bkr94acs *
 );
 

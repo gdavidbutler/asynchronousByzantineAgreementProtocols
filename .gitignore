@@ -57,17 +57,11 @@ dkms.conf
 
 # Local Executables
 example_bracha87Fig1
-example_bracha87Fig3
-example_bracha87Fig4
 example_bkr94acs
-test_predicates
-test_bracha87
-test_bracha87_blackbox
+test_bracha87Fig1
 test_bkr94acs
-test_bkr94acs_blackbox
-test_schedules
-test_ingress
-test_ceiling
+test_shadow
+test_acsShadow
 
 # mutants.sh's scratch trees, builds, and logs; removed by `make clean`
 mutantWork/

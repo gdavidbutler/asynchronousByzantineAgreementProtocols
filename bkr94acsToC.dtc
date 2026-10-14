@@ -1,87 +1,51 @@
-# Bridge from bkr94acs.dtc (paper vocabulary) to C symbols used in
-# bkr94acsAcastInput (Q(j)=1 dispatch site) and bkr94acsTurn
-# (BA_j outputs dispatch site), and at the BPR sites below.  The same
-# dispatch is #include'd at every site; C-function-scoped labels keep
-# them distinct.
-#
-# The BA-outputs site is the round TURN, not the arrival path:
-# bkr94acsBaInput only banks evidence and dispatches nothing (see
-# bkr94acs.dtc, round-turn section).
-#
-# Event constants (BKR94ACS_ACS_EVENT_*) and enter constants
-# (BKR94ACS_ENTER_*) are file-local macros in bkr94acs.c; the bridge
-# substitutes them verbatim into 'if (id == TOKEN) goto Lk;' tests.
-#
-# Structural guards (a null, process/from out of range) stay as a C
-# early-exit in each entry point; only the ACS rules are bridged.
+# Bridge from bkr94acs.dtc to C symbols.  Each .dtc compiles alone with
+# its own bridge: across files the tables share one or two names, so a
+# joint compile has nothing to optimize over and does not finish; the
+# chained names -- "accepted" and "take step 3" (Fig 1 to Fig 3),
+# "turn" (Fig 3 to Fig 4), "n-t messages in VALID^(k-1) yield v" (Fig 4
+# to Fig 3), "decide" (Fig 4 to this file) -- are C locals set by one
+# snippet and read by the next.
 
-@"kind of ACS event",~acsEvent
-"Q(j) = 1",BKR94ACS_ACS_EVENT_Q
-"BA_j outputs 0",BKR94ACS_ACS_EVENT_BA0
-"BA_j outputs 1",BKR94ACS_ACS_EVENT_BA1
-
-@"input to BA_j",~inputToBAj
-none,BKR94ACS_ENTER_NONE
-0,BKR94ACS_ENTER_ZERO
-1,BKR94ACS_ENTER_ONE
-
-@"post-output BA-output count == n",~postCountAllN
+@"Q(j) = 1 is known",~qKnown
 yes,1
 no,0
 
-# Domain action -> boolean local that drives a post-dispatch side effect.
-# - doInput1: bkr94acsEnter(a, process, 1, ...)
-# - doOutputSubset: output BKR94ACS_ACT_COMPLETE; set a->complete
-# Rule 2's enter-0 fanout is not dispatched here -- it is fired from
-# the BPR sweep by bkr94acsFanout (see the Step 2 section of
-# bkr94acs.dtc).
+@"my input to BA_j",~myInput
+none,0
+entered,1
 
-@~doInput1,"input 1 to BA_j"
-1,yes
-0,no
+@"BAs completed with output 1",~onesBand
+"< n-t",0
+">= n-t",1
 
-@~doOutputSubset,"output SubSet"
-1,yes
-0,no
+@"BAs completed",~completedBand
+"< n",0
+n,1
 
-# ===========================================================
-# Bracha Phase Retry (BPR)
-# ===========================================================
-#
-# The verdict gate reads the BA decision byte as bkr94acsBaDecision
-# answers it; the duty inputs are the seam's predicates, computed at
-# the duty site (bkr94acsDuty in bkr94acs.c); the seam constants are
-# file-local macros there.  A site that does not read a group feeds
-# it a fixed value and discards its outputs; test_predicates requires
-# that nothing a site reads depends on what it feeds that way.
+@"sweeps since n-t completed with output 1",~acsPatienceBand
+"< patience",0
+">= patience",1
 
-@"BA_j decision",~baDecision
-undecided,0xFF
-"decided 0",0
-"decided 1",1
-exhausted,0xFE
-
-@"seam",~seam
-fanout,BKR94ACS_SEAM_FANOUT
-turn,BKR94ACS_SEAM_TURN
-
-@"enabled",~enabled
+@"have output SubSet",~haveOutput
 yes,1
 no,0
 
-@"nothing left to wait for",~nothingLeft
+@"accepted the value of every j in SubSet",~valuesHeld
 yes,1
 no,0
 
-@~walk,"walk A-Cast j"
+@~enterOne,"enter 1 to BA_j"
 1,yes
 0,no
 
-@~duty,"duty"
-BKR94ACS_DUTY_HELD,HELD
-BKR94ACS_DUTY_TOLERANCE,TOLERANCE
-BKR94ACS_DUTY_MET,MET
+@~enterZero,"enter 0 to BA_j"
+1,yes
+0,no
 
-@~fire,"fire on call"
+@~outputSubSet,"output SubSet"
+1,yes
+0,no
+
+@~takeSubSet,"take step 3"
 1,yes
 0,no

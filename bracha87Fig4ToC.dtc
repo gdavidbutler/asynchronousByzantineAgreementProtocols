@@ -1,63 +1,112 @@
-# Bridge from bracha87Fig4.dtc (paper vocabulary) to C symbols used in
-# bracha87Fig4Round.  Identifier form: each value is a literal C token
-# (constant or 0/1/2) substituted verbatim by the local translator.
-#
-# All five BFT inputs are bridged.  The five DTC outputs are boolean
-# locals that gate post-dispatch value-update side effects.  Two
-# implicit actions the paper notes -- broadcast and advance to the
-# next step -- and the procedural decide/exhausted/maxPhases
-# return-code machinery stay in C: their ordering and conditional
-# return values aren't expressible declaratively.
-#
-# This bridge also carries the round-numbering conversion.  The
-# paper (and bracha87Fig4.dtc) is 1-based: phase i owns rounds
-# 3i+1, 3i+2, 3i+3, named by their step 1, 2, 3.  The C is 0-based:
-# phase i owns rounds 3i, 3i+1, 3i+2, and bracha87Fig4Round derives
-# subRound = k % 3 from the completed round k.  Step s maps to
-# subRound s-1.
+# Bridge from bracha87Fig4.dtc to C symbols, for a lone compile of the
+# Fig 4 tables.  '~'-prefixed names are C identifiers, each value a
+# literal C token.  "turn" is bridged here because the lone compile has
+# no Fig 3 to produce it; the combined compile omits that row.
 
-@"step",~subRound
-1,0
-2,1
-3,2
+@"turn",~turn
+yes,1
+no,0
+
+# 3i+1 : 1, 3i+2 : 2, 3i+3 : 3
+@"round",~round
+3i+1,1
+3i+2,2
+3i+3,3
 
 @"have decided",~haveDecided
 yes,1
 no,0
 
-@">n/2 round-(3i+2) messages have same value v",~n2Half
+# rounds since the decision < 3 : 0, otherwise 1
+@"rounds since the decision",~sinceDecisionBand
+"< 3",0
+">= 3",1
+
+# ones > half the sample : 2, = half : 1, < half : 0
+@"sample messages with value 1",~sampleOnes
+"> half",2
+"= half",1
+"< half",0
+
+@"sample messages with value 0 against n/2",~sampleZerosGtHalfN
+"> n/2",1
+"<= n/2",0
+
+@"sample messages with value 1 against n/2",~sampleOnesGtHalfN
+"> n/2",1
+"<= n/2",0
+
+# > 2t : 2, > t : 1, <= t : 0
+@"sample messages with (d, 0)",~sampleD0
+"> 2t",2
+"> t",1
+"<= t",0
+
+@"sample messages with (d, 1)",~sampleD1
+"> 2t",2
+"> t",1
+"<= t",0
+
+@"message round",~msgRound
+3i+1,1
+3i+2,2
+3i+3,3
+
+# 0 : 0, 1 : 1, (d, 0) : 2, (d, 1) : 3
+@"message value",~msgValue
+0,0
+1,1
+"(d, 0)",2
+"(d, 1)",3
+
+@"VALID^(k-1) has n-t messages",~prevHasNT
 yes,1
 no,0
 
-@">2t round-(3i+3) messages of form (d,v) agree on v",~gt2T
+@"VALID^(k-1) messages with the value",~prevSame
+"> half",2
+"= half",1
+"< half",0
+
+@"VALID^(k-1) messages with the value against n/2",~prevSameGtHalfN
+"> n/2",1
+"<= n/2",0
+
+@"VALID^(k-1) can be read as ?",~prevQuestion
 yes,1
 no,0
 
-@">t round-(3i+3) messages of form (d,v) agree on v",~gtT
+@"VALID^(k-1) messages with (d, the value)",~prevDSameGtT
+"> t",1
+"<= t",0
+
+@"VALID^(k-1) can be read as coin",~prevCoin
 yes,1
 no,0
 
-# Domain action -> boolean local that drives a value-update side
-# effect.  At most one value-setting output fires per call; "decide
-# v" sets the decision, not the value, and fires alongside "adopt v"
-# in step 3 case (i).
+@"VALID^(k-1) holds the sender's (k-1)-message with the value",~prevOwn
+yes,1
+no,0
 
-@~setMajority,"set value to majority of round (3i+1)"
+# 0, 1, (d, 0), (d, 1), keep, coin
+@~valueP,"value_p"
+0,0
+1,1
+2,"(d, 0)"
+3,"(d, 1)"
+4,keep
+5,coin
+
+# 0, 1, no decision : 2
+@~decide,"decide"
+0,0
+1,1
+2,no
+
+@~witness,"n-t messages in VALID^(k-1) yield v"
 1,yes
 0,no
 
-@~setDMajority,"set value to (d, majority of round (3i+2))"
-1,yes
-0,no
-
-@~decideV,"decide v"
-1,yes
-0,no
-
-@~adoptV,"adopt v"
-1,yes
-0,no
-
-@~setCoin,"set value to coin flip"
+@~cont,"continue"
 1,yes
 0,no

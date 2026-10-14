@@ -1,341 +1,91 @@
-# Ben-Or, Kelmer, Rabin 1994
-# "Asynchronous Secure Computations with Optimal Resilience"
-# Section 4 Figure 3 - Protocol Agreement[Q]
+# Ben-Or, Kelmer, Rabin 1994, "Asynchronous Secure Computations with
+# Optimal Resilience", PODC '94, 183-192.  Extract: BKR94ACS.txt.
 #
-# Paper-faithful capture of the BKR94 Asynchronous Common Subset
-# (ACS) protocol's rules.  Identifier and predicate translation,
-# and any C-side bridge decisions (sender validation, message
-# routing across process/round/initiator, etc.), live in
-# bkr94acsToC.dtc.
+# Section 4, Protocol Agreement[Q], Figure 3 -- code for player Pi.
+# n BAs run concurrently, one per player index, each player entering
+# his inputs asynchronously as evidence accumulates:
 #
-# Composition.  BKR94 ACS is built on top of N reliable-broadcast
-# instances (one per process A-Casting a value) and N binary-
-# agreement instances BA_j (one per process, deciding whether to
-# include that process's A-Cast in the agreed subset).  The
-# rules below describe what the ACS layer does in response to
-# the events those underlying primitives surface; the primitives
-# themselves are specified in bracha87Fig1.dtc (A-Cast) and
-# bracha87Fig3.dtc / bracha87Fig4.dtc (BA).
+#   1. For each Pj for whom you know that Q(j) = 1, participate in
+#      BA_j with input 1.
+#   2. Upon completing 2t+1 BA protocols with output 1, enter input 0
+#      to all BA protocols for which you haven't entered a value yet.
+#   3. Upon completing all n BA protocols, let your SubSet_i be the
+#      set of all indices j for which BA_j had output 1.  Output
+#      SubSet_i.
 #
-# In this deployment Q(j) = 1 means P_j has broadcast a value,
-# realized by Bracha87's Figure 1 accepting the reliable
-# broadcast of P_j's A-Cast.  Bracha's Lemma 3 makes this
-# realization satisfy BKR94's assumption (2) on Q (if any honest
-# accepts, every honest eventually accepts), and Lemma 4 makes
-# it satisfy assumption (1) (an honest P_j's broadcast is
-# accepted at every honest process).  Q is application-
-# supplied and BKR94's own MPC construction instantiated it
-# differently, so this choice is recorded in bkr94acsToC.dtc and
-# is not a paper concern.
+# From one seat: per j, whether Q(j) = 1 is known, whether this seat
+# has entered its input to BA_j, and BA_j's output; across j, the count
+# of BAs completed with output 1 and the count completed.
 #
-# The Step 2 trigger is "n-t BA outputs of 1," not "n-t Q(j) = 1
-# events".  These coincide in benign runs but diverge under
-# asynchrony or Byzantine scheduling; only the BA-output-1
-# trigger satisfies Part A case (i) of the BKR94 Lemma 2 proof.
+# Q(j) = 1 is "P_j has broadcast its value": this seat has accepted j's
+# value by Figure 1 of Bracha87 (bracha87Fig1.dtc), one broadcast per
+# player beside its BA.  The paper leaves Q to the application and asks
+# two things of it.  That every honest player is eventually assigned 1
+# is Bracha's Lemma 4; that an assigned Q(j) is eventually known to all
+# is his Lemma 3.  A faulty P_j is held to the same value at every
+# seat that accepts or to none (Theorem 1), so a j in SubSet has one
+# value.
+# "Q(j) = 1 is known" is Figure 1's accept, set by the seat's C as
+# Figure 3's "accepted" is.
+# Each BA_j is Figure 4 of Bracha87 (bracha87Fig4.dtc): "enter input v
+# to BA_j" is this seat broadcasting v at BA_j's first round, and
+# "BA_j completed with output v" is Figure 4's decide for BA_j.  One
+# run of these tables per event on the j the event is about: learning
+# Q(j), BA_j deciding, or a sweep.
 #
-# Step 2, like every rule in the paper, is stated in the
-# asynchronous model: unbounded (finite) message delay, no clocks
-# (BKR94ACS.txt, Model and tools).  Each rule's "upon" names the
-# evidence that enables an action; the model has no notion of the
-# moment the action is taken, and the Lemma 2 proof is read as asking
-# of the fanout only that the 0-inputs are eventually entered once
-# the count holds (BPR.md, The Sweep-Side Decisions).
-# Encoding Step 2 on the arrival path, firing at the instant the
-# local count crosses n-t, reads a moment into a rule that names
-# only evidence, and drops the unbounded-latency notion the model
-# rests on.  The Step 2 section below records the rule; its firing
-# is paced by the caller from the BPR sweep tick, the same tick
-# bracha87.[hc] drives BPR from.  Zero patience is not a firing at
-# enabling (BPR.md, The Sweep-Side Decisions).
-#
-# Inputs (the situation when an ACS-layer event is processed;
-# j is the process to which the event refers):
-#   "kind of ACS event"     { Q(j) = 1, BA_j outputs 0, BA_j outputs 1 }
-#   "input to BA_j"         { none, 0, 1 }
-#                             - the value, if any, this process
-#                               has previously entered to BA_j
-#   "post-output BA-output count == n"               { yes, no }
-#                             - the total number of BAs that
-#                               have output any value, after
-#                               this event is recorded
-#
-# Outputs:
-#   "input 1 to BA_j"               { yes, no }
-#   "output SubSet"                 { yes, no }
-#                                     - SubSet := { j : BA_j had output 1 }
-#                                       computed when this output fires
-#
-# Bracha Phase Retry (BPR) adds its inputs and outputs below, in
-# the sub-tables after Step 3: the retry's verdict gate and the
-# sweep-side duty trichotomy.  One dispatch serves every site
-# (bkr94acsAcastInput, bkr94acsTurn, the retry gate, the duty
-# site); each feeds the inputs its own outputs read from state
-# and the rest a fixed value, and discards the outputs it does
-# not read -- an undecided byte fed by fiat walks, a fanout seam
-# fed by fiat is HELD, and both are dropped.  Nothing a site reads
-# moves with a value it fed by fiat; that is a fact of the rows,
-# checked rather than derived: test_predicates enumerates every
-# site's input space against the snippet and requires it.
-
-# ================================================================
-# Step 1 - Input 1 to BA_j when Q(j) = 1
-# ================================================================
-
-# Rule 1.  When Q(j) = 1 becomes known to me, if I have not
-# entered a value to BA_j, input 1 to BA_j.  Bracha's Lemma 3
-# (via the underlying reliable broadcast) guarantees that every
-# honest process eventually LEARNS Q(j) = 1 if any does.  Whether
-# it then inputs 1 is a separate question: BA semantics admit one
-# input per process, so the rows below leave BA_j alone once a
-# value has been entered -- and Step 2 enters 0 into exactly those
-# BAs "for which you haven't entered a value yet" (the paper's
-# step 2, quoted in full below), which can reach j first.
-@"input 1 to BA_j","kind of ACS event","input to BA_j"
-yes,"Q(j) = 1",none
-no,"Q(j) = 1",0
-no,"Q(j) = 1",1
-no,"BA_j outputs 0",
-no,"BA_j outputs 1",
-
-# ================================================================
-# Step 2 - Input 0 to all unentered BAs at n-t BA outputs of 1
-# ================================================================
-
-# Rule 2 -- recorded here, fired from the BPR sweep.
-#
-# The paper's rule: "Upon completing 2t+1 BA protocols with output
-# 1, enter input 0 to all BA protocols for which you haven't entered
-# a value yet" (normalized against the scan as BKR94ACS.txt's
-# rendering note records).
-#
-# Enabling evidence, not a moment (header note above).  Fired at
-# the instant the count crosses, the fastest n-t processes close
-# SubSet against every honest process whose A-Cast is still in
-# flight.  Nothing in the model compels firing at enabling; the
-# deployment's remedy for unbounded latency is the BPR sweep, so
-# the firing lives there, beside the retry/retire decisions that
-# already do.
-#
-# bkr94acsFanoutDuty classifies the decision, derived by scanning
-# baDecision[] and entered[] (never stored):
-#
-#   HELD      - unentered BAs remain and BA-output-1 count < n-t
-#               (MET is tested first).  The floor (the paper's is
-#               2t+1 -- Implementation Note 15): enter 0 below it
-#               and a mass of 0-inputs could force SubSet empty.
-#               bkr94acsFanout refuses here whenever called.
-#   TOLERANCE - count >= n-t and unentered BAs remain.  Enabled.
-#               The caller counts sweeps against its patience and
-#               calls bkr94acsFanout when it elapses; the fanout
-#               fires only on TOLERANCE and refuses elsewhere --
-#               the library holds the safety gate and the caller
-#               the pacing, the same shape bkr94acsTurn takes, so
-#               an unconditional call is safe, and one on every
-#               tick is zero patience, not a firing at enabling.
-#               While TOLERANCE holds, the same sweep keeps retrying
-#               the delayed processes' A-Casts (BPR gate below:
-#               undecided -> retry), so patience is spent on exactly
-#               the recovery work that can make the firing
-#               unnecessary.
-#   MET       - no unentered BAs remain; nothing to give up on.
-#               Absorbing: the fanout empties the unentered set, so
-#               once-per-instance is structural, carried by the set
-#               itself rather than by a latch.
-#
-# The trichotomy names the one decision shape -- proceed without
-# the tail -- under the caller discipline both duty queries share
-# (count sweeps only while TOLERANCE; the patience is deployment
-# tuning).
-#
-# Out of the merged dispatch because its inputs (the n-t count,
-# the unentered set) appear in no other rule --
-# merging would duplicate its DAG at every leaf -- and patience
-# is deployment vocabulary, not paper vocabulary.  The trichotomy
-# and the firing decision are the BPR sub-tables at the end of this
-# file, shared with the round turn below; the enabling predicates
-# are plain C at the duty site (bkr94acsDuty in bkr94acs.c) and the
-# fanout loop (enter 0 where input is none) in bkr94acsFanout.
-
-# ================================================================
-# The BA round turn -- not a BKR94 rule; fired from the BPR sweep
-# ================================================================
-
-# The composition's other sweep-side decision.  Bracha's Fig4 steps
-# each wait on n-t validations of their own round ("Wait until
-# validate n - t (3i+1)-messages", and its 3i+2 and 3i+3
-# counterparts) and then compute over that set (the majority at
-# 3i+1, the decide/adopt thresholds at 3i+3).  The set keeps
-# growing past n-t and Bracha's proofs are read as holding for ANY
-# >= n-t sample (BPR.md, The Sweep-Side Decisions) -- so the sample
-# a turn consumes is purely a function of WHEN the turn fires.
-# Turning a round inside the arrival path, on the delivery that
-# completes it, is firing at enabling and consumes the first n-t --
-# the same reading Step 2 carries, with a different cost: not
-# exclusion (a late round-k message still validates and still
-# serves round-k+1 validation) but coin luck.  At 3i+3 the
-# decide/adopt counts are monotone thresholds (per-sender dedup:
-# counts only grow), so a fuller sample can only convert coin
-# phases into deterministic decides; at 3i+1 the majority is a
-# comparison a fuller sample can flip -- both outcomes read as
-# proof-covered, the flip trading between sound broadcasts, never
-# against safety.
-#
-# The arrival path only BANKS evidence (Fig1 input, Fig3
-# store/validate/cascade -- Fig3 itself is deferral-shaped:
-# every message is stored and validity re-derived as prior rounds
-# grow).  bkr94acsTurnDuty classifies a BA's next round with the
-# shared trichotomy of the BPR sub-tables below (HELD below n-t validated or
-# round space spent / TOLERANCE at >= n-t with the sample still
-# growable / MET at all n validated -- the full sample, firing is
-# free), and bkr94acsTurn computes one round under the same caller
-# discipline as the fanout.  BA_DECIDED / COMPLETE / BA_EXHAUSTED emerge from
-# turns only; the Step 3 dispatch below rides the turn's decide.
-#
-# bracha87.[hc] carries the caller-shaped seam --
-# bracha87Fig3RoundComplete, bracha87Fig3GetValid,
-# bracha87Fig4Round -- and WHEN a completed round is turned is this
-# composition's choice.
-
-# ================================================================
-# Step 3 - Output SubSet when all n BAs have output
-# ================================================================
-
-# Rule 3.  Upon any BA_j outputting, if all n BAs have now
-# output a value, output SubSet := { j : BA_j had output 1 }.
-# BKR94 Lemma 2 Part A guarantees |SubSet| >= 2t+1, and n-t here
-# (the two coincide only at n = 3t+1; see Implementation Note 15);
-# Part C guarantees cross-process agreement on SubSet; Part D
-# guarantees Q(j) = 1 for every j in SubSet.  The "all n BAs"
-# threshold can only be reached once per ACS instance (each BA
-# outputs at most once), so this rule is naturally idempotent.
-#
-# Computing the SubSet itself - iterating over the N BAs and
-# collecting indices with output 1 - is a C-side loop; the DTC
-# fires the go-signal and the C produces the set.
-@"output SubSet","kind of ACS event","post-output BA-output count == n"
-yes,"BA_j outputs 1",yes
-yes,"BA_j outputs 0",yes
-no,"BA_j outputs 1",no
-no,"BA_j outputs 0",no
-no,"Q(j) = 1",
-
-# ================================================================
-# Bracha Phase Retry (BPR) -- the composition's rules, as
-# sub-tables of this dispatch (BPR.md, The Composition Layer and
-# The Sweep-Side Decisions).  No paper behind them.
-# ================================================================
-#
-# Justification for BPR's placement at this layer: end-to-end
-# argument (Saltzer/Reed/Clark 1984; see SRC84.txt).  The
-# "still owed" predicate for A-Cast-Fig1 retry combines
-# Bracha's own retry state (the sent flags and the per-sender
-# bitmaps its gates read) with this layer's per-process
-# BA-decided state (undecided / decided 0 / decided 1 /
-# exhausted); both live at the BKR endpoint, so the retire-or-
-# retry decision is made here rather than below.
-#
-# ===== walk A-Cast j (the verdict gate) =====
-#
-# bkr94acsRetryStep walks per-process A-Cast Fig1 instances and
-# decides whether to output retries based on the local BA
-# decision state:
-#   - undecided  -> walk  (Q(j)=1 may still be learned by
-#                          other honest processes; their Fig1(j)
-#                          needs our echoes / readys)
-#   - decided 0  -> skip  (j excluded from SubSet at every correct
-#                          process, BA agreement, so nobody needs
-#                          its A-Cast; our own enter, 0 by Step 2
-#                          or 1 by Step 1, is spent)
-#   - exhausted  -> walk  (no decision was made; other
-#                          processes may still benefit from
-#                          earlier-round echoes / readys)
-#   - decided 1  -> walk  (Bracha post-decide continuation:
-#                          processes that have not yet observed
-#                          Fig1 ACCEPT for j still need our
-#                          echoes / readys, else their BA_j
-#                          stays undecided and may go to 0
-#                          via Step 2, violating cross-process
-#                          agreement on SubSet)
-# The BA Fig 1 walk is ungated; bracha87Fig1Bpr returns 0 on
-# unsent instances.
+# Step 2's "upon completing 2t+1" is a wait, and the wait opens
+# patience: a 0 entered for a laggard excludes it from the subset, so
+# the seat waits its patience past 2t+1 before entering 0s, and need
+# not wait at all once every BA has its input -- do not spend the
+# Byzantine budget against a laggard.  The paper writes the count as
+# 2t+1, the honest count n - t at n = 3t+1; the row reads it as the
+# honest count, n - t, so that at t = 0 the subset is all players or,
+# by abandon, none.
 #
 # Inputs:
-#   "BA_j decision"          { undecided, decided 0, decided 1, exhausted }
+#   "Q(j) = 1 is known"                { yes, no }
+#   "my input to BA_j"                 { none, entered }
+#   "BAs completed with output 1"      { < n-t, >= n-t }
+#   "BAs completed"                    { < n, n }
+#   "sweeps since n-t completed with output 1"  { < patience, >= patience }
+#   "have output SubSet"               { yes, no }
+#   "accepted the value of every j in SubSet"  { yes, no }  the caller's
+#
 # Outputs:
-#   "walk A-Cast j"          { yes, no }
-@"walk A-Cast j","BA_j decision"
-yes,undecided
-no,"decided 0"
-yes,"decided 1"
-yes,exhausted
+#   "enter 1 to BA_j"                  { yes, no }
+#   "enter 0 to BA_j"                  { yes, no }
+#   "output SubSet"                    { yes, no }  the j with output 1
+#   "take step 3"                      { yes, no }  the caller's
 
-# ===== the sweep-side duty trichotomy =====
-#
-# Both seams -- the Step 2 fanout above and the BA round turn --
-# take one decision shape, proceed without the tail, classified
-# from the seam's own two predicates, computed in C at the duty
-# site and bridged:
-#   "enabled"                  fanout: BA-output-1 count >= n-t
-#                                (the paper's 2t+1; Implementation
-#                                Note 15) -- below it entering 0 is
-#                                unsound, a mass of 0-inputs could
-#                                force SubSet empty;
-#                              turn: the BA's next round exists (the
-#                                round space is not spent: neither
-#                                the ceiling nor a decided BA's
-#                                bound) and is
-#                                complete at >= n-t validated.
-#   "nothing left to wait for" fanout: no BA is unentered -- the set
-#                                the firing empties, so once per
-#                                instance is structural;
-#                              turn: the next round has all n
-#                                validated -- the full sample, so
-#                                waiting buys nothing.  Only ever yes
-#                                with "enabled" yes.
-#
-# The classification:
-#   HELD       not enabled: firing now would be unsound or is
-#              impossible; elapsed time is irrelevant -- wait.
-#   TOLERANCE  enabled, and waiting could still improve the outcome:
-#              the caller counts sweeps against its patience and fires
-#              when it elapses.
-#   MET        nothing left to wait for.
-#
-# The seams differ in what MET means, and that is the one reachable
-# difference: the turn's MET is a full sample and the firing is free;
-# the fanout's MET is an empty unentered set and the firing is moot, so
-# it does not fire.  (The cell enabled = no with nothing left = yes is
-# MET for the fanout and HELD for the turn; the turn never reaches it.)
-# Everywhere else the firing follows the classification: at TOLERANCE
-# it fires (the caller decided WHEN by calling); at HELD it refuses,
-# having changed nothing.  The library holds the safety half; whether
-# to call while TOLERANCE holds is the caller's alone.
-#
-# For the fanout "nothing left to wait for" decides MET whatever the
-# count: a run whose every A-Cast enters 1 by step 1 before n-t BAs
-# decide goes from HELD to MET without ever reaching TOLERANCE.
-#
-# Inputs:
-#   "seam"                       { fanout, turn }
-#   "enabled"                    { yes, no }
-#   "nothing left to wait for"   { yes, no }
-# Outputs:
-#   "duty"                       { HELD, TOLERANCE, MET }
-#   "fire on call"               { yes, no }
+# Step 1.
+@"enter 1 to BA_j","Q(j) = 1 is known","my input to BA_j"
+yes,yes,none
+no,yes,entered
+no,no,
 
-@"duty","seam","enabled","nothing left to wait for"
-MET,fanout,,yes
-TOLERANCE,fanout,yes,no
-HELD,fanout,no,no
-MET,turn,yes,yes
-TOLERANCE,turn,yes,no
-HELD,turn,no,
+# Step 2, past the patience, to a BA_j without this seat's input --
+# and not one step 1 enters 1 to on this same run.
+@"enter 0 to BA_j","enter 1 to BA_j","my input to BA_j","BAs completed with output 1","sweeps since n-t completed with output 1"
+no,yes,,,
+yes,no,none,>= n-t,>= patience
+no,no,none,>= n-t,< patience
+no,no,none,< n-t,
+no,no,entered,,
 
-# The fanout at MET has nothing to enter; the turn at MET consumes the
-# full sample.  Both refuse at HELD.
-@"fire on call","seam","enabled","nothing left to wait for"
-no,fanout,,yes
-yes,fanout,yes,no
-no,fanout,no,no
-yes,turn,yes,
-no,turn,no,
+# Step 3, once.
+@"output SubSet","BAs completed","have output SubSet"
+yes,n,no
+no,n,yes
+no,< n,
+
+# ===== the caller's row =====
+
+# Step 3 is taken when the paper says output and this seat has accepted
+# the value of every j in SubSet: the output is the subset and its
+# values together.  BA_j's output of 1 means some honest player entered
+# 1, so it accepted j's value, and Lemma 3 brings that accept here;
+# until it does the step waits, and abandon is the seat's exit.
+@"take step 3","output SubSet","accepted the value of every j in SubSet"
+yes,yes,yes
+no,yes,no
+no,no,

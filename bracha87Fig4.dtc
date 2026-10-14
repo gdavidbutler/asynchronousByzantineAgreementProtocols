@@ -1,158 +1,210 @@
 # Bracha 1987, "Asynchronous Byzantine Agreement Protocols"
 # Information and Computation 75, 130-143 (1987)
 #
-# Figure 4 - Consensus Protocol
+# Figure 4 -- the consensus protocol, by process p: Figure 3's round
+# three times per phase, with N given.
 #
-# Figure 4 specifies the binary consensus protocol over the
-# Figure 3 round structure.  Each phase i comprises the paper's
-# three steps, at rounds 3i+1, 3i+2 and 3i+3, each completed by
-# Figure 3 delivering n-t validated messages.  On each completion
-# event, Figure 4 updates the local value, may decide, and
-# broadcasts for the next step.
+#   Phase(i): (by process p)
+#   1. Broadcast(p, 3i+1, value_p).
+#      Wait until validate n - t 3i+1-messages.
+#      value_p := majority value of the n - t validated messages.
+#   2. Broadcast(p, 3i+2, value_p).
+#      Wait until validate n - t 3i+2-messages.
+#      (i)  If more than n/2 of the messages have the same value v,
+#           then value_p = (d, v)
+#      (ii) Otherwise, value_p := value_p.
+#   3. Broadcast(p, 3i+3, value_p).
+#      Wait until validate n - t 3i+3-messages.
+#      (i)   If validated more than 2t messages with value (d, v)
+#            then decision_p := value_p := v
+#      (ii)  If validated more than t messages with value (d, v)
+#            then value_p := v.
+#      (iii) Otherwise, value_p := coin_toss (0 or 1 with probability 1/2).
+#      Go to round 1 of phase i+1
 #
-# Each step's "Wait until validate n - t (3i+1)-messages" -- and its
-# 3i+2 and 3i+3 counterparts -- is enabling evidence in the paper's
-# asynchronous model (unbounded finite delay, no clocks),
-# not a moment: the proofs are read as holding for ANY >= n-t
-# validated sample (BPR.md, The Sweep-Side Decisions), and the
-# validated set keeps growing past n-t.  This layer therefore
-# exposes the round turn as a caller-shaped seam --
-# bracha87Fig3RoundComplete (the enabling predicate),
-# bracha87Fig3GetValid (the current sample), bracha87Fig4Round (the
-# computation) -- and takes no position on WHEN a completed round
-# is computed.  The composing layer paces it (bkr94acs turns rounds
-# from the BPR sweep; see the bkr94acs.dtc round-turn section).
+# From one process's seat, beyond Figure 3: value_p, and a decision.
+# The round is Figure 3's; what Figure 4 adds is N at the turn and the
+# witness that Figure 3 reads as one input.  Both are thresholds over
+# counts of values: N over the sample the turn consumes, the witness
+# over VALID^(k-1) -- and where N keeps value_p the witness reads one
+# message as well, the sender's own of round k - 1, since value_p is
+# what that sender broadcast there.  A round's position in its phase,
+# 3i+1, 3i+2 or 3i+3, is the only thing the round number contributes.
 #
-# Round numbering here is the paper's, 1-based: phase i owns
-# rounds 3i+1, 3i+2, 3i+3, and each step reads the messages of
-# its OWN round.  The C is 0-based (phase i owns rounds 3i, 3i+1,
-# 3i+2); bracha87Fig4ToC.dtc carries that conversion, mapping the
-# step name to the C sub-round index.
+# Values a message carries: 0, 1, (d, 0), (d, 1).
 #
-# Per phase i:
-#   Step 1 (round 3i+1):
-#     value_p := majority of n-t validated round-(3i+1) values
-#     (value_p := initial value for phase 0)
-#   Step 2 (round 3i+2):
-#     if more than n/2 round-(3i+2) messages have the same value v
-#       then value_p := (d, v)
-#       else value_p unchanged (non-deterministic across processes)
-#   Step 3 (round 3i+3):
-#     case (i)   more than 2t round-(3i+3) messages of form (d, v)
-#                  agree on v: decision_p := value_p := v
-#     case (ii)  more than t (and at most 2t) such messages: value_p := v
-#     case (iii) otherwise: value_p := coin_i
-#     advance to phase i+1, step 1
+# The witness, by the round of the message being validated, is the
+# figure's cases read as "could a correct process have sent this":
+#   3i+2, v:       some n - t of VALID^(3i+1) have majority v, or have
+#                  exactly half v and the sender's own 3i+1-message in
+#                  VALID^(3i+1) carries v -- the tie reading below
+#   3i+3, (d, v):  some n - t of VALID^(3i+2) have more than n/2 of v
+#   3i+3, v:       some n - t of VALID^(3i+2) have no value above n/2,
+#                  and the sender's own 3i+2-message in VALID^(3i+2)
+#                  carries v -- step 2's "otherwise, value_p :=
+#                  value_p": what is kept is what the sender broadcast
+#                  at 3i+2, so a correct sender's plain v at 3i+3 is
+#                  its plain v at 3i+2 and no other
+#   3i+1, v:       some n - t of VALID^(3i) have more than t of (d, v),
+#                  or have no (d, x) above t -- step 3's coin: any v
+#   3i+1, (d, v):  never; (d, v) is sent at 3i+3 only
+# Round 1 is Figure 3's own case, a value of 0 or 1.
 #
-# Implementation Note 1 (post-decide continuation): the figure has no
-# decided state.  Case (i) reads "decision_p := value_p := v", every
-# case ends "Go to round 1 of phase i+1", and the paper's only word on
-# halting is that it "can be easily accomplished" (Bracha87.txt,
-# Protocol halting).  So a decided process plays the phase after its
-# decision as written -- step 1 the majority, step 2 (d, v), step 3 v
-# -- and the C opens no phase after that one (the bound, bracha87.h
-# at bracha87Fig4Round: by its end every correct process has
-# decided); the rows here run on that last turn too.  What holds
-# its value at the decision is Lemma 9, not a rule: after a decision
-# every correct process starts the next phase with v (Theorem 2,
-# Agreement), so the majority is v, more than n/2 agree, and more than
-# 2t (d, v) arrive.  Theorem 2 consumes exactly those broadcasts: an
-# undecided q that adopted v at case (ii) decides at phase r+1 on 2t+1
-# (d, v) messages, the decided processes' among them, and Figure 3
-# would reject a bare v there (more than n/2 agree at round 3i+2, so
-# N demands (d, v)).  "have decided" therefore guards one output here,
-# the DECIDE the library reports once (Rule 4.3), and one thing in the
-# C, the bound above; it never touches a value update.
+# Round 1 never consults the witness: Figure 3's validate row reads it
+# above round 1 only, so an empty VALID^0 rejects nothing.
 #
-# Predicates appearing as inputs are computed by C functions over
-# the validated set delivered by Figure 3 (majority counts,
-# d-flag tallies); see bracha87Fig4ToC.dtc for their bindings.
-# The coin function for case (iii) is supplied by the surrounding
-# application; the DTC selects the coin output, the C invokes it.
+# At the t = 0 base the sample is all n and "some n - t of VALID" is
+# the whole of it.  The figure's N consumes "the n - t validated
+# messages"; above t = 0 the turn consumes whatever is validated when
+# it fires, at least n - t and up to n -- the reading under which the
+# turn's patience buys a fuller sample: do not spend the Byzantine
+# budget against a laggard.  The proofs read the same over any
+# validated sample of at least n - t: the step tests are absolute
+# (n/2, 2t, t), the one relative test, step 1's majority, has the
+# correct messages a majority of any sample above 2t, and VALID holds
+# a faulty process's message to a value a correct one could have sent.
 #
-# Inputs (the situation when Figure 3 signals a round complete;
-# the round names the step within its phase):
-#   "step"                                                   { 1, 2, 3 }
-#   "have decided"                                           { yes, no }
-#   ">n/2 round-(3i+2) messages have same value v"           { yes, no }
-#   ">2t round-(3i+3) messages of form (d,v) agree on v"     { yes, no }
-#   ">t round-(3i+3) messages of form (d,v) agree on v"      { yes, no }
+# A decision does not stop the process: "Go to round 1 of phase i+1"
+# is under case (i), the paper says the protocol "does not terminate
+# once a decision is made", and Theorem 2's agreement needs the
+# deciders' next-phase broadcasts -- Lemma 9 has every correct process
+# decide in the phase after the first decision.  So a decided process
+# broadcasts through the next phase, three more rounds, and then has
+# nothing left to say: the "continue" row below.  Abandon remains the
+# seat's only exit; a BA that stops is not an exit.
+#
+# FOUR READINGS THE FIGURE DOES NOT GIVE, each named by its row:
+#   a tie in "majority value" (an even sample split evenly) keeps
+#     value_p -- the figure names no majority then, and Ben-Or's step 2
+#     treats the absence of a majority as "?": the value_p row
+#     "keep,yes,3i+1,= half".  What is kept is the value the sender
+#     broadcast at 3i+1, so in the witness a tie answers yes for that
+#     value alone: the rows "yes,yes,3i+2,0,= half,,,,,yes" and
+#     "yes,yes,3i+2,1,= half,,,,,yes", and no for the other bit.
+#     Lemma 9's proof states only the necessary count -- a correct
+#     process "must also validate at least (n - t)/2 messages with
+#     value u" -- and stands under this reading;
+#   where N keeps value_p, a validator reads the sender's value_p as the
+#     sender's own validated message of the round before: Section 3
+#     gives N the round number and S alone, and step 2's "value_p :=
+#     value_p" reads outside S, so VALID's "v = N(k-1, S)" needs this
+#     to be applied to another process's message: the witness rows
+#     ending ",yes" at 3i+3 plain, and the tie rows above;
+#   the coin is the caller's: the turn says "coin", the caller tosses
+#     through its callback: the value_p row "coin,yes,3i+3,,,,<= t,<= t";
+#   rows where both (d, 0) and (d, 1) exceed t exist for exhaustiveness
+#     only: Lemma 10 makes them unreachable for a correct process, and
+#     at n = 3t+1 they are impossible by arithmetic, so their outputs
+#     are never taken: the value_p rows at 3i+3 with "> t" or "> 2t"
+#     in both (d, 0) and (d, 1), and the decide rows likewise.
+#
+# Inputs (beyond Figure 3's):
+#   "turn"                               { yes, no }  Figure 3's
+#   "round"                              { 3i+1, 3i+2, 3i+3 }  this process's
+#   "sample messages with value 1"       { > half, = half, < half }
+#                                        against half the sample, 3i+1
+#   "sample messages with value 0 against n/2"  { > n/2, <= n/2 }  3i+2
+#   "sample messages with value 1 against n/2"  { > n/2, <= n/2 }  3i+2
+#   "sample messages with (d, 0)"        { > 2t, > t, <= t }  3i+3
+#   "sample messages with (d, 1)"        { > 2t, > t, <= t }  3i+3
+#   "have decided"                       { yes, no }
+#   "rounds since the decision"          { < 3, >= 3 }  the current round
+#                                        less the deciding round
+#   "message round"                      { 3i+1, 3i+2, 3i+3 }  the message
+#                                        being validated
+#   "message value"                      { 0, 1, (d, 0), (d, 1) }
+#   "VALID^(k-1) has n-t messages"       { yes, no }
+#   "VALID^(k-1) messages with the value" { > half, = half, < half }
+#                                        against half of n - t, 3i+2
+#   "VALID^(k-1) messages with the value against n/2"  { > n/2, <= n/2 }
+#                                        3i+3, (d, v): the v of it
+#   "VALID^(k-1) can be read as ?"       { yes, no }  some n - t with no
+#                                        value above n/2, 3i+3
+#   "VALID^(k-1) messages with (d, the value)"  { > t, <= t }  3i+1
+#   "VALID^(k-1) can be read as coin"    { yes, no }  some n - t with no
+#                                        (d, x) above t, 3i+1
+#   "VALID^(k-1) holds the sender's (k-1)-message with the value"
+#                                        { yes, no }  3i+2 on a tie and
+#                                        3i+3 plain: N kept value_p,
+#                                        which is what the sender
+#                                        broadcast at round k - 1
 #
 # Outputs:
-#   "set value to majority of round (3i+1)"       { yes, no }
-#   "set value to (d, majority of round (3i+2))"  { yes, no }
-#   "decide v"                                    { yes, no }
-#   "adopt v"                                     { yes, no }
-#   "set value to coin flip"                      { yes, no }
-#
-# Two further actions - broadcast the value, advance to the next
-# step - are implicit on every round completion event;
-# they are not modeled as DTC outputs because they have no
-# yes/no decision of the figure's (they always fire in the figure).
-# The C wrapper attaches the terminals -- the phase ceiling
-# (EXHAUSTED, on state outside this file) and the bound (on "have
-# decided" at step 3, Implementation Note 1 above) -- by gating them
-# there.
+#   "value_p"      { 0, 1, (d, 0), (d, 1), keep, coin }
+#   "decide"       { 0, 1, no }
+#   "continue"     { yes, no }  a turn goes on to the next round
+#   "n-t messages in VALID^(k-1) yield v"  { yes, no }  Figure 3's input
 
-# ===== Step 1: set value to majority of round (3i+1) =====
+# ===== N at the turn =====
 
-# Rule 4.1.  At step 1, set value_p to the majority of the n-t
-# validated round-(3i+1) values.
-@"set value to majority of round (3i+1)","step"
-yes,1
-no,2
-no,3
+# Step 1: value_p := majority value of the validated messages.
+@"value_p","turn","round","sample messages with value 1","sample messages with value 0 against n/2","sample messages with value 1 against n/2","sample messages with (d, 0)","sample messages with (d, 1)"
+1,yes,3i+1,> half,,,,
+0,yes,3i+1,< half,,,,
+keep,yes,3i+1,= half,,,,
+"(d, 0)",yes,3i+2,,> n/2,,,
+"(d, 1)",yes,3i+2,,<= n/2,> n/2,,
+keep,yes,3i+2,,<= n/2,<= n/2,,
+0,yes,3i+3,,,,> 2t,
+1,yes,3i+3,,,,> t,> 2t
+0,yes,3i+3,,,,> t,> t
+0,yes,3i+3,,,,> t,<= t
+1,yes,3i+3,,,,<= t,> 2t
+1,yes,3i+3,,,,<= t,> t
+coin,yes,3i+3,,,,<= t,<= t
+keep,no,,,,,,
 
-# ===== Step 2: set value to (d, majority of round (3i+2)) =====
+# Step 3 (i): more than 2t (d, v) decides v, once.
+@"decide","turn","round","have decided","sample messages with (d, 0)","sample messages with (d, 1)"
+0,yes,3i+3,no,> 2t,
+1,yes,3i+3,no,> t,> 2t
+1,yes,3i+3,no,<= t,> 2t
+no,yes,3i+3,no,> t,> t
+no,yes,3i+3,no,> t,<= t
+no,yes,3i+3,no,<= t,> t
+no,yes,3i+3,no,<= t,<= t
+no,yes,3i+3,yes,,
+no,yes,3i+1,,,
+no,yes,3i+2,,,
+no,no,,,,
 
-# Rule 4.2.  At step 2, if more than n/2 of the round-(3i+2)
-# messages have the same value v, set value_p := (d, v).  Otherwise
-# value_p is unchanged.
-@"set value to (d, majority of round (3i+2))","step",">n/2 round-(3i+2) messages have same value v"
-yes,2,yes
-no,2,no
-no,1,
-no,3,
+# A turn goes on to the next round while undecided, or for the phase
+# after the decision; a decision made on this turn counts from now.
+@"continue","turn","have decided","decide","rounds since the decision"
+yes,yes,no,,
+yes,yes,yes,,< 3
+no,yes,yes,,>= 3
+no,no,,,
 
-# ===== Step 3 case (i): decide v =====
+# ===== the witness Figure 3 reads =====
 
-# Rule 4.3.  At step 3, if more than 2t of the round-(3i+3)
-# messages of form (d, v) agree on v, decide v: the decision_p half
-# of case (i)'s "decision_p := value_p := v" (the value_p half is
-# Rule 4.4).  Skipped when already decided -- the decision is final
-# and is reported once; the figure, which has no decided state,
-# decides v again here every phase, and Theorem 2's Agreement
-# argument (every correct process opens the next phase with v, so
-# Lemma 9 decides v there) makes it the same v.
-@"decide v","step","have decided",">2t round-(3i+3) messages of form (d,v) agree on v"
-yes,3,no,yes
-no,3,no,no
-no,3,yes,
-no,1,,
-no,2,,
-
-# ===== Step 3 cases (i) and (ii): adopt v =====
-
-# Rule 4.4.  At step 3, if more than t of the round-(3i+3) messages
-# of form (d, v) agree on v, set value_p := v.  This is case (ii)
-# whole and the value_p half of case (i), whose decision_p half is
-# Rule 4.3: above 2t the two rules fire together, and once decided
-# only this one still does.
-@"adopt v","step",">2t round-(3i+3) messages of form (d,v) agree on v",">t round-(3i+3) messages of form (d,v) agree on v"
-yes,3,yes,
-yes,3,no,yes
-no,3,no,no
-no,1,,
-no,2,,
-
-# ===== Step 3 case (iii): set value to coin flip =====
-
-# Rule 4.5.  At step 3, if no more than t of the
-# round-(3i+3) messages of form (d, v) agree on v, set
-# value_p := coin_i.  Skipped when case (i) or (ii) fired.
-@"set value to coin flip","step",">2t round-(3i+3) messages of form (d,v) agree on v",">t round-(3i+3) messages of form (d,v) agree on v"
-yes,3,no,no
-no,3,yes,
-no,3,no,yes
-no,1,,
-no,2,,
+@"n-t messages in VALID^(k-1) yield v","VALID^(k-1) has n-t messages","message round","message value","VALID^(k-1) messages with the value","VALID^(k-1) messages with the value against n/2","VALID^(k-1) can be read as ?","VALID^(k-1) messages with (d, the value)","VALID^(k-1) can be read as coin","VALID^(k-1) holds the sender's (k-1)-message with the value"
+no,no,,,,,,,,
+yes,yes,3i+2,0,> half,,,,,
+yes,yes,3i+2,0,= half,,,,,yes
+no,yes,3i+2,0,= half,,,,,no
+no,yes,3i+2,0,< half,,,,,
+yes,yes,3i+2,1,> half,,,,,
+yes,yes,3i+2,1,= half,,,,,yes
+no,yes,3i+2,1,= half,,,,,no
+no,yes,3i+2,1,< half,,,,,
+no,yes,3i+2,"(d, 0)",,,,,,
+no,yes,3i+2,"(d, 1)",,,,,,
+yes,yes,3i+3,"(d, 0)",,> n/2,,,,
+no,yes,3i+3,"(d, 0)",,<= n/2,,,,
+yes,yes,3i+3,"(d, 1)",,> n/2,,,,
+no,yes,3i+3,"(d, 1)",,<= n/2,,,,
+yes,yes,3i+3,0,,,yes,,,yes
+no,yes,3i+3,0,,,yes,,,no
+no,yes,3i+3,0,,,no,,,
+yes,yes,3i+3,1,,,yes,,,yes
+no,yes,3i+3,1,,,yes,,,no
+no,yes,3i+3,1,,,no,,,
+yes,yes,3i+1,0,,,,> t,,
+yes,yes,3i+1,0,,,,<= t,yes,
+no,yes,3i+1,0,,,,<= t,no,
+yes,yes,3i+1,1,,,,> t,,
+yes,yes,3i+1,1,,,,<= t,yes,
+no,yes,3i+1,1,,,,<= t,no,
+no,yes,3i+1,"(d, 0)",,,,,,
+no,yes,3i+1,"(d, 1)",,,,,,

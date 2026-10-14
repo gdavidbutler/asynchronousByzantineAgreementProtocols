@@ -1,5 +1,5 @@
 /*
- * asynchronousByzantineAgreementProtocols - BKR94 Asynchronous Common Subset
+ * asynchronousByzantineAgreementProtocols - BKR94 Agreement on a Common Subset
  * Copyright (C) 2026 G. David Butler <gdb@dbSystems.com>
  *
  * This file is part of asynchronousByzantineAgreementProtocols
@@ -18,1492 +18,906 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-/*
- * BKR94 Asynchronous Common Subset -- Protocol Agreement[Q].
- *
- * This file is BKR94 Section 4 Figure 3.  Direct line-by-line port
- * of Ben-Or/Kelmer/Rabin 1994; see BKR94ACS.txt for the paper
- * extract used as the spec.  Composes N Bracha87 Fig1 instances
- * (A-Cast reliable broadcast supplying Q) with N Bracha87 Fig4
- * instances (binary BA on inclusion -- the BKR94 "BA"
- * subprotocol).
- *
- * Step 1 lives in bkr94acsAcastInput (enter 1 on Fig1 ACCEPT).
- * Step 2 lives on the BPR sweep: bkr94acsFanoutDuty classifies
- *   (HELD / TOLERANCE / MET) and bkr94acsFanout enters 0 into every
- *   unentered BA once the n-t-BAs-with-output-1 count holds (the
- *   paper's 2t+1 -- Implementation Note 15) and the caller, its
- *   patience elapsed, calls it.  The paper's "upon" is enabling
- *   evidence, not a moment; see the bkr94acs.dtc Step 2 section.
- * The BA round turn lives on the same sweep: bkr94acsBaInput only
- *   BANKS evidence (Fig1 traffic, Fig3 store/validate/cascade);
- *   bkr94acsTurnDuty classifies each BA's next round and
- *   bkr94acsTurn computes it -- each Fig4 step's wait on n-t
- *   validations of its own round is the same enabling-evidence
- *   reading, and the sample a turn consumes is still growing when
- *   it first suffices.
- * Step 3 lives in bkr94acsTurn (BKR94ACS_ACT_COMPLETE when the
- *   turn's decision brings the decided count to n; an exhausted BA
- *   never counts -- Implementation Note 12) and bkr94acsSubset
- *   (SubSet = { j : BA_j = 1 }).
- */
-
 #include <string.h>
+#include <limits.h>
+#include "bracha87Fig1.h"
 #include "bkr94acs.h"
 
-#define A_N(a) ((unsigned int)(a)->n + 1)
+/*
+ * One BA at this seat: Figure 4's state and the round it is at.
+ */
+struct bkr94acsBa {
+  unsigned int roundSweeps;   /* the seat's sweeps since this round began */
+  unsigned char round;        /* current round, 1..maxRounds; 0 = not entered */
+  unsigned char decidedRound; /* the round it decided at; 0 before */
+  unsigned char valueP;       /* BKR94ACS_V0 .. BKR94ACS_D1 */
+  unsigned char decided;      /* 0, 1, or 2 for none */
+  unsigned char input;        /* non-zero once this seat entered its input */
+  unsigned char qKnown;       /* Q(j) = 1 is known: j's value is accepted here */
+};
 
 /*
- * Pointer alignment for carving Fig1/Fig4 instances out of a single
- * buffer.  bracha87Fig4 begins with function-pointer fields, and
- * bracha87Fig1 begins with 2-byte shorts; rounding up to pointer
- * alignment subsumes both.  The struct bkr94acs header is 8 bytes --
- * six named bytes plus the explicit pad[2] the struct declares for
- * exactly this purpose -- so a->data lands pointer-aligned; the
- * BKR94ACS_ALIGN_UP applications below pad each carved sub-region up
- * to the same boundary.  A re-implementation must reproduce the pad;
- * without it data[] starts at offset 6.
+ * The seat.  d holds, in order and each region 8-aligned: the n BAs;
+ * per (ba, k) five counts, validated and per value; per (ba, k) a
+ * bitmap over q of the instances that exist; per (ba, k) a bitmap over
+ * q of the validated ones; the subset; a bitmap over j of the value
+ * broadcasts that exist; then n x maxRounds x n Figure 1 instances of
+ * one-byte values, at an 8-aligned stride; then the n value broadcasts,
+ * Figure 1 instances of vLen bytes, at their own 8-aligned stride.
  */
-#define BKR94ACS_ALIGN_P  ((unsigned long)sizeof (void *))
-#define BKR94ACS_ALIGN_UP(x)  (((unsigned long)(x) + BKR94ACS_ALIGN_P - 1) \
-                               & ~(BKR94ACS_ALIGN_P - 1))
+struct bkr94acs {
+  unsigned char (*coin)(void *);
+  void *ctx;
+  unsigned long offVInst;     /* past the BAs' instances: the one offset beyond 32 bits */
+  unsigned int offCnt;        /* region offsets into d, in bytes */
+  unsigned int offExists;
+  unsigned int offValid;
+  unsigned int offSubSet;
+  unsigned int offVEx;
+  unsigned int offInst;
+  unsigned int sz1;           /* one Figure 1 instance, 8-aligned */
+  unsigned int szV;           /* one value broadcast's, 8-aligned */
+  unsigned int ones;          /* BAs decided 1 */
+  unsigned int completed;     /* BAs decided */
+  unsigned int curBa;         /* the sweep cursor */
+  unsigned int curK;
+  unsigned int curQ;
+  unsigned int sweeps;        /* the seat's, since Init */
+  unsigned int patience;
+  unsigned int abandon;
+  unsigned int onesAt;        /* sweeps at the n-t'th decision of 1 */
+  unsigned char n1;
+  unsigned char t;
+  unsigned char vLen1;
+  unsigned char self;
+  unsigned char maxRounds;
+  unsigned char beside;
+  unsigned char flags;
+  unsigned long d[1];
+};
 
-/*--------------------------------------------------------------------------*/
-/*  Internal layout helpers                                                 */
-/*                                                                          */
-/*  data[] layout (N = n + 1, MR = maxPhases * 3, all sub-sizes rounded     */
-/*  up to pointer alignment):                                               */
-/*    entered[N]       per-process enter status                             */
-/*    baDecision[N]    per-process BA decision                              */
-/*    baNextRound[N]   per-process next BA round to check                   */
-/*    (alignment pad to pointer alignment)                                  */
-/*    acastFig1 area   N * acastF1Sz bytes                                  */
-/*    baPipeline area  N * (MR * N * baF1Sz + baF4Sz) bytes                 */
-/*--------------------------------------------------------------------------*/
+#define F_ABANDONED 0x01
+#define F_SUBSET    0x02
 
-/* Per-process enter status */
-#define BKR94ACS_ENTER_NONE 0
-#define BKR94ACS_ENTER_ONE  1
-#define BKR94ACS_ENTER_ZERO 2
-
-/* ACS-event discriminator for the bkr94acsRules.c dispatch.  See
- * bkr94acsToC.dtc; the values are opaque tokens compared by equality. */
-#define BKR94ACS_ACS_EVENT_Q   0
-#define BKR94ACS_ACS_EVENT_BA0 1
-#define BKR94ACS_ACS_EVENT_BA1 2
-
-/* The two sweep-side seams, bkr94acs.dtc's "seam" input. */
-#define BKR94ACS_SEAM_FANOUT 0
-#define BKR94ACS_SEAM_TURN   1
-
-/*
- * All layout helpers take const struct bkr94acs * -- they only read
- * the header fields n/vLen/maxPhases to compute offsets.  Callers
- * that need to write through the returned pointer cast away const.
- * This lets the read-only query functions (bkr94acsSubset,
- * bkr94acsAcastValue) stay const-correct.
- */
-
-static unsigned char *
-bkr94acsEnterd(
-  const struct bkr94acs *a
-){
-  return ((unsigned char *)a->data);
-}
-
-static unsigned char *
-bkr94acsDecision(
-  const struct bkr94acs *a
-){
-  return ((unsigned char *)a->data + A_N(a));
-}
-
-static unsigned char *
-bkr94acsNextRound(
-  const struct bkr94acs *a
-){
-  return ((unsigned char *)a->data + 2 * A_N(a));
-}
-
-/*
- * Size of the entered/baDecision/baNextRound header, padded up to
- * pointer alignment so that acastF1Base is aligned.
- */
-static unsigned long
-headerSz(
-  const struct bkr94acs *a
-){
-  return (BKR94ACS_ALIGN_UP(3UL * A_N(a)));
-}
-
-static unsigned long
-acastF1Sz(
-  const struct bkr94acs *a
-){
-  return (BKR94ACS_ALIGN_UP(bracha87Fig1Sz(a->n, a->vLen)));
-}
-
-static unsigned long
-baF1Sz(
-  const struct bkr94acs *a
-){
-  return (BKR94ACS_ALIGN_UP(bracha87Fig1Sz(a->n, 0)));
-}
-
-static unsigned long
-baF4Sz(
-  const struct bkr94acs *a
-){
-  return (BKR94ACS_ALIGN_UP(bracha87Fig4Sz(a->n, a->maxPhases)));
-}
-
-static unsigned int
-maxRounds(
-  const struct bkr94acs *a
-){
-  return (a->maxPhases * 3);
-}
-
-/* Base of A-Cast Fig1 area */
-static unsigned char *
-acastF1Base(
-  const struct bkr94acs *a
-){
-  return ((unsigned char *)a->data + headerSz(a));
-}
-
-/* A-Cast Fig1 instance for process j */
-static struct bracha87Fig1 *
-acastF1(
-  const struct bkr94acs *a
- ,unsigned int j
-){
-  return ((struct bracha87Fig1 *)(acastF1Base(a) + j * acastF1Sz(a)));
-}
-
-/* Base of BA pipeline area */
-static unsigned char *
-baBase(
-  const struct bkr94acs *a
-){
-  return (acastF1Base(a) + A_N(a) * acastF1Sz(a));
-}
-
-/* Size of one BA pipeline (for process j) */
-static unsigned long
-baPipelineSz(
-  const struct bkr94acs *a
-){
-  return ((unsigned long)maxRounds(a) * A_N(a) * baF1Sz(a) + baF4Sz(a));
-}
-
-/* BA Fig1 instance for process j, round r, initiator k */
-static struct bracha87Fig1 *
-baF1(
-  const struct bkr94acs *a
- ,unsigned int j
- ,unsigned int r
- ,unsigned int k
-){
-  unsigned char *base;
-
-  base = baBase(a) + j * baPipelineSz(a);
-  return ((struct bracha87Fig1 *)(base
-    + ((unsigned long)r * A_N(a) + k) * baF1Sz(a)));
-}
-
-/* BA Fig4 instance for process j */
-static struct bracha87Fig4 *
-baF4(
-  const struct bkr94acs *a
- ,unsigned int j
-){
-  unsigned char *base;
-
-  base = baBase(a) + j * baPipelineSz(a);
-  return ((struct bracha87Fig4 *)(base
-    + (unsigned long)maxRounds(a) * A_N(a) * baF1Sz(a)));
-}
-
-
-/*--------------------------------------------------------------------------*/
-/*  Public API                                                              */
-/*--------------------------------------------------------------------------*/
+#define ALIGN8(x)    (((x) + 7) / 8 * 8)
+#define N(a)         ((a)->n1 + 1)
+#define BITS(n)      (((n) + 7) / 8)
+#define D(a)         ((unsigned char *)(a)->d)
+#define BA(a, i)     ((struct bkr94acsBa *)D(a) + (i))
+#define RK(a, i, k)  ((i) * (a)->maxRounds + (k) - 1)
+#define CNT(a, i, k) ((unsigned short *)(D(a) + (a)->offCnt) + RK(a, i, k) * 5)
+#define EXISTS(a, i, k) (D(a) + (a)->offExists + RK(a, i, k) * BITS(N(a)))
+#define VALID(a, i, k)  (D(a) + (a)->offValid + RK(a, i, k) * BITS(N(a)))
+#define SUBSET(a)    (D(a) + (a)->offSubSet)
+#define INST(a, i, k, q) \
+  ((struct bracha87Fig1 *)(D(a) + (a)->offInst + (unsigned long)(RK(a, i, k) * N(a) + (q)) * (a)->sz1))
+#define VEX(a)       (D(a) + (a)->offVEx)
+#define VINST(a, j)  ((struct bracha87Fig1 *)(D(a) + (a)->offVInst + (j) * (a)->szV))
+#define BIT_SET(m, p) ((m)[(p) >> 3] |= 1 << ((p) & 7))
+#define MIN(x, y)    ((x) < (y) ? (x) : (y))
 
 unsigned long
 bkr94acsSz(
-  unsigned int n
- ,unsigned int vLen
- ,unsigned int maxPhases
+  unsigned char n1
+ ,unsigned char vLen1
+ ,unsigned char maxRounds
 ){
-  unsigned int N;
-  unsigned long pf1;
-  unsigned long cf1;
-  unsigned long cf4;
-  unsigned long mr;
-  unsigned long hdr;
-  unsigned long baPipe;
+  unsigned long fixed;      /* everything but the BAs' instances */
+  unsigned long count;      /* the BAs' instances */
+  unsigned int n;
+  unsigned int rk;
+  unsigned int sz1;
 
-  /*
-   * Encoded limits: n and vLen carry actual_count - 1 in an unsigned
-   * char, so they must fit 0..255.  maxPhases is bounded by the
-   * unsigned-char round counter (3 * maxPhases <= 255).
-   */
-  if (n > 255 || vLen > 255 || maxPhases == 0
-   || maxPhases > BRACHA87_MAX_PHASES)
+  if (!maxRounds)
     return (0);
-
-  N = n + 1;
-  pf1 = BKR94ACS_ALIGN_UP(bracha87Fig1Sz(n, vLen));
-  cf1 = BKR94ACS_ALIGN_UP(bracha87Fig1Sz(n, 0));
-  cf4 = BKR94ACS_ALIGN_UP(bracha87Fig4Sz(n, maxPhases));
-  mr = (unsigned long)maxPhases * 3;
-  hdr = BKR94ACS_ALIGN_UP(3UL * N);
-  baPipe = mr * N * cf1 + cf4;
-
-  return (sizeof (struct bkr94acs) - 1
-    + hdr                      /* entered + baDecision + baNextRound + pad */
-    + N * pf1                  /* A-Cast Fig1 instances */
-    + N * baPipe);            /* BA pipelines */
+  maxRounds = (maxRounds + 2) / 3 * 3;
+  n = n1 + 1U;
+  rk = n * maxRounds;
+  fixed = sizeof (struct bkr94acs) - sizeof (unsigned long)
+        + ALIGN8(n * sizeof (struct bkr94acsBa))
+        + ALIGN8(rk * 5 * sizeof (unsigned short))
+        + ALIGN8(rk * BITS(n))
+        + ALIGN8(rk * BITS(n))
+        + ALIGN8(BITS(n))
+        + ALIGN8(BITS(n))
+        + n * ALIGN8(bracha87Fig1Sz(n1, vLen1, n1 / 3 + 1));
+  count = (unsigned long)rk * n;
+  sz1 = ALIGN8(bracha87Fig1Sz(n1, 0, MIN(4, n1 / 3 + 1)));
+  /* the one product that can pass 32 bits: none where it does not fit */
+  if (count > (ULONG_MAX - fixed) / sz1)
+    return (0);
+  return (fixed + count * sz1);
 }
 
-unsigned int
+int
 bkr94acsInit(
   struct bkr94acs *a
- ,unsigned char n
+ ,unsigned char n1
  ,unsigned char t
- ,unsigned char vLen
- ,unsigned char maxPhases
+ ,unsigned char vLen1
  ,unsigned char self
- ,bracha87CoinFn coin
- ,void *coinClosure
+ ,unsigned char maxRounds
+ ,unsigned int patience
+ ,unsigned int abandon
+ ,unsigned char (*coin)(void *)
+ ,void *ctx
+ ,unsigned char beside
 ){
-  unsigned int N;
+  unsigned int n;
+  unsigned int rk;
+  unsigned int off;
   unsigned int i;
-  unsigned int j;
-  unsigned int r;
 
-  /*
-   * Validate caller contract.  bkr94acsSz rejects the same
-   * out-of-range maxPhases by returning 0; if bkr94acsInit proceeded
-   * past these checks it would memcpy into fields beyond the
-   * allocation and the Fig4 step 3 path would crash on the missing
-   * coin.  An out-of-range self would index BA Fig1s past the
-   * allocation on the first enter (baF1 initiator = self).  Bracha
-   * also requires actual_N > 3t; each Fig*Init below refuses it too,
-   * but refusing here declines before any of them is called.
-   */
-  if (!a || !coin)
-    return (0);
-  if (!maxPhases || maxPhases > BRACHA87_MAX_PHASES)
-    return (0);
-  if (self > n)
-    return (0);
-  if ((unsigned int)n + 1 <= 3u * t)
-    return (0);
-
-  memset(a, 0, bkr94acsSz(n, vLen, maxPhases));
-  a->n = n;
+  if (!a || t > n1 / 3 || self > n1 || abandon <= patience || !coin
+   || !bkr94acsSz(n1, vLen1, maxRounds))
+    return (-1);
+  /* a BA decides only at a phase's third round: whole phases */
+  maxRounds = (maxRounds + 2) / 3 * 3;
+  n = n1 + 1U;
+  rk = n * maxRounds;
+  a->coin = coin;
+  a->ctx = ctx;
+  a->sweeps = 0;
+  a->patience = patience;
+  a->abandon = abandon;
+  a->onesAt = 0;
+  off = ALIGN8(n * sizeof (struct bkr94acsBa));
+  a->offCnt = off;
+  off += ALIGN8(rk * 5 * sizeof (unsigned short));
+  a->offExists = off;
+  off += ALIGN8(rk * BITS(n));
+  a->offValid = off;
+  off += ALIGN8(rk * BITS(n));
+  a->offSubSet = off;
+  off += ALIGN8(BITS(n));
+  a->offVEx = off;
+  off += ALIGN8(BITS(n));
+  a->offInst = off;
+  /* a BA's broadcast has four values and the entry refuses the rest, so
+   * four kept is every one; a value broadcast keeps t + 1, the most the
+   * figure can use */
+  a->sz1 = ALIGN8(bracha87Fig1Sz(n1, 0, MIN(4, t + 1)));
+  a->offVInst = off + (unsigned long)rk * n * a->sz1;
+  a->szV = ALIGN8(bracha87Fig1Sz(n1, vLen1, t + 1));
+  a->ones = a->completed = 0;
+  a->curBa = 0;
+  a->curK = 0;
+  a->curQ = 0;
+  a->n1 = n1;
   a->t = t;
-  a->vLen = vLen;
-  a->maxPhases = maxPhases;
+  a->vLen1 = vLen1;
   a->self = self;
+  a->maxRounds = maxRounds;
+  a->beside = beside;
+  a->flags = 0;
+  memset(D(a), 0, a->offInst);
+  for (i = 0; i < n; ++i)
+    BA(a, i)->decided = 2;
+  return (0);
+}
 
-  N = n + 1;
-
-  /* Mark all BA decisions as undecided */
-  memset(bkr94acsDecision(a), 0xFF, N);
-
-  /* Initialize A-Cast Fig1 instances */
-  for (i = 0; i < N; ++i)
-    bracha87Fig1Init(acastF1(a, i), n, t, vLen);
-
-  /* Initialize BA pipelines */
-  {
-    unsigned int mr2;
-
-    mr2 = maxPhases * 3;
-    for (i = 0; i < N; ++i) {
-      for (r = 0; r < mr2; ++r)
-        for (j = 0; j < N; ++j)
-          bracha87Fig1Init(baF1(a, i, r, j), n, t, 0);
-      /*
-       * instance = the process index this BA decides on.  The N BAs
-       * share one (coin, coinClosure), so without it every BA in a
-       * phase would name the same coin; a global coin would then hand
-       * all N the identical value.  i is the discriminator the coin
-       * names them by.  A local coin ignores it.
-       */
-      bracha87Fig4Init(baF4(a, i), n, t, maxPhases, 0,
-                       i, coin, coinClosure);
-    }
-  }
-  return (1);
+unsigned int
+bkr94acsOut(
+  const struct bkr94acs *a
+){
+  if (!a)
+    return (0);
+  /* one call can broadcast at every round of every BA: an entry's
+   * turn chains through the rounds already stored when patience is 0,
+   * and step 2 enters every BA it can in one call; plus a decision per
+   * BA, the instance's own three sends, the subset and abandon */
+  return (N(a) * (a->maxRounds + 1U) + 8);
 }
 
 /*
- * Internal: enter this process's input value into BA_self.
- *
- * Called from both BKR94 Step 1 (enter=1 on Fig1 ACCEPT) and BKR94
- * Step 2 (enter=0 when the caller fires bkr94acsFanout from the
- * BPR sweep).  The
- * entered[] guard is the single-input-per-BA rule BA semantics
- * demand: step 1 fires only where no value is entered, and step 2
- * enters only into the BAs "for which you haven't entered a value
- * yet" (the paper's step 2), so neither step can touch a BA twice.
- * First caller wins.
- *
- * Returns number of BKR94ACS_ACT_BA_SEND actions added (0 if
- * already entered, 1 otherwise).
+ * Every entry point runs the same body: an arrival feeds its instance
+ * and evaluates it; a sweep step feeds one instance a sweep, and the
+ * completed pass advances the counters and evaluates what they enable;
+ * the seat's own value takes step 0 of its broadcast.  Round 0 of
+ * (j, j) is j's value broadcast, and its accept is Q(j) = 1.
+ * The regions below are entered by goto with a site to return to.
+ * A sweep step fires no step of Figure 1, so it returns re-sends only.
+ * Abandon, from the sweep count or from a round past maxRounds, is
+ * recorded when it happens and returned last, after Agreement[Q]'s
+ * rows have run on the event that caused it.
  */
 static unsigned int
-bkr94acsEnter(
+bkr94acsRun(
   struct bkr94acs *a
- ,unsigned int process
- ,unsigned char enter
- ,struct bkr94acsAct *out
-){
-  unsigned char *entered;
-
-  entered = bkr94acsEnterd(a);
-  if (entered[process] != BKR94ACS_ENTER_NONE)
-    return (0);
-
-  entered[process] = enter ? BKR94ACS_ENTER_ONE : BKR94ACS_ENTER_ZERO;
-
-  /*
-   * Initial broadcast of our BA input.  Mark the corresponding
-   * (process, round=0, initiator=self) BA Fig1 as the
-   * initiator and store the value, so bkr94acsRetryStep's BPR walk
-   * outputs BKR94ACS_ACT_BA_SEND with .type=INITIAL until that
-   * INITIAL retires (ACCEPTED, or all-echoed), BA_SEND/ECHO once
-   * F1_ECHOED is set until ECHO retires (ACCEPTED), and BA_SEND/READY
-   * once F1_RDSENT is set until the READY suppress mask covers all n
-   * -- the three retires of bracha87.h's retry banner, each its own;
-   * the flags themselves are never cleared and are not the retry
-   * condition (bkr94acs.h at bkr94acsAcast).  BA Fig1s are vLen=0 (binary
-   * value), so we pass the raw enter byte (0 or 1), not the
-   * BKR94ACS_ENTER_* encoding stored in entered[].
-   */
-  {
-    unsigned char binary;
-
-    binary = enter ? 1 : 0;
-    bracha87Fig1Initiator(baF1(a, process, 0, a->self), &binary);
-  }
-
-  out->value = 0;
-  out->skip = 0;            /* fresh initiation: nothing to suppress yet */
-  out->received = 0;
-  out->act = BKR94ACS_ACT_BA_SEND;
-  out->process = process;
-  out->round = 0;
-  out->type = BRACHA87_INITIAL;
-  out->baValue = enter;
-  out->initiator = a->self;
-  out->accepted = 0;
-  return (1);
-}
-
-unsigned int
-bkr94acsAcastInput(
-  struct bkr94acs *a
- ,unsigned char process
- ,unsigned char type
- ,unsigned char annot
+ ,unsigned char ev        /* 0 an arrival, 1 a sweep step, 2 this seat's value */
+ ,unsigned char kind      /* an arrival's kind */
+ ,unsigned char ba
+ ,unsigned char q
+ ,unsigned char k
  ,unsigned char from
- ,const unsigned char *value
+ ,const unsigned char *vp /* the value: vLen bytes at round 0, one byte above */
+ ,unsigned char annot
  ,struct bkr94acsAct *out
+ ,int *passDone
 ){
-  struct bracha87Fig1 *f1;
-  unsigned char f1out[3];
-  unsigned int nf1;
-  unsigned int nact;
-  unsigned int k;
-  unsigned char acsEvent;
-  unsigned char inputToBAj;
-  unsigned char postCountAllN;
-  unsigned char baDecision;
-  unsigned char seam;
-  unsigned char enabled;
-  unsigned char nothingLeft;
-  unsigned char doInput1;
-  unsigned char doOutputSubset;
-  unsigned char walk;
-  unsigned char duty;
-  unsigned char fire;
+  struct bracha87Fig1 *inst;
+  struct bkr94acsBa *b;
+  unsigned short *c;
+  unsigned short *pc;
+  const unsigned char *cv;
+  unsigned int n;
+  unsigned int t;
+  unsigned int nout;
+  unsigned int i;           /* the BA in hand */
+  unsigned int kk;          /* the round in hand; 0 for the BA's turn alone */
+  unsigned int qq;          /* the broadcaster in hand */
+  unsigned int r;           /* the BA's current round */
+  unsigned int j;
+  unsigned int w;
+  unsigned int ek;          /* the round and broadcaster a new broadcast is at */
+  unsigned int eq;
+  unsigned int n1out;
+  unsigned int site;        /* where eval, walk and acs return to */
+  unsigned int fig3site;
+  unsigned int fig4site;
+  unsigned int enterSite;
+  unsigned int walkK;       /* the walk: round whose validations may give witnesses */
+  unsigned int walkQ;
+  unsigned int walkAny;
+  unsigned int validatedHere;
+  unsigned int st;
+  unsigned int acsNeeded;
+  unsigned int abandonHere;
+  unsigned char v;
+  unsigned char o1[BRACHA87_FIG1_OUT];
+  /* the dispatches' boundary locals, as the bridges name them */
+  int accepted, haveValidated, roundOne, valueBinary, witness, validatedBand, patienceBand;
+  int validate, turn;
+  int round, haveDecided, sinceDecisionBand, sampleOnes, sampleZerosGtHalfN, sampleOnesGtHalfN, sampleD0, sampleD1;
+  int msgRound, msgValue, prevHasNT, prevSame, prevSameGtHalfN, prevQuestion, prevDSameGtT, prevCoin, prevOwn;
+  int valueP, decide, cont;
+  int qKnown, myInput, onesBand, completedBand, acsPatienceBand, haveOutput;
+  int valuesHeld;
+  int enterOne, enterZero, outputSubSet, takeSubSet;
 
-  /*
-   * Encoded: a->n = actual_N - 1, so valid process indices are
-   * 0..a->n inclusive.  "> a->n" rejects actual_N and above.
-   *
-   * Do NOT short-circuit on a->complete.  This process has locally
-   * decided all N BAs, but other processes may still be working on
-   * some BAs and depend on THIS process's continued Fig1 echoes and
-   * readys to reach their own n-t thresholds.  Post-decide
-   * continuation is the premise of Bracha's Lemma 8 (Implementation
-   * Note 1 carries the argument); it applies at the
-   * BA level and again at the BKR94 ACS level -- a
-   * locally-complete process must keep participating until the
-   * application decides to exit (e.g. the barren-sweep gate).
-   * A blanket complete-guard stalls the protocol here, the fastest
-   * process stranding the slowest.  Step 1's enter
-   * below is idempotent (bkr94acsEnter's entered-state dedup), and
-   * the terminal actions live in bkr94acsTurn, gated there by
-   * Fig4's once-only DECIDE, so continuing after complete cannot
-   * output duplicates.
-   */
-  if (!a || process > a->n || from > a->n || !value || !out)
+  n = N(a);
+  t = a->t;
+  inst = 0;
+  nout = 0;
+  site = 0;
+  *passDone = 0;
+  validatedHere = 0;
+  acsNeeded = 0;
+  abandonHere = 0;
+  i = ba;
+  kk = k;
+  qq = q;
+
+  if (ev == 2)
+    goto broadcast;
+  if (ev == 1)
+    goto sweepStep;
+  if (!kk)
+    goto valueArrival;
+
+  /* an arrival for (ba, q, k): the instance exists from its first
+   * message -- except this seat's own broadcast, which exists from its
+   * step 0: a message about it before then is not this broadcast's */
+  inst = INST(a, i, kk, qq);
+  if (qq == a->self && !BRACHA87_BIT_TST(EXISTS(a, i, kk), qq))
     return (0);
-
-  /*
-   * INITIAL is the designated initiator's message: only the process
-   * may send (initial, v) for its own A-Cast.  ECHO/READY arrive
-   * legitimately from any process (from != process is normal and is
-   * sender-deduped in bracha87Fig1Input), but a non-process INITIAL is
-   * a forged A-Cast -- a Byzantine process injecting a value the correct
-   * process never broadcast, which the (n+t)/2+1 echo cascade would then
-   * carry to a false ACCEPT.  Authenticated channels bind 'from' to the
-   * true sender but do NOT bind the message's process field to it (process
-   * != from is a valid ECHO/READY), so this is a protocol-semantic check
-   * that must live here, not in the transport.  Drop the message.
-   */
-  if (type == BRACHA87_INITIAL && from != process)
-    return (0);
-
-  f1 = acastF1(a, process);
-  nf1 = bracha87Fig1Input(f1, type, from, value, annot & BKR94ACS_ACCEPTED,
-                          annot & BKR94ACS_RECEIVED, f1out);
-  nact = 0;
-
-  for (k = 0; k < nf1; ++k) {
-    if (f1out[k] == BRACHA87_ECHO_ALL || f1out[k] == BRACHA87_READY_ALL) {
-      out[nact].value = bracha87Fig1Value(f1);
-      out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
-      out[nact].received = (f1out[k] == BRACHA87_READY_ALL)
-        ? bracha87Fig1Received(f1) : 0;
-      out[nact].act = BKR94ACS_ACT_ACAST_SEND;
-      out[nact].process = process;
-      out[nact].round = 0;
-      out[nact].type = (f1out[k] == BRACHA87_ECHO_ALL)
-                       ? BRACHA87_ECHO : BRACHA87_READY;
-      out[nact].baValue = 0;
-      out[nact].initiator = 0;
-      out[nact].accepted = (f1out[k] == BRACHA87_READY_ALL
-                         && (f1->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
-      ++nact;
-    } else if (f1out[k] == BRACHA87_ACCEPT) {
-      /*
-       * BKR94 Step 1: "For each Pj for whom you know that Q(j) = 1,
-       * participate in BA_j with input 1."  Q(j) = 1 is carried by
-       * Fig1 ACCEPT for process j (Bracha87 Lemma 3 gives BKR94's Q
-       * assumption (2) for free).  Step 2 is not dispatched from any
-       * arrival path -- it fires from the BPR sweep (bkr94acsFanout);
-       * only Step 1 is reachable at this dispatch site, but the
-       * bridge sees the Step 1 + Step 3 rule set so the unreachable
-       * Step 3 output is zeroed by the dispatch and the post-include
-       * applies only doInput1.
-       */
-      acsEvent = BKR94ACS_ACS_EVENT_Q;
-      inputToBAj = bkr94acsEnterd(a)[process];
-      postCountAllN = 0;
-      /* The BPR groups this site does not read (bkr94acs.dtc, one
-       * dispatch, every site): undecided walks, a fanout seam not
-       * enabled is HELD; both outputs discarded. */
-      baDecision = 0xFF;
-      seam = BKR94ACS_SEAM_FANOUT;
-      enabled = 0;
-      nothingLeft = 0;
-      doInput1 = 0;
-      doOutputSubset = 0;
-      walk = 0;
-      duty = BKR94ACS_DUTY_HELD;
-      fire = 0;
-#include "bkr94acsRules.c"
-      /* Step 3's output is unreachable on a Q event; the dispatch
-       * still resolves it to 0 at every leaf. */
-      (void)doOutputSubset;
-      (void)walk;
-      (void)duty;
-      (void)fire;
-      if (doInput1)
-        nact += bkr94acsEnter(a, process, 1, &out[nact]);
+  if (!BRACHA87_BIT_TST(EXISTS(a, i, kk), qq)) {
+    /* nothing of the caller's rides beside a BA's broadcast */
+    bracha87Fig1Init(inst, a->n1, a->t, 0, MIN(4, a->t + 1), qq, a->self, 0, 0);
+    BIT_SET(EXISTS(a, i, kk), qq);
+  }
+  n1out = bracha87Fig1Input(inst, kind, from, vp, annot, o1);
+  for (j = 0; j < n1out; ++j) {
+    if (o1[j] == BRACHA87_ECHO_ALL || o1[j] == BRACHA87_READY_ALL) {
+      cv = bracha87Fig1Value(inst, o1[j]);
+      out[nout].act = o1[j] == BRACHA87_ECHO_ALL ? BKR94ACS_SEND_ECHO : BKR94ACS_SEND_READY;
+      out[nout].ba = i;
+      out[nout].q = qq;
+      out[nout].k = kk;
+      out[nout].value = cv ? *cv : 0;
+      ++nout;
     }
   }
+  site = 0;
+  goto eval;
+evalDone0:
+  if (validatedHere)
+    goto walk;
+walkDone0:
+  if (acsNeeded)
+    goto acs;
+acsDone0:
+  goto finish;
 
-  return (nact);
-}
-
-unsigned int
-bkr94acsBaInput(
-  struct bkr94acs *a
- ,unsigned char process
- ,unsigned char round
- ,unsigned char initiator
- ,unsigned char type
- ,unsigned char annot
- ,unsigned char from
- ,unsigned char value
- ,struct bkr94acsAct *out
-){
-  unsigned char *pipe;
-  unsigned long bf1sz;
-  unsigned long f4off;
-  unsigned int N;
-  unsigned int mr;
-  struct bracha87Fig1 *f1;
-  struct bracha87Fig3 *f3;
-  struct bracha87Fig4 *f4;
-  unsigned char f1out[3];
-  unsigned int nf1;
-  unsigned int nact;
-  unsigned int k;
-
-  if (!a || process > a->n || initiator > a->n || from > a->n || !out)
+  /* an arrival for j's value broadcast: it exists from its first
+   * message, this seat's own from its step 0 */
+valueArrival:
+  inst = VINST(a, i);
+  /* a BESIDE makes no instance: ahead of i's (initial, v) it is one the
+   * caller cannot have validated, and the instance refuses the rest */
+  if (kind == BKR94ACS_BESIDE && !BRACHA87_BIT_TST(VEX(a), i))
     return (0);
-  if (round >= maxRounds(a))
-    return (0);
-
-  /*
-   * BA INITIAL is the initiator's message: only 'initiator'
-   * may send (initial, v) for the (process, round, initiator) Fig1.
-   * Same forged-A-Cast defense as bkr94acsAcastInput -- a non-
-   * initiator INITIAL would steer this BA toward a value the correct
-   * initiator never A-Cast.  ECHO/READY from any process are normal.
-   */
-  if (type == BRACHA87_INITIAL && from != initiator)
-    return (0);
-
-  /*
-   * Two intentional non-short-circuits -- both are post-decide
-   * continuation (Implementation Note 1) applied at different layers.
-   *
-   * 1. We do NOT short-circuit on bkr94acsDecision[process] != 0xFF.
-   *    Bracha Fig4 requires a decided process to continue
-   *    broadcasting through the phase after its decision, and to
-   *    echo and ready every Fig 1 of the BA that reaches it, so
-   *    processes lagging in THIS BA can reach n-t validated and
-   *    decide.
-   *
-   * 2. We do NOT short-circuit on a->complete.  A locally-complete
-   *    process has decided all N BAs but other processes may still be
-   *    working on some BAs.  Their Fig1 instances for (process_X,
-   *    round_Y, initiator_THIS) wait on THIS process's continued
-   *    echoes and readys to cross n-t thresholds.  Dropping inputs
-   *    after local complete strands lagging processes.
-   *    Application exit is a separate concern (see the
-   *    barren-sweep gate).
-   */
-
-  /* Compute pipeline base once -- avoids redundant external calls */
-  N = A_N(a);
-  mr = maxRounds(a);
-  bf1sz = baF1Sz(a);
-  f4off = (unsigned long)mr * N * bf1sz;
-  pipe = baBase(a) + process * baPipelineSz(a);
-  f1 = (struct bracha87Fig1 *)(pipe
-    + ((unsigned long)round * N + initiator) * bf1sz);
-  f4 = (struct bracha87Fig4 *)(pipe + f4off);
-  f3 = &f4->fig3;
-  nact = 0;
-
-  nf1 = bracha87Fig1Input(f1, type, from, &value, annot & BKR94ACS_ACCEPTED,
-                          annot & BKR94ACS_RECEIVED, f1out);
-
-  for (k = 0; k < nf1; ++k) {
-    if (f1out[k] == BRACHA87_ACCEPT) {
-      const unsigned char *cv;
-
-      cv = bracha87Fig1Value(f1);
-      if (!cv)
-        continue;
-
-      /*
-       * Fig3 sender is the initiator (whose broadcast was accepted).
-       * The arrival path ends here: the accept is BANKED -- stored,
-       * validated, cascaded (bracha87Fig3Accept holds every message
-       * and re-derives validity as prior rounds grow) -- but no
-       * round is turned.  Each Fig4 step's wait on n-t validations
-       * of its own round is enabling evidence over a still-growing
-       * sample, so the turn fires from the BPR sweep
-       * (bkr94acsTurn), caller-paced; BA_DECIDED / COMPLETE /
-       * BA_EXHAUSTED emerge there, never from this entry.
-       */
-      bracha87Fig3Accept(f3, round, initiator, cv[0], 0);
+  if (!BRACHA87_BIT_TST(VEX(a), i)) {
+    if (i == a->self)
+      return (0);
+    bracha87Fig1Init(inst, a->n1, a->t, a->vLen1, a->t + 1, i, a->self, 0, a->beside);
+    BIT_SET(VEX(a), i);
+  }
+  n1out = bracha87Fig1Input(inst, kind, from, vp, annot, o1);
+  site = 0;
+  /* the value broadcast's sends, and its accept: Q(i) = 1 is known */
+valueOut:
+  for (j = 0; j < n1out; ++j) {
+    if (o1[j] == BRACHA87_ACCEPT) {
+      BA(a, i)->qKnown = 1;
+      acsNeeded = 1;
       continue;
     }
-
-    /*
-     * Non-ACCEPT: must be ECHO_ALL or READY_ALL.  bracha87Fig1Input
-     * never outputs BRACHA87_INITIAL_ALL (that's a Bpr-only output),
-     * which is what the type-mapping ternary below rests on.
-     */
-    {
-      const unsigned char *cv;
-
-      cv = bracha87Fig1Value(f1);
-      if (!cv)
-        continue;
-
-      out[nact].value = 0;
-      out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
-      out[nact].received = (f1out[k] == BRACHA87_READY_ALL)
-        ? bracha87Fig1Received(f1) : 0;
-      out[nact].act = BKR94ACS_ACT_BA_SEND;
-      out[nact].process = process;
-      out[nact].round = round;
-      out[nact].type = (f1out[k] == BRACHA87_ECHO_ALL)
-        ? BRACHA87_ECHO : BRACHA87_READY;
-      out[nact].baValue = cv[0];
-      out[nact].initiator = initiator;
-      out[nact].accepted = (f1out[k] == BRACHA87_READY_ALL
-                         && (f1->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
-      ++nact;
-    }
+    out[nout].act = o1[j] == BRACHA87_INITIAL_ALL ? BKR94ACS_SEND_INITIAL
+                  : o1[j] == BRACHA87_ECHO_ALL ? BKR94ACS_SEND_ECHO : BKR94ACS_SEND_READY;
+    out[nout].ba = out[nout].q = i;
+    out[nout].k = out[nout].value = 0;
+    ++nout;
   }
+  if (site)
+    return (nout);
+  goto walkDone0;
 
-  return (nact);
-}
-
-unsigned int
-bkr94acsSubset(
-  const struct bkr94acs *a
- ,unsigned char *processes
-){
-  unsigned int cnt;
-  unsigned int i;
-  const unsigned char *dec;
-
-  if (!a || !processes)
+  /* step 0 of this seat's value broadcast, once */
+broadcast:
+  i = a->self;
+  if (BRACHA87_BIT_TST(VEX(a), i))
     return (0);
+  inst = VINST(a, i);
+  bracha87Fig1Init(inst, a->n1, a->t, a->vLen1, a->t + 1, i, a->self, 0, a->beside);
+  BIT_SET(VEX(a), i);
+  bracha87Fig1Initiator(inst, vp);
+  out[0].act = BKR94ACS_SEND_INITIAL;
+  out[0].ba = out[0].q = i;
+  out[0].k = out[0].value = 0;
+  return (1);
+
+sweepStep:
+  /* the next existing instance in the rotation, or the pass completes;
+   * a player's value broadcast comes before its BA's rounds */
+  for (;;) {
+    if (a->curBa >= n) {
+      a->curBa = 0;
+      a->curK = 0;
+      a->curQ = 0;
+      goto passComplete;
+    }
+    if (!a->curK) {
+      if (!a->curQ && BRACHA87_BIT_TST(VEX(a), a->curBa))
+        break;
+      a->curK = 1;
+      a->curQ = 0;
+      continue;
+    }
+    if (a->curK > a->maxRounds) {
+      ++a->curBa;
+      a->curK = 0;
+      a->curQ = 0;
+      continue;
+    }
+    if (a->curQ >= n) {
+      ++a->curK;
+      a->curQ = 0;
+      continue;
+    }
+    if (BRACHA87_BIT_TST(EXISTS(a, a->curBa, a->curK), a->curQ))
+      break;
+    ++a->curQ;
+  }
+  i = a->curBa;
+  kk = a->curK;
+  qq = a->curQ;
+  ++a->curQ;
+  if (!kk) {
+    inst = VINST(a, i);
+    n1out = bracha87Fig1Input(inst, BRACHA87_SWEEP, 0, 0, 0, o1);
+    site = 1;
+    goto valueOut;
+  }
+  inst = INST(a, i, kk, qq);
+  n1out = bracha87Fig1Input(inst, BRACHA87_SWEEP, 0, 0, 0, o1);
+  /* a sweep fires no step: what comes back is the re-sends owed */
+  for (j = 0; j < n1out; ++j) {
+    cv = bracha87Fig1Value(inst, o1[j]);
+    out[nout].act = o1[j] == BRACHA87_INITIAL_ALL ? BKR94ACS_SEND_INITIAL
+                  : o1[j] == BRACHA87_ECHO_ALL ? BKR94ACS_SEND_ECHO : BKR94ACS_SEND_READY;
+    out[nout].ba = i;
+    out[nout].q = qq;
+    out[nout].k = kk;
+    out[nout].value = cv ? *cv : 0;
+    ++nout;
+  }
+  return (nout);
+
+passComplete:
+  *passDone = 1;
+  site = 2;
+  ++a->sweeps;
+  for (i = 0; i < n; ++i)
+    if (BA(a, i)->round)
+      ++BA(a, i)->roundSweeps;
+  /* the turns the round patience now allows, BA by BA */
+  for (i = 0; i < n; ++i) {
+    if (!BA(a, i)->round)
+      continue;
+    kk = 0;
+    qq = 0;
+    validatedHere = 0;
+    site = 2;
+    goto eval;
+evalDone2:
+    ;
+  }
+  goto acs;
+acsDone2:
+  if (a->sweeps >= a->abandon)
+    abandonHere = 1;
+  goto finish;
+
+finish:
+  if (abandonHere) {
+    a->flags |= F_ABANDONED;
+    out[nout].act = BKR94ACS_ABANDON;
+    out[nout].ba = out[nout].q = out[nout].k = out[nout].value = 0;
+    ++nout;
+  }
+  return (nout);
 
   /*
-   * BKR94 Step 3 read: SubSet_i = { j : BA_j had output 1 }.
-   * Lemma 2 Part A gives |SubSet| >= 2t+1, and >= n-t here (they
-   * coincide only at n = 3t+1; Implementation Note 15); Part C gives
-   * cross-process agreement on SubSet; Part D gives Q(j)=1 for every
-   * j in SubSet.  Caller must gate this on a->complete to
-   * observe the final subset; a mid-run read reports the partial
-   * set of decided-1 processes.
+   * Evaluate: the instance (i, kk, qq), or with kk == 0 no instance and
+   * only BA i's turn.  Figure 4 first for the witness, Figure 3 for
+   * validate and the turn; after a validation Figure 3 again, since the
+   * turn reads the round's count as state; Figure 4 again for N on a
+   * turn; and after the turn's broadcast the new round's turn, since
+   * stored messages may already satisfy it.
    */
-  dec = bkr94acsDecision(a);
-  cnt = 0;
-  for (i = 0; i < A_N(a); ++i) {
-    if (dec[i] == 1)
-      processes[cnt++] = i;
+eval:
+  b = BA(a, i);
+  r = b->round;
+  if (kk) {
+    inst = INST(a, i, kk, qq);
+    st = bracha87Fig1State(inst);
+    accepted = (st & BRACHA87_F1_ACCEPTED) != 0;
+    haveValidated = BRACHA87_BIT_TST(VALID(a, i, kk), qq) != 0;
+    cv = accepted ? bracha87Fig1Value(inst, BRACHA87_ACCEPT) : 0;
+    msgValue = cv ? *cv : 0;
+    roundOne = kk == 1;
+    msgRound = (kk - 1) % 3 + 1;
+  } else {
+    accepted = 0;
+    haveValidated = 0;
+    msgValue = 0;
+    roundOne = 0;
+    msgRound = 1;
   }
-  return (cnt);
-}
+  valueBinary = msgValue <= BKR94ACS_V1;
+  /* the witness: VALID^(k-1)'s counts against the figure's thresholds,
+   * and where N kept value_p the sender's own (k-1)-message, validated
+   * here, since value_p is what it broadcast there */
+  if (kk > 1) {
+    pc = CNT(a, i, kk - 1);
+    prevHasNT = pc[0] + t >= n;
+    w = msgValue <= BKR94ACS_V1 ? msgValue : msgValue - BKR94ACS_D0;
+    prevSame = 2 * pc[1 + w] > n - t ? 2 : 2 * pc[1 + w] == n - t ? 1 : 0;
+    prevSameGtHalfN = 2 * pc[1 + w] > n;
+    prevQuestion = MIN(pc[1], n / 2) + MIN(pc[2], n / 2) >= n - t;
+    prevDSameGtT = pc[1 + BKR94ACS_D0 + w] > t;
+    prevCoin = MIN(pc[1 + BKR94ACS_D0], t) + MIN(pc[1 + BKR94ACS_D1], t) + pc[1] + pc[2] >= n - t;
+    prevOwn = BRACHA87_BIT_TST(VALID(a, i, kk - 1), qq)
+           && *bracha87Fig1Value(INST(a, i, kk - 1, qq), BRACHA87_ACCEPT) == msgValue;
+  } else {
+    prevHasNT = 0;
+    prevSame = 0;
+    prevSameGtHalfN = 0;
+    prevQuestion = 0;
+    prevDSameGtT = 0;
+    prevCoin = 0;
+    prevOwn = 0;
+  }
+  turn = 0;
+  fig4site = 0;
+  goto fig4;
+fig4Done0:
+  fig3site = 0;
+  goto fig3;
+fig3Done0:
+  if (validate) {
+    BIT_SET(VALID(a, i, kk), qq);
+    c = CNT(a, i, kk);
+    ++c[0];
+    ++c[1 + msgValue];
+    validatedHere = 1;
+    walkK = kk;
+    /* the turn reads the count as state: read it again now */
+    haveValidated = 1;
+    fig3site = 1;
+    goto fig3;
+fig3Done1:
+    ;
+  }
+turnCheck:
+  if (!turn || !r || (a->flags & F_ABANDONED))
+    goto evalReturn;
+  /* the turn: N over the current round's validated set */
+  fig4site = 1;
+  goto fig4;
+fig4Done1:
+  if (valueP == 5)
+    b->valueP = a->coin(a->ctx) & 1;
+  else if (valueP != 4)
+    b->valueP = valueP;
+  if (decide != 2 && b->decided == 2) {
+    b->decided = decide;
+    b->decidedRound = r;
+    ++a->completed;
+    if (decide == 1 && ++a->ones + t == n)
+      a->onesAt = a->sweeps;
+    out[nout].act = BKR94ACS_DECIDED;
+    out[nout].ba = i;
+    out[nout].q = out[nout].k = 0;
+    out[nout].value = decide;
+    ++nout;
+    acsNeeded = 1;
+  }
+  if (!cont)
+    goto evalReturn;    /* the phase after its decision is done: it stops */
+  if (r + 1 > a->maxRounds) {
+    /* a round past the byte: a decided BA stops short of its last
+     * phase; an undecided one needs what the seat cannot hold, and the
+     * seat is done, after this event */
+    if (b->decided != 2)
+      goto evalReturn;
+    a->flags |= F_ABANDONED;
+    abandonHere = 1;
+    goto evalReturn;
+  }
+  b->round = r + 1;
+  b->roundSweeps = 0;
+  v = b->valueP;
+  enterSite = 0;
+  goto enter;
+enterDoneTurn:
+  /* the new round may already meet its wait: evaluate its turn */
+  r = b->round;
+  fig3site = 2;
+  goto fig3;
+fig3Done2:
+  goto turnCheck;
+evalReturn:
+  switch (site) {
+  case 0: goto evalDone0;
+  case 2: goto evalDone2;
+  case 3: goto evalDone3;
+  default: goto evalDone4;
+  }
 
-const unsigned char *
-bkr94acsAcastValue(
-  const struct bkr94acs *a
- ,unsigned char process
-){
-  struct bracha87Fig1 *f;
-  if (!a || process > a->n)
-    return (0);
-  f = acastF1(a, process);
-  /* Header contract: returns non-null only when ACCEPTED, or for
-   * self-process once INITIATOR is set (after A-Cast).  Pre-ACCEPT
-   * ECHOED values are intentionally hidden -- under Byzantine
-   * equivocation they can disagree across honest processes (Bracha 1987
-   * Lemmas 1/2 only constrain READY/ACCEPT), so exposing them
-   * would let callers act on values that aren't yet
-   * agreement-protected. */
-  if ((f->flags & (BRACHA87_F1_INITIATOR | BRACHA87_F1_ACCEPTED)) == 0)
-    return (0);
-  return (bracha87Fig1Value(f));
+  /*
+   * Figure 3's dispatch: validate for the instance in hand, and the
+   * turn for BA i's current round r.
+   */
+fig3:
+  if (r) {
+    c = CNT(a, i, r);
+    validatedBand = c[0] == n ? 2 : c[0] + t >= n ? 1 : 0;
+    patienceBand = b->roundSweeps >= a->patience;
+  } else {
+    validatedBand = 0;
+    patienceBand = 0;
+  }
+#include "bracha87Fig3Rules.c"
+  switch (fig3site) {
+  case 0: goto fig3Done0;
+  case 1: goto fig3Done1;
+  default: goto fig3Done2;
+  }
+
+  /*
+   * Figure 4's dispatch, entered for the witness with turn 0 and for N
+   * with the turn: the two chains are independent in its DAG.  The
+   * sample N reads is the current round's whole validated set, at
+   * least n - t and up to n, which is what the turn's patience buys
+   * (bracha87Fig4.dtc).
+   */
+fig4:
+  round = r ? (r - 1) % 3 + 1 : 1;
+  haveDecided = b->decided != 2;
+  sinceDecisionBand = haveDecided && r - b->decidedRound >= 3;
+  if (r) {
+    c = CNT(a, i, r);
+    sampleOnes = 2 * c[1 + BKR94ACS_V1] > c[0] ? 2 : 2 * c[1 + BKR94ACS_V1] == c[0] ? 1 : 0;
+    sampleZerosGtHalfN = 2 * c[1 + BKR94ACS_V0] > n;
+    sampleOnesGtHalfN = 2 * c[1 + BKR94ACS_V1] > n;
+    sampleD0 = c[1 + BKR94ACS_D0] > 2 * t ? 2 : c[1 + BKR94ACS_D0] > t ? 1 : 0;
+    sampleD1 = c[1 + BKR94ACS_D1] > 2 * t ? 2 : c[1 + BKR94ACS_D1] > t ? 1 : 0;
+  } else {
+    sampleOnes = 0;
+    sampleZerosGtHalfN = sampleOnesGtHalfN = 0;
+    sampleD0 = sampleD1 = 0;
+  }
+#include "bracha87Fig4Rules.c"
+  if (fig4site == 0)
+    goto fig4Done0;
+  goto fig4Done1;
+
+  /*
+   * This seat broadcasts v at round b->round of BA i: step 0 of a new
+   * Figure 1 instance (i, self, round).  The hand-back is the caller's.
+   */
+enter:
+  ek = b->round;
+  eq = a->self;
+  inst = INST(a, i, ek, eq);
+  if (!BRACHA87_BIT_TST(EXISTS(a, i, ek), eq)) {
+    bracha87Fig1Init(inst, a->n1, a->t, 0, MIN(4, a->t + 1), eq, a->self, 0, 0);
+    BIT_SET(EXISTS(a, i, ek), eq);
+  }
+  bracha87Fig1Initiator(inst, &v);
+  out[nout].act = BKR94ACS_SEND_INITIAL;
+  out[nout].ba = i;
+  out[nout].q = eq;
+  out[nout].k = ek;
+  out[nout].value = v;
+  ++nout;
+  if (enterSite)
+    goto enterDoneAcs;
+  goto enterDoneTurn;
+
+  /*
+   * The walk: a validation at round walkK of BA i may give a stored
+   * message at a later round its witness.  Revisit each later round's
+   * accepted, unvalidated instances, stopping at the first round that
+   * validates nothing new.  Each visit is the validate row; bounded by
+   * maxRounds and by the stored messages themselves.
+   */
+walk:
+  for (;;) {
+    ++walkK;
+    if (walkK > a->maxRounds)
+      break;
+    walkAny = 0;
+    for (walkQ = 0; walkQ < n; ++walkQ) {
+      if (!BRACHA87_BIT_TST(EXISTS(a, i, walkK), walkQ)
+       || BRACHA87_BIT_TST(VALID(a, i, walkK), walkQ))
+        continue;
+      if (!(bracha87Fig1State(INST(a, i, walkK, walkQ)) & BRACHA87_F1_ACCEPTED))
+        continue;
+      kk = walkK;
+      qq = walkQ;
+      validatedHere = 0;
+      {
+        unsigned int saveSite;
+        unsigned int saveK;
+
+        saveSite = site;
+        saveK = walkK;
+        site = 3;
+        goto eval;
+evalDone3:
+        site = saveSite;
+        walkK = saveK;
+      }
+      if (validatedHere)
+        walkAny = 1;
+    }
+    if (!walkAny)
+      break;
+  }
+  validatedHere = 0;
+  goto walkDone0;
+
+  /*
+   * Agreement[Q], every BA_j: enter 1 on Q(j), enter 0 past n - t
+   * decisions of 1 and the patience, output the subset at n once the
+   * value of every j in it is accepted here.  An entry is followed by
+   * that BA's turn, since the round it enters may already meet its
+   * wait.
+   */
+acs:
+  acsNeeded = 0;
+  onesBand = a->ones + t >= n;
+  completedBand = a->completed == n;
+  acsPatienceBand = onesBand && a->sweeps - a->onesAt >= a->patience;
+  haveOutput = (a->flags & F_SUBSET) != 0;
+  valuesHeld = 0;
+  if (completedBand && !haveOutput) {
+    for (w = 0; w < n && (BA(a, w)->decided != 1 || BA(a, w)->qKnown); ++w)
+      ;
+    valuesHeld = w == n;
+  }
+  for (j = 0; j < n; ++j) {
+    b = BA(a, j);
+    qKnown = b->qKnown;
+    myInput = b->input != 0;
+#include "bkr94acsRules.c"
+    (void) outputSubSet;
+    if ((enterOne || enterZero) && !(a->flags & F_ABANDONED)) {
+      b->input = 1;
+      b->round = 1;
+      b->roundSweeps = 0;
+      b->valueP = enterOne ? BKR94ACS_V1 : BKR94ACS_V0;
+      i = j;
+      v = b->valueP;
+      enterSite = 1;
+      goto enter;
+enterDoneAcs:
+      {
+        unsigned int saveSite;
+
+        saveSite = site;
+        kk = 0;
+        qq = 0;
+        validatedHere = 0;
+        site = 4;
+        goto eval;
+evalDone4:
+        site = saveSite;
+      }
+    }
+    if (takeSubSet) {
+      a->flags |= F_SUBSET;
+      haveOutput = 1;
+      for (w = 0; w < n; ++w)
+        if (BA(a, w)->decided == 1)
+          BIT_SET(SUBSET(a), w);
+      out[nout].act = BKR94ACS_SUBSET;
+      out[nout].ba = out[nout].q = out[nout].k = out[nout].value = 0;
+      ++nout;
+    }
+  }
+  /* an entry's own turn decided under this loop: the counts moved, so
+   * the rows run once more; entries do not repeat, so this ends */
+  if (acsNeeded)
+    goto acs;
+  if (!site)
+    goto acsDone0;
+  goto acsDone2;
 }
 
 unsigned int
-bkr94acsAcast(
+bkr94acsInput(
+  struct bkr94acs *a
+ ,unsigned char kind
+ ,unsigned char ba
+ ,unsigned char q
+ ,unsigned char k
+ ,unsigned char from
+ ,const unsigned char *value
+ ,unsigned char annot
+ ,struct bkr94acsAct *out
+){
+  int passDone;
+
+  if (!a || !out || kind > BKR94ACS_BESIDE || ba > a->n1 || q > a->n1 || from > a->n1
+   || k > a->maxRounds)
+    return (0);
+  if (a->flags & F_ABANDONED)
+    return (0);
+  if (k) {
+    if (kind == BKR94ACS_BESIDE || !value || *value > BKR94ACS_D1)
+      return (0);
+  } else if (q != ba || (kind != BKR94ACS_BESIDE && !value))
+    return (0);
+  /* an (initial, v) or BESIDE is q's alone: from anyone else it is not
+   * this broadcast, and makes no instance */
+  if ((kind == BKR94ACS_INITIAL || kind == BKR94ACS_BESIDE) && from != q)
+    return (0);
+  return (bkr94acsRun(a, 0, kind, ba, q, k, from, value, annot, out, &passDone));
+}
+
+unsigned int
+bkr94acsBroadcast(
   struct bkr94acs *a
  ,const unsigned char *value
  ,struct bkr94acsAct *out
 ){
+  int passDone;
+
   if (!a || !value || !out)
     return (0);
-
-  /*
-   * Mark the local A-Cast Fig1 (process = self) as the
-   * broadcast initiator.  bracha87Fig1Initiator sets F1_INITIATOR
-   * and copies value into the echoed-value slot so
-   * bracha87Fig1Value returns it (without setting ECHOED --
-   * Rule 1 still fires from bkr94acsAcastInput receiving
-   * (initial, v) via the network loopback).
-   *
-   * Thereafter bkr94acsRetryStep outputs ACAST_SEND/INITIAL until
-   * that INITIAL retires, ACAST_SEND/ECHO once F1_ECHOED is set by
-   * loopback or process echoes until ECHO retires, and ACAST_SEND/
-   * READY once F1_RDSENT is set until the READY mask covers all n --
-   * the three gates the header states at bkr94acsAcast; the flags are
-   * never cleared and are not the retry condition.
-   */
-  bracha87Fig1Initiator(acastF1(a, a->self), value);
-
-  out->value = bracha87Fig1Value(acastF1(a, a->self));
-  out->skip = 0;            /* fresh initiation: nothing to suppress yet */
-  out->received = 0;
-  out->act = BKR94ACS_ACT_ACAST_SEND;
-  out->process = a->self;
-  out->round = 0;
-  out->type = BRACHA87_INITIAL;
-  out->baValue = 0;
-  out->initiator = 0;
-  out->accepted = 0;
-  return (1);
-}
-
-/*
- * BPR retry.  Walks the cursor forward until a Fig1 instance
- * with retry output is found (or the cursor wraps back to its
- * starting position with no work).  Per-call ceiling:
- * BKR94ACS_RETRY_MAX_ACTS (3 actions = INITIAL + ECHO + READY
- * for one Fig1).
- *
- * Cursor walks two phases:
- *   phase 0: A-Cast Fig1s, process 0..N-1
- *   phase 1: BA Fig1s, (process, round, initiator)
- *            in that order, over the full round space (the
- *            sweep must reach ahead-round Fig1s that a faster
- *            process's INITIAL already drove to ECHOED).
- *
- * Per-process verdict gate (see bkr94acs.dtc BPR section), in the
- * walker below, trims the A-Cast walk for BAs that have decided 0
- * (excluded from SubSet); the BA walk is unconditional, with
- * Fig1Bpr returning 0 on unsent instances.
- *
- * Internal helpers fold each cursor advance step into the
- * walker.
- */
-static unsigned int
-bkr94acsRetryOutputAcast(
-  struct bkr94acs *a
- ,unsigned int process
- ,struct bkr94acsAct *out
-){
-  struct bracha87Fig1 *f1;
-  const unsigned char *cv;
-  unsigned char f1out[3];
-  unsigned int n;
-  unsigned int k;
-  unsigned int nact;
-
-  f1 = acastF1(a, process);
-  n = bracha87Fig1Bpr(f1, f1out);
-  if (!n)
+  if (a->flags & F_ABANDONED)
     return (0);
-  cv = bracha87Fig1Value(f1);
-  if (!cv)
-    return (0);
-
-  nact = 0;
-  for (k = 0; k < n; ++k) {
-    out[nact].value = cv;
-    out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
-    out[nact].received = (f1out[k] == BRACHA87_READY_ALL)
-      ? bracha87Fig1Received(f1) : 0;
-    out[nact].act = BKR94ACS_ACT_ACAST_SEND;
-    out[nact].process = process;
-    out[nact].round = 0;
-    out[nact].type = (f1out[k] == BRACHA87_INITIAL_ALL)
-                     ? BRACHA87_INITIAL
-                   : (f1out[k] == BRACHA87_ECHO_ALL)
-                     ? BRACHA87_ECHO
-                   :   BRACHA87_READY;
-    out[nact].baValue = 0;
-    out[nact].initiator = 0;
-    out[nact].accepted = (f1out[k] == BRACHA87_READY_ALL
-                       && (f1->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
-    ++nact;
-  }
-  return (nact);
+  return (bkr94acsRun(a, 2, 0, 0, 0, 0, 0, value, 0, out, &passDone));
 }
 
-static unsigned int
-bkr94acsRetryOutputBa(
-  struct bkr94acs *a
- ,unsigned int process
- ,unsigned int round
- ,unsigned int initiator
- ,struct bkr94acsAct *out
-){
-  struct bracha87Fig1 *f1;
-  const unsigned char *cv;
-  unsigned char f1out[3];
-  unsigned int n;
-  unsigned int k;
-  unsigned int nact;
-
-  f1 = baF1(a, process, round, initiator);
-  n = bracha87Fig1Bpr(f1, f1out);
-  if (!n)
-    return (0);
-  cv = bracha87Fig1Value(f1);
-  if (!cv)
-    return (0);
-
-  nact = 0;
-  for (k = 0; k < n; ++k) {
-    out[nact].value = 0;
-    out[nact].skip = bracha87Fig1Skip(f1, f1out[k]);
-    out[nact].received = (f1out[k] == BRACHA87_READY_ALL)
-      ? bracha87Fig1Received(f1) : 0;
-    out[nact].act = BKR94ACS_ACT_BA_SEND;
-    out[nact].process = process;
-    out[nact].round = round;
-    out[nact].type = (f1out[k] == BRACHA87_INITIAL_ALL)
-                     ? BRACHA87_INITIAL
-                   : (f1out[k] == BRACHA87_ECHO_ALL)
-                     ? BRACHA87_ECHO
-                   :   BRACHA87_READY;
-    out[nact].baValue = cv[0];
-    out[nact].initiator = initiator;
-    out[nact].accepted = (f1out[k] == BRACHA87_READY_ALL
-                       && (f1->flags & BRACHA87_F1_ACCEPTED)) ? 1 : 0;
-    ++nact;
-  }
-  return (nact);
-}
-
-unsigned int
-bkr94acsRetryStep(
-  struct bkr94acs *a
- ,struct bracha87Retry *p
- ,struct bkr94acsAct *out
-){
-  unsigned int N;
-  unsigned int mr;
-  unsigned int total;
-  unsigned int idx;
-  unsigned int nact;
-
-  if (!a || !p || !out)
-    return (0);
-
-  N = A_N(a);
-  mr = maxRounds(a);
-  /*
-   * Linear cursor space: pos in [0, N) = A-Cast Fig1 for process = pos.
-   * pos in [N, N + N*mr*N) = BA Fig1, decoded as
-   *   rel = pos - N
-   *   process      = rel / (mr * N)
-   *   round       = (rel / N) % mr
-   *   initiator = rel % N
-   * Same shape as bracha87Fig1RetryStep: walk forward, return first
-   * instance with actions; on wrap with no actions return 0.
-   */
-  total = N + N * mr * N;
-
-  for (;;) {
-    if (p->pos >= total) {
-      p->pos = 0;
-      ++p->sweeps;
-      if (p->sweepActs == 0)
-        return (0);
-      p->sweepActs = 0;
-    }
-    idx = p->pos++;
-    nact = 0;
-    if (idx < N) {
-      unsigned char process;
-      unsigned char acsEvent;
-      unsigned char inputToBAj;
-      unsigned char postCountAllN;
-      unsigned char baDecision;
-      unsigned char seam;
-      unsigned char enabled;
-      unsigned char nothingLeft;
-      unsigned char doInput1;
-      unsigned char doOutputSubset;
-      unsigned char walk;
-      unsigned char duty;
-      unsigned char fire;
-
-      process = idx;
-      /*
-       * The verdict gate, bkr94acs.dtc's "walk A-Cast j" row (where
-       * the Note 1 reasoning is recorded): the BA decision byte as
-       * bkr94acsBaDecision answers it (0xFF undecided, 0 / 1 decided,
-       * 0xFE exhausted), everything else fed the value that makes its
-       * outputs "no" and discarded.
-       */
-      acsEvent = BKR94ACS_ACS_EVENT_Q;
-      inputToBAj = BKR94ACS_ENTER_ONE;
-      postCountAllN = 0;
-      baDecision = bkr94acsDecision(a)[process];
-      seam = BKR94ACS_SEAM_FANOUT;
-      enabled = 0;
-      nothingLeft = 0;
-      doInput1 = 0;
-      doOutputSubset = 0;
-      walk = 0;
-      duty = BKR94ACS_DUTY_HELD;
-      fire = 0;
-#include "bkr94acsRules.c"
-      (void)doInput1;
-      (void)doOutputSubset;
-      (void)duty;
-      (void)fire;
-      if (walk)
-        nact = bkr94acsRetryOutputAcast(a, process, out);
-    } else {
-      unsigned int rel;
-      unsigned char process;
-      unsigned char round;
-      unsigned char initiator;
-
-      rel = idx - N;
-      process = (rel / (mr * N));
-      round = ((rel / N) % mr);
-      initiator = (rel % N);
-      nact = bkr94acsRetryOutputBa(a, process, round,
-                                       initiator, out);
-    }
-    if (nact) {
-      p->sweepActs += nact;
-      return (nact);
-    }
-  }
-}
-
-/*--------------------------------------------------------------------------*/
-/*  The sweep-side decisions -- BKR94 step 2 and the BA round turn          */
-/*                                                                          */
-/*  The trichotomy and each seam's firing are bkr94acs.dtc's BPR sub-tables; */
-/*  the two seams' own text is its Step 2 and round-turn sections.  A       */
-/*  rule's "upon" / "wait until" names the evidence that enables an action, */
-/*  not a moment; both decisions consume evidence that is still growing     */
-/*  when it first suffices, so the caller paces each from its sweep tick,   */
-/*  counting sweeps against its patience while TOLERANCE holds.             */
-/*  Zero patience is not a firing at enabling (BPR.md, The Sweep-Side       */
-/*  Decisions).                                                             */
-/*--------------------------------------------------------------------------*/
-
-/*
- * The duty site of bkr94acs.dtc's trichotomy: the seam's two predicates
- * computed here, the classification and the firing decision read off
- * the table's BPR sub-tables.  Reached by both duty queries and both
- * firings.
- *
- * Lemma 2 Part A case (i) requires Step 2's enabling count to be
- * BA decides of 1 -- baDecision[] entries == 1 -- never Q(j)=1
- * events or Fig1 accepts; firing on the Q count is the wrong
- * reading of the paper (see the bkr94acs.dtc header).  The counts
- * are derived by scan, never stored (the same wrap discipline as
- * bkr94acsTurn's nDecided).
- */
-static unsigned char
-bkr94acsDuty(
-  const struct bkr94acs *a
- ,unsigned char seam
- ,unsigned char process
- ,unsigned char *fireOut
-){
-  unsigned char acsEvent;
-  unsigned char inputToBAj;
-  unsigned char postCountAllN;
-  unsigned char baDecision;
-  unsigned char enabled;
-  unsigned char nothingLeft;
-  unsigned char doInput1;
-  unsigned char doOutputSubset;
-  unsigned char walk;
-  unsigned char duty;
-  unsigned char fire;
-
-  if (seam == BKR94ACS_SEAM_FANOUT) {
-    const unsigned char *entered;
-    const unsigned char *dec;
-    unsigned int N;
-    unsigned int j;
-    unsigned int one;
-    unsigned int unentered;
-
-    entered = bkr94acsEnterd(a);
-    dec = bkr94acsDecision(a);
-    N = A_N(a);
-    one = 0;
-    unentered = 0;
-    for (j = 0; j < N; ++j) {
-      if (dec[j] == 1)
-        ++one;
-      if (entered[j] == BKR94ACS_ENTER_NONE)
-        ++unentered;
-    }
-    enabled = one >= N - a->t;
-    nothingLeft = !unentered;
-  } else {
-    struct bracha87Fig3 *f3;
-    unsigned char nextRound;
-
-    nextRound = bkr94acsNextRound(a)[process];
-    if (nextRound >= maxRounds(a)) {
-      enabled = 0;
-      nothingLeft = 0;
-    } else {
-      f3 = &baF4(a, process)->fig3;
-      enabled = bracha87Fig3RoundComplete(f3, nextRound) ? 1 : 0;
-      /*
-       * Count only -- the sample itself is materialized by the turn.
-       * A paced caller queries this N times per sweep, so it must not
-       * pay GetValid's O(n) set walk or its 2x256-byte scratch.
-       */
-      nothingLeft = enabled
-                 && bracha87Fig3ValidCount(f3, nextRound) >= A_N(a);
-    }
-  }
-  /* The rest of the dispatch, fed fixed values and discarded: a Q
-   * event on an entered BA fires nothing, an undecided byte walks. */
-  acsEvent = BKR94ACS_ACS_EVENT_Q;
-  inputToBAj = BKR94ACS_ENTER_ONE;
-  postCountAllN = 0;
-  baDecision = 0xFF;
-  doInput1 = 0;
-  doOutputSubset = 0;
-  walk = 0;
-  duty = BKR94ACS_DUTY_HELD;
-  fire = 0;
-
-#include "bkr94acsRules.c"
-
-  (void)doInput1;
-  (void)doOutputSubset;
-  (void)walk;
-
-  if (fireOut)
-    *fireOut = fire;
-  return (duty);
-}
-
-unsigned char
-bkr94acsFanoutDuty(
-  const struct bkr94acs *a
-){
-  if (!a)
-    return (BKR94ACS_DUTY_HELD);
-  return (bkr94acsDuty(a, BKR94ACS_SEAM_FANOUT, 0, 0));
-}
-
-unsigned int
-bkr94acsFanout(
+int
+bkr94acsSweep(
   struct bkr94acs *a
  ,struct bkr94acsAct *out
+ ,unsigned int *nout
 ){
-  unsigned int N;
-  unsigned int j;
-  unsigned int nact;
-  unsigned char fire;
+  int passDone;
 
-  if (!a || !out)
+  if (nout)
+    *nout = 0;
+  if (!a || !out || !nout)
     return (0);
-  /* The firing decision is the table's (bkr94acs.dtc): the fanout
-   * fires at TOLERANCE only.  WHEN to call while the duty is TOLERANCE
-   * is the caller's, read off bkr94acsFanoutDuty. */
-  bkr94acsDuty(a, BKR94ACS_SEAM_FANOUT, 0, &fire);
-  if (!fire)
+  if (a->flags & F_ABANDONED)
     return (0);
-  N = A_N(a);
-  nact = 0;
-  for (j = 0; j < N; ++j)
-    nact += bkr94acsEnter(a, j, 0, &out[nact]);
-  return (nact);
+  *nout = bkr94acsRun(a, 1, 0, 0, 0, 0, 0, 0, 0, out, &passDone);
+  return (!passDone);
 }
 
-unsigned char
-bkr94acsTurnDuty(
+int
+bkr94acsHolder(
   const struct bkr94acs *a
- ,unsigned char process
+ ,unsigned char ba
+ ,unsigned char q
+ ,unsigned char k
+ ,unsigned char p
 ){
-  if (!a || process > a->n)
-    return (BKR94ACS_DUTY_HELD);
-  return (bkr94acsDuty(a, BKR94ACS_SEAM_TURN, process, 0));
+  if (!a || ba > a->n1 || q > a->n1 || k > a->maxRounds)
+    return (0);
+  if (!k)
+    return (q == ba && BRACHA87_BIT_TST(VEX(a), ba) ? bracha87Fig1Holder(VINST(a, ba), p) : 0);
+  if (!BRACHA87_BIT_TST(EXISTS(a, ba, k), q))
+    return (0);
+  return (bracha87Fig1Holder(INST(a, ba, k, q), p));
 }
 
-unsigned int
-bkr94acsTurn(
-  struct bkr94acs *a
- ,unsigned char process
- ,struct bkr94acsAct *out
-){
-  struct bracha87Fig4 *f4;
-  struct bracha87Fig3 *f3;
-  unsigned char *nextRound;
-  unsigned char rval[256];
-  unsigned int rcnt;
-  unsigned int act;
-  unsigned int mr;
-  unsigned int nact;
-  unsigned char acsEvent;
-  unsigned char inputToBAj;
-  unsigned char postCountAllN;
-  unsigned char baDecision;
-  unsigned char seam;
-  unsigned char enabled;
-  unsigned char nothingLeft;
-  unsigned char doInput1;
-  unsigned char doOutputSubset;
-  unsigned char walk;
-  unsigned char duty;
-  unsigned char fire;
-
-  if (!a || process > a->n || !out)
-    return (0);
-  /* The firing decision is the table's (bkr94acs.dtc): the turn
-   * fires at TOLERANCE and at MET. */
-  bkr94acsDuty(a, BKR94ACS_SEAM_TURN, process, &fire);
-  if (!fire)
-    return (0);
-
-  mr = maxRounds(a);
-  f4 = baF4(a, process);
-  f3 = &f4->fig3;
-  nextRound = &bkr94acsNextRound(a)[process];
-  /* Values only: Fig 4 computes over values alone, and Fig 3 already
-   * deduped by sender building VALID^k.  Senders are not lost to the
-   * caller -- bkr94acsBaGetValid hands them over for the BA's next
-   * round, which is this one until the turn below advances it. */
-  rcnt = bracha87Fig3GetValid(f3, *nextRound, 0, rval);
-  act = bracha87Fig4Round(f4, *nextRound, rcnt, rval);
-  /* A decided BA's last turn (the step 3 of the phase after its
-   * decision) opens no phase: its round space ends there, and the duty
-   * reads HELD from then on, as at the ceiling. */
-  if (!act && (f4->flags & BRACHA87_F4_DECIDED))
-    *nextRound = mr;
-  else
-    ++*nextRound;
-  nact = 0;
-
-  if (act & BRACHA87_DECIDE) {
-    const unsigned char *dec;
-    unsigned int nDecided;
-    unsigned int j;
-
-    /* BA-decided notification (always output; not part of
-     * BKR94 rules, just an observability signal).  Fig4Round
-     * returns DECIDE exactly once per BA (BRACHA87_F4_DECIDED is
-     * set-once; the decide rule requires !haveDecided), so this
-     * branch -- and the unguarded COMPLETE emission below, which
-     * fires on the decided count crossing N -- is structurally
-     * once-only. */
-    bkr94acsDecision(a)[process] = f4->decision;
-    out[nact].value = 0;
-    out[nact].skip = 0;
-    out[nact].received = 0;
-    out[nact].act = BKR94ACS_ACT_BA_DECIDED;
-    out[nact].process = process;
-    out[nact].round = 0;
-    out[nact].type = 0;
-    out[nact].baValue = f4->decision;
-    out[nact].initiator = 0;
-    out[nact].accepted = 0;
-    ++nact;
-
-    /*
-     * Post-output decided count, derived from baDecision[]
-     * (the decision just recorded above included).  Derived,
-     * not stored: a stored counter is a denormalization of
-     * baDecision[], and one held in an unsigned char would wrap on
-     * the 256th decision, suppressing COMPLETE at 256 processes.  Only
-     * 0 and 1 match -- the 0xFF (undecided) and 0xFE (exhausted)
-     * sentinels fall out of the scan with no separate rule.
-     * One O(N) pass per BA decision, a rare event.
-     */
-    dec = bkr94acsDecision(a);
-    nDecided = 0;
-    for (j = 0; j < A_N(a); ++j)
-      if (dec[j] <= 1)
-        ++nDecided;
-
-    /*
-     * BKR94 Step 3 dispatch.  The bridge maps "post-output
-     * BA-output count == n" to nDecided >= n; the all-decided
-     * rule (output SubSet) is guarded by that post-output
-     * predicate and by acsEvent's branching on BA_1 vs BA_0.
-     * Step 2 is not dispatched here -- its BA-output-1 count
-     * is derived on demand by bkr94acsFanoutDuty and the
-     * fanout fires from the same sweep (bkr94acsFanout).
-     */
-    acsEvent = f4->decision
-      ? BKR94ACS_ACS_EVENT_BA1
-      : BKR94ACS_ACS_EVENT_BA0;
-    inputToBAj = bkr94acsEnterd(a)[process];
-    postCountAllN = nDecided >= A_N(a);
-    baDecision = 0xFF;
-    seam = BKR94ACS_SEAM_FANOUT;
-    enabled = 0;
-    nothingLeft = 0;
-    doInput1 = 0;
-    doOutputSubset = 0;
-    walk = 0;
-    duty = BKR94ACS_DUTY_HELD;
-    fire = 0;
-#include "bkr94acsRules.c"
-    /* Step 1 is unreachable on a BA-output event; the dispatch
-     * still resolves doInput1 to 0 at every leaf.  The BPR groups
-     * were fed neutral above; this site's firing decision was taken
-     * at bkr94acsDuty before the round was computed. */
-    (void)doInput1;
-    (void)walk;
-    (void)duty;
-    (void)fire;
-    if (doOutputSubset) {
-      a->complete = 1;
-      out[nact].value = 0;
-      out[nact].skip = 0;
-      out[nact].received = 0;
-      out[nact].act = BKR94ACS_ACT_COMPLETE;
-      out[nact].process = 0;
-      out[nact].round = 0;
-      out[nact].type = 0;
-      out[nact].baValue = 0;
-      out[nact].initiator = 0;
-      out[nact].accepted = 0;
-      ++nact;
-    }
-  }
-
-  if ((act & BRACHA87_BROADCAST)
-   && *nextRound < mr) {
-    /*
-     * Broadcast INITIAL for the new BA round
-     * (self is initiator).  Mark the corresponding
-     * (process, round=*nextRound, initiator=self)
-     * BA Fig1 as the initiator and store the
-     * value so bkr94acsRetryStep retries this INITIAL on
-     * subsequent ticks until it retires, plus BA_SEND/ECHO and
-     * BA_SEND/READY once F1_ECHOED / F1_RDSENT join, each until
-     * its own gate (Implementation Note 11).  Same pattern as the
-     * round-0 case in bkr94acsEnter.
-     */
-    {
-      unsigned char binary;
-
-      binary = f4->value;
-      bracha87Fig1Initiator(baF1(a, process, *nextRound, a->self),
-                         &binary);
-    }
-
-    out[nact].value = 0;
-    out[nact].skip = 0;     /* fresh initiation: nothing to suppress */
-    out[nact].received = 0;
-    out[nact].act = BKR94ACS_ACT_BA_SEND;
-    out[nact].process = process;
-    out[nact].round = *nextRound;
-    out[nact].type = BRACHA87_INITIAL;
-    out[nact].baValue = f4->value;
-    out[nact].initiator = a->self;
-    out[nact].accepted = 0;
-    ++nact;
-  }
-
-  if (act & BRACHA87_EXHAUSTED) {
-    /*
-     * Fig4 reached maxPhases with no decision -- a violation
-     * of BKR94 Lemma 2 Part B's "all BAs terminate" assumption.
-     * Bracha87 Fig4 has probabilistic termination; the
-     * BRACHA87_MAX_PHASES (85) ceiling is an unsigned-char
-     * round-encoding artifact, not a paper limit, but it caps
-     * the in-protocol attempts.
-     *
-     * Mutually exclusive with BRACHA87_DECIDE (decideV requires
-     * !haveDecided, EXHAUSTED requires sub=2 of last phase with
-     * !haveDecided && !decideV), so the Step 3 dispatch above
-     * did not fire.  The 0xFE sentinel written below does not
-     * match the decided-count scan's <= 1 predicate, so an
-     * exhausted BA never counts as decided (no decision was
-     * made); we do NOT enter the rules dispatch (no BA-output
-     * event to feed it), do NOT substitute a value into
-     * bkr94acsDecision[process] -- any unilateral substitute
-     * could disagree with another process's actual decision and
-     * break SubSet agreement (Lemma 2 Part C).
-     *
-     * baDecision[process] = 0xFE marks the BA as exhausted so
-     * bkr94acsBaDecision can report the state and the
-     * process-retry-gate (which only skips decided-0) keeps
-     * retrying for this process -- other processes may
-     * still benefit from our continued echoes / readys on
-     * earlier rounds.
-     *
-     * After ++*nextRound above, *nextRound equals mr, so
-     * bkr94acsTurnDuty reports HELD for this BA forever.  Single
-     * output per BA per ACS instance is therefore structural; no
-     * additional dedup guard required.
-     */
-    bkr94acsDecision(a)[process] = 0xFE;
-    out[nact].value = 0;
-    out[nact].skip = 0;
-    out[nact].received = 0;
-    out[nact].act = BKR94ACS_ACT_BA_EXHAUSTED;
-    out[nact].process = process;
-    out[nact].round = 0;
-    out[nact].type = 0;
-    out[nact].baValue = 0;
-    out[nact].initiator = 0;
-    out[nact].accepted = 0;
-    ++nact;
-  }
-
-  return (nact);
-}
-
-/*--------------------------------------------------------------------------*/
-/*  Diagnostic accessors                                                    */
-/*--------------------------------------------------------------------------*/
-
-unsigned char
-bkr94acsBaDecision(
+const struct bracha87Fig1 *
+bkr94acsInstance(
   const struct bkr94acs *a
- ,unsigned char process
+ ,unsigned char ba
+ ,unsigned char q
+ ,unsigned char k
 ){
-  if (!a || process > a->n)
-    return (0xFF);
-  return (bkr94acsDecision(a)[process]);
-}
-
-unsigned int
-bkr94acsBaEntered(
-  const struct bkr94acs *a
- ,unsigned char process
-){
-  if (!a || process > a->n)
+  if (!a || ba > a->n1 || q > a->n1 || k > a->maxRounds)
     return (0);
-  return (bkr94acsEnterd(a)[process] != BKR94ACS_ENTER_NONE);
-}
-
-unsigned int
-bkr94acsBaGetValid(
-  const struct bkr94acs *a
- ,unsigned char process
- ,unsigned char *senders
- ,unsigned char *values
-){
-  unsigned char nextRound;
-
-  if (!a || process > a->n || !senders || !values)
+  if (!k)
+    return (q == ba && BRACHA87_BIT_TST(VEX(a), ba) ? VINST(a, ba) : 0);
+  if (!BRACHA87_BIT_TST(EXISTS(a, ba, k), q))
     return (0);
-  /*
-   * The BA's next round is the one bkr94acsTurnDuty classifies and
-   * bkr94acsTurn consumes; at maxRounds the round space is spent (the
-   * ceiling, or a decided BA's bound) and there is no next round to
-   * report (bracha87Fig3GetValid would return 0 for the out-of-range
-   * round anyway).
-   */
-  nextRound = bkr94acsNextRound(a)[process];
-  if (nextRound >= maxRounds(a))
-    return (0);
-  return (bracha87Fig3GetValid(&baF4(a, process)->fig3, nextRound,
-                               senders, values));
-}
-
-unsigned int
-bkr94acsAcastAllReadied(
-  const struct bkr94acs *a
- ,unsigned char process
-){
-  const unsigned char *rd;
-  unsigned int p;
-
-  if (!a || process > a->n)
-    return (0);
-  rd = bracha87Fig1Skip(acastF1(a, process), BRACHA87_ECHO_ALL);
-  for (p = 0; p < A_N(a); ++p)
-    if (!BRACHA87_SKIP_TST(rd, p))
-      return (0);
-  return (1);
+  return (INST(a, ba, k, q));
 }
 
 const unsigned char *
-bkr94acsAcastReadied(
+bkr94acsSubSet(
   const struct bkr94acs *a
- ,unsigned char process
 ){
-  if (!a || process > a->n)
+  if (!a || !(a->flags & F_SUBSET))
     return (0);
-  return (bracha87Fig1Skip(acastF1(a, process),
-                           BRACHA87_ECHO_ALL));
+  return (SUBSET(a));
 }
 
-const struct bracha87Fig1 *
-bkr94acsAcastFig1(
+const unsigned char *
+bkr94acsValue(
   const struct bkr94acs *a
- ,unsigned char process
+ ,unsigned char j
 ){
-  if (!a || process > a->n)
+  if (!a || j > a->n1 || !BRACHA87_BIT_TST(VEX(a), j))
     return (0);
-  return (acastF1(a, process));
+  return (bracha87Fig1Value(VINST(a, j), BRACHA87_ACCEPT));
 }
 
-const struct bracha87Fig1 *
-bkr94acsBaFig1(
+int
+bkr94acsDecision(
   const struct bkr94acs *a
- ,unsigned char process
- ,unsigned char round
- ,unsigned char initiator
+ ,unsigned char ba
 ){
-  if (!a || process > a->n || round >= maxRounds(a)
-   || initiator > a->n)
-    return (0);
-  return (baF1(a, process, round, initiator));
+  if (!a || ba > a->n1 || BA(a, ba)->decided == 2)
+    return (-1);
+  return (BA(a, ba)->decided);
 }
 
 unsigned int
-bkr94acsFig1SentCount(
+bkr94acsSweeps(
   const struct bkr94acs *a
 ){
-  unsigned int N;
-  unsigned int mr;
-  unsigned int process;
-  unsigned int round;
-  unsigned int initiator;
-  unsigned int count;
-  unsigned char sentMask;
-  const struct bracha87Fig1 *f1;
-
   if (!a)
     return (0);
+  return (a->sweeps);
+}
 
-  /*
-   * Sent = any of F1_INITIATOR / F1_ECHOED / F1_RDSENT set.
-   * These are the flags that drive Bpr retry output; F1_ACCEPTED
-   * piggybacks on F1_RDSENT remaining set post-accept (Note 10),
-   * so it is implicitly counted.
-   */
-  sentMask = (BRACHA87_F1_ECHOED
-                                | BRACHA87_F1_RDSENT
-                                | BRACHA87_F1_INITIATOR);
-
-  N = A_N(a);
-  mr = maxRounds(a);
-  count = 0;
-
-  for (process = 0; process < N; ++process) {
-    f1 = acastF1(a, process);
-    if (f1->flags & sentMask)
-      ++count;
-  }
-
-  /*
-   * Walk the full round space, not just rounds below this process's
-   * baNextRound[process]: a faster process's INITIAL for a round this
-   * process's BA has not yet entered fires Rule 1 here, so ahead-round
-   * Fig1s can be ECHOED (sent) while baNextRound lags.  The
-   * retry sweep visits them; capping the count on baNextRound would
-   * undercount the very sweep this accessor is meant to size.
-   */
-  for (process = 0; process < N; ++process) {
-    for (round = 0; round < mr; ++round) {
-      for (initiator = 0; initiator < N; ++initiator) {
-        f1 = baF1(a,
-                   process,
-                   round,
-                   initiator);
-        if (f1->flags & sentMask)
-          ++count;
-      }
-    }
-  }
-
-  return (count);
+int
+bkr94acsAbandoned(
+  const struct bkr94acs *a
+){
+  if (!a)
+    return (0);
+  return ((a->flags & F_ABANDONED) != 0);
 }
