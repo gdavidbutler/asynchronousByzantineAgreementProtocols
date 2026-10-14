@@ -78,20 +78,24 @@
  * (the HOLDING annotation below) and nothing inferred, until it
  * abandons.
  *
- * Abandon is a sweep count the caller gives at Init.  A process counts
- * its own sweeps from Init, which is where it starts: the initiator
- * takes step 0 there, every other process begins its wait at step 1
- * there.  The sweep that makes the count returns ABANDON, as the pass
- * that makes bkr94acs's does.  At abandon the seat is done with this
- * broadcast, for good: after that sweep, bracha87Fig1Input records
- * nothing and returns nothing.  Abandon is the only exit.  A process
- * that receives nothing that enables step 1 cannot tell a faulty p
- * from a slow one; it waits there, and abandon is its only exit.  A
- * process that runs this figure inside a
- * larger protocol (Figure 3 and up) abandons the whole of it at once:
- * the counter is the seat's, and it gives this instance none.  To
- * every other process an abandoned seat is silence, and silence is
- * what a faulty process looks like, so an abandon is paid out of t.
+ * Abandon is a sweep count the caller gives at Init, 0 for none.  A
+ * process counts its own sweeps from Init, which is where it starts:
+ * the initiator takes step 0 there, every other process begins its
+ * wait at step 1 there.  The sweep that makes the count returns
+ * ABANDON, as the pass that makes bkr94acs's does.  At abandon the
+ * seat is done with this broadcast, for good: after that sweep,
+ * bracha87Fig1Input records nothing and returns nothing.  Abandon is
+ * the only exit.  A process that receives nothing that enables step 1
+ * cannot tell a faulty p from a slow one; it waits there, and abandon
+ * is its only exit.  So an instance that stands alone is given a
+ * count.  An instance held inside a larger protocol (Figure 3 and up)
+ * is given none: the counter is that protocol's seat's, the seat
+ * abandons the whole of what it holds at once, and it stops feeding
+ * this instance.  Under none nothing here counts, bracha87Fig1Sweeps
+ * stays 0, and the instance re-sends on every sweep until nothing is
+ * owed.  To every other process an abandoned seat is silence, and
+ * silence is what a faulty process looks like, so an abandon is paid
+ * out of t: one silence per seat, never one per instance.
  *
  * Three annotations, the caller's, riding the messages BPR already
  * re-sends.  A re-send is retired only by the evidence of the process
