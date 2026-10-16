@@ -148,7 +148,7 @@ bkr94acsInit(
   unsigned int off;
   unsigned int i;
 
-  if (!a || t > n1 / 3 || self > n1 || abandon <= patience || !coin
+  if (!a || t > n1 / 3 || self > n1 || (abandon && abandon <= patience) || !coin
    || !bkr94acsSz(n1, vLen1, maxRounds))
     return (-1);
   /* a BA decides only at a phase's third round: whole phases */
@@ -455,7 +455,7 @@ evalDone2:
   }
   goto acs;
 acsDone2:
-  if (a->sweeps >= a->abandon)
+  if (a->abandon && a->sweeps >= a->abandon)
     abandonHere = 1;
   goto finish;
 

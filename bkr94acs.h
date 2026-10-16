@@ -81,7 +81,9 @@
  * n - t'th decision of 1.  Abandon is the seat's, counted from Init,
  * and everything the seat holds stops with it: after the sweep that
  * returns ABANDON the seat records nothing and returns nothing.  To the
- * other players an abandoned seat is one of the t.
+ * other players an abandoned seat is one of the t.  An abandon of 0 is
+ * none: the seat runs until the caller lets it go, and the round
+ * ceiling is its one exit before that.
  *
  * At t = 0 the subset is all players or, by abandon, none: step 2's
  * count is the honest count n - t, which is all n.
@@ -190,9 +192,9 @@ bkr94acsSz(
 /*
  * Initialize a seat: n players, t faulty (n > 3t), values of vLen
  * bytes, this player, maxRounds per BA, the two sweep counts (abandon
- * > patience), the coin and its context, and whether a value's step
- * 1 waits for the caller's BESIDE (non-zero) or not.  0, or -1 with
- * the seat untouched.
+ * > patience, or 0 for none), the coin and its context, and whether a
+ * value's step 1 waits for the caller's BESIDE (non-zero) or not.  0,
+ * or -1 with the seat untouched.
  */
 int
 bkr94acsInit(
@@ -203,7 +205,7 @@ bkr94acsInit(
  ,unsigned char        /* self */
  ,unsigned char        /* maxRounds, 1..255, taken up to a multiple of 3 */
  ,unsigned int         /* patience, sweeps */
- ,unsigned int         /* abandon, sweeps */
+ ,unsigned int         /* abandon, sweeps; 0 for none */
  ,unsigned char (*)(void *)  /* coin: answers 0 or 1 */
  ,void *               /* the coin's context */
  ,unsigned char        /* beside: non-zero iff a value's step 1 waits for BESIDE */

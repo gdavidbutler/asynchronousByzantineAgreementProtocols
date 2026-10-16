@@ -88,10 +88,11 @@
  * the only exit.  A process that receives nothing that enables step 1
  * cannot tell a faulty p from a slow one; it waits there, and abandon
  * is its only exit.  So an instance that stands alone is given a
- * count.  An instance held inside a larger protocol (Figure 3 and up)
- * is given none: the counter is that protocol's seat's, the seat
- * abandons the whole of what it holds at once, and it stops feeding
- * this instance.  Under none nothing here counts, bracha87Fig1Sweeps
+ * count, unless its caller has an end of its own that lets the
+ * instance go.  An instance held inside a larger protocol (Figure 3
+ * and up) is given none: the counter is that protocol's seat's, the
+ * seat abandons the whole of what it holds at once, and it stops
+ * feeding this instance.  Under none nothing here counts, bracha87Fig1Sweeps
  * stays 0, and the instance re-sends on every sweep until nothing is
  * owed.  To every other process an abandoned seat is silence, and
  * silence is what a faulty process looks like, so an abandon is paid

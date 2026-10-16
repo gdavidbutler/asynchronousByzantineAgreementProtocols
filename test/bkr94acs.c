@@ -209,6 +209,12 @@ main(
     printf("Init accepted a bad argument\n");
     goto done;
   }
+  /* an abandon of 0 is none, above any patience */
+  if (bkr94acsInit(a[0], n - 1, t, VLEN - 1, 0, maxRounds, PATIENCE, 0, coin, &coinValue, 0)
+   || bkr94acsInit(a[0], n - 1, t, VLEN - 1, 0, maxRounds, PATIENCE, ABANDON, coin, &coinValue, 0)) {
+    printf("Init refused abandon 0, none\n");
+    goto done;
+  }
   outMax = bkr94acsOut(a[0]);
   workCap = 16 * outMax;
   if (!(out = calloc(outMax, sizeof (*out))) || !(work = calloc(workCap, sizeof (*work)))) {
