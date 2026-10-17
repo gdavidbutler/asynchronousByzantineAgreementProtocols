@@ -559,7 +559,8 @@ fig4Done1:
       a->onesAt = a->sweeps;
     out[nout].act = BKR94ACS_DECIDED;
     out[nout].ba = i;
-    out[nout].q = out[nout].k = 0;
+    out[nout].q = 0;
+    out[nout].k = r;
     out[nout].value = decide;
     ++nout;
     acsNeeded = 1;

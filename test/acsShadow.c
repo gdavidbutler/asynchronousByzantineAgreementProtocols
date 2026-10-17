@@ -227,6 +227,7 @@ main(
   unsigned int pcnt[MAXN][MAXR + 1][5];    /* the same before the call */
   unsigned int sawInitial[MAXN][MAXR + 2]; /* value + 1 of a broadcast seen this call */
   unsigned int sawDecided[MAXN];
+  unsigned int sawDecidedK[MAXN];  /* the round DECIDED carried */
   unsigned int sawEcho;
   unsigned int sawReady;
   unsigned int sawInitRe;
@@ -1103,6 +1104,7 @@ main(
           if (act->ba >= n || act->value > 1 || sawDecided[act->ba])
             FAIL("DECIDED malformed or twice");
           sawDecided[act->ba] = act->value + 1;
+          sawDecidedK[act->ba] = act->k;
           break;
         case BKR94ACS_SUBSET:
           if (sawSubset)
@@ -1280,6 +1282,8 @@ main(
               FAIL("DECIDED twice");
             if (sawDecided[j] - 1 != dec && sawDecided[j] - 1 != decPre)
               FAIL("DECIDED with a value the counts do not give");
+            if (sawDecidedK[j] != r)
+              FAIL("DECIDED with a round other than its turn's");
             ba[j].decided = sawDecided[j] - 1;
             ba[j].decidedRound = r;
             ++completed;

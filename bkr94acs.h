@@ -139,7 +139,9 @@
                                   * instance (bkr94acsInstance); either
                                   * way carrying the annotations the
                                   * instance says (bracha87Fig1.h) */
-#define BKR94ACS_DECIDED      3  /* BA_ba decided value, 0 or 1 */
+#define BKR94ACS_DECIDED      3  /* BA_ba decided value, 0 or 1, at round k:
+                                  * the paper's "decides v at round 3r + 3",
+                                  * a phase's third round */
 #define BKR94ACS_SUBSET       4  /* the subset is output, the value of every
                                   * j in it accepted here: bkr94acsSubSet,
                                   * bkr94acsValue */
@@ -156,8 +158,10 @@
 struct bkr94acsAct {
   unsigned char act;
   unsigned char ba;
-  unsigned char q;      /* the broadcaster; self for SEND_INITIAL */
-  unsigned char k;      /* the round, 1..maxRounds; 0 for ba's value */
+  unsigned char q;      /* the broadcaster; self for SEND_INITIAL; 0 for
+                         * DECIDED, which has none */
+  unsigned char k;      /* the round, 1..maxRounds; 0 for ba's value;
+                         * the deciding round for DECIDED */
   unsigned char value;  /* BKR94ACS_V0 .. BKR94ACS_D1; 0 at round 0 */
 };
 
