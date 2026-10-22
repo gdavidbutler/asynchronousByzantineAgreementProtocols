@@ -25,14 +25,14 @@
  * end.
  *
  * Beside the message rides the caller's own byte to each seat, re-sent
- * with it by BPR until that seat is heard from.  Each seat's caller
- * records the sweep it first held the message and the byte from p.
- * The message is what every seat accepts alike, and no seat echoes
- * it before it holds the byte, however many others have: the others'
- * echoes and readies take a seat through steps 1 to 3 only once the
- * byte is in hand, and p's re-send is what brings the byte.  A seat
- * that never held the byte never accepted; the report says so for
- * that seat.
+ * with it by BPR until that seat's own word says it holds both.  Each
+ * seat's caller records the sweep it first held the message and the
+ * byte from p.  The message is what every seat that accepts it accepts
+ * alike.  No seat echoes p's (initial, v) before it holds the byte, and
+ * p's re-send is what brings the byte; enough of the others' echoes or
+ * readies take a seat through steps 1 to 3 without it, as the figure
+ * prints.  The report shows, for each seat, whether it ever held the
+ * byte beside what it accepted.
  *
  * Every process here is one caller with one instance and no knowledge
  * of the others: it feeds what arrives, sends what its actions name,
@@ -41,11 +41,12 @@
  * like any other.
  *
  * How it ends: by abandon at each process, the abandon count of sweeps
- * after it started.  Before that the re-sends fall silent: a (ready, v)
- * carries two bits of this caller's, that its sender has accepted and
- * that it holds the recipient's accept, and a seat re-sends its ready
- * only to the seats not yet recorded as having accepted, and once more
- * to a seat whose ready arrived without the second bit.  The report
+ * after it started.  Before that the re-sends stop once none is owed,
+ * which loss can keep from happening: a (ready, v) carries two bits of
+ * this caller's beside HOLDING, that its sender has accepted and that
+ * it holds the recipient's accept, and a seat re-sends its ready only
+ * to the seats not yet recorded as having accepted, and once more to a
+ * seat whose ready arrived without the second bit.  The report
  * shows the sweep of each seat's last re-send of any kind against its
  * abandon.
  *
@@ -381,8 +382,8 @@ run:
       continue;
     }
     cv = bracha87Fig1Value(f[p], a);
-    /* INITIAL to the processes not heard from; a READY re-sent on a
-     * sweep to the processes still owed it */
+    /* INITIAL to the processes not recorded as holding it; a READY
+     * re-sent on a sweep to the processes still owed it */
     resend = a == BRACHA87_READY_ALL && site == 2;
     if (site == 2)
       lastResend[p] = now;

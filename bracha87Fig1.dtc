@@ -47,10 +47,13 @@
 #                                    1's initial enabling alone: a
 #                                    process echoes p's initial only with
 #                                    that in hand.  The others' echoes
-#                                    and readies are their word, each
-#                                    validated at its sender, and the
-#                                    figure runs on them as printed, as
-#                                    it does at steps 2 and 3.  A caller
+#                                    and readies are their word: the
+#                                    first correct process to echo v did
+#                                    so on p's initial, with its caller's
+#                                    validation where its flag is set,
+#                                    and the figure runs on them as
+#                                    printed, as it does at steps 2 and
+#                                    3.  A caller
 #                                    with nothing to send beside says so
 #                                    at Init, and this is yes
 #   "processes holding (initial, v)" { all, not all }
@@ -160,10 +163,12 @@ no,no,,
 # is what enables it, this process holds the caller's something from p:
 # a process echoes p's initial only with the caller's validation in
 # hand, which is the one thing the library cannot do for it.  Enabled
-# by the others' echoes or readies, step 1 is taken as printed: each of
-# them validated before it echoed, and the figure's "same value or
-# none" (Theorem 1) rests on a process joining on their word.  A caller
-# with nothing beside says so at Init, and the row never holds.
+# by the others' echoes or readies, step 1 is taken as printed: the
+# first correct process to echo v did so on p's initial, with its
+# caller's validation where its flag is set, since both counts need an
+# earlier correct echo or ready, and the figure's "same value or none"
+# (Theorem 1) rests on a process joining on their word.  A caller with
+# nothing beside says so at Init, and the row never holds.
 @"take step 1","send (echo, v)","hold the caller's something from p","echo-count(v) > (n+t)/2","ready-count(v) >= t+1"
 yes,yes,yes,,
 yes,yes,no,yes,

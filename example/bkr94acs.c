@@ -19,24 +19,29 @@
  */
 
 /*
- * n seats, each with a message, agree on a subset of the seats and on
- * the message of each seat in it, over an in-memory queue that loses
- * and reorders by seed.  The report is the messages of the subset, as
- * each seat's library hands them back.
+ * n seats, each with a message, run Agreement[Q] over an in-memory
+ * queue that loses and reorders by seed; the seats that output agree
+ * on a subset of the seats and on the message of each seat in it.  The
+ * report is the messages of the subset, as each seat's library hands
+ * them back, and at a seat that abandoned without one, the messages it
+ * accepted.
  *
  * The message is the seat's value: seat j broadcasts it, padded to a
  * fixed length, and a seat's subset is output with the value of every
  * seat in it accepted there.  Nothing here is sent beside a broadcast.
  *
  * Every seat is one bkr94acs seat: it feeds what arrives, sends what
- * its actions name, hands its own messages straight back to itself off
- * the queue, and sweeps once per pass of this loop.  With -b one seat
- * is Byzantine and holds nothing: it sends the (initial, v) of its
- * message to every seat, and in every BA its round-1 (initial, v) with
- * value 1 to the seats below the split and 0 to the rest, and says
- * nothing more.
+ * its actions name, hands its own messages straight back to itself,
+ * never on the queue, and sweeps once per pass of this loop.  That
+ * every seat runs Agreement[Q], with the same patience and abandon,
+ * swept in step, is this harness's choice; nothing in a seat relies on
+ * it.  With -b one seat is Byzantine and holds nothing: it sends the
+ * (initial, v) of its message to every seat, and in every BA its
+ * round-1 (initial, v) with value 1 to the seats below the split and 0
+ * to the rest, and says nothing more.
  *
- * How a run ends: by abandon at each honest seat, after its decisions.
+ * How a run ends: by abandon at each honest seat, at its abandon count
+ * or at the round ceiling of an agreement still undecided.
  *
  * usage: example_bkr94acs [-v] [-s seed] [-l loss] [-b seat] [-x split]
  *                         [-p patience] [-a abandon] [-r rounds]
@@ -181,9 +186,10 @@ main(
   n = atoi(argv[arg]);
   t = atoi(argv[arg + 1]);
   if (n < 1 || n > 64 || t > 21 || n <= 3 * t || loss > 99
-   || maxRounds < 1 || maxRounds > 255
+   || maxRounds < 1 || maxRounds > 255 || abandon < 1
    || (byz < 256 && (byz >= n || !t))) {
     fprintf(stderr, "n is 1..64 and above 3t, loss below 100, rounds 1..255,"
+                    " abandon at least 1 sweep,"
                     " a Byzantine seat below n and only when t > 0\n");
     goto done;
   }
@@ -360,13 +366,19 @@ sweepDone:
   printf("\n");
   for (p = 0; p < n; ++p) {
     const unsigned char *sb;
+    const unsigned char *av;
 
     if (p == byz) {
       printf("seat %u: Byzantine, sent \"%s\" and two values, holds nothing\n", p, argv[arg + 2 + byz]);
       continue;
     }
     if (!(sb = bkr94acsSubSet(a[p]))) {
-      printf("seat %u: no subset, abandoned at sweep %u\n", p, abandonedAt[p]);
+      /* no subset: the values this seat accepted are still read */
+      printf("seat %u: no subset, abandoned at sweep %u, accepted:", p, abandonedAt[p]);
+      for (j = 0; j < n; ++j)
+        if ((av = bkr94acsValue(a[p], j)))
+          printf(" %u:\"%s\"", j, (const char *)av);
+      printf("\n");
       rc = 2;
       continue;
     }
@@ -431,8 +443,9 @@ run:
        : bracha87Fig1Value(bkr94acsInstance(a[p], act.ba, act.q, 0),
                            act.act == BKR94ACS_SEND_INITIAL ? BRACHA87_INITIAL_ALL
                          : act.act == BKR94ACS_SEND_ECHO ? BRACHA87_ECHO_ALL : BRACHA87_READY_ALL);
-    /* INITIAL to the seats not heard from; a READY re-sent on a sweep to
-     * the seats the instance still owes it, carrying what it says */
+    /* INITIAL to the seats not recorded as holding it; a READY re-sent on
+     * a sweep to the seats the instance still owes it, carrying what it
+     * says */
     inst = act.act != BKR94ACS_SEND_INITIAL ? bkr94acsInstance(a[p], act.ba, act.q, act.k) : 0;
     recip = act.act == BKR94ACS_SEND_READY && site == 2;
     for (to = 0; to < n; ++to) {

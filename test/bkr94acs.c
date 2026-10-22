@@ -23,7 +23,7 @@
  * given probability, every seat honest, every seat broadcasting its
  * value at the start, driven drain-then-sweep until every seat has
  * abandoned.  Each seat hands its own messages straight back to
- * itself, off the queue.  Asserts, at t = 0 with no seat starved:
+ * itself, never on the queue.  Asserts, at t = 0 with no seat starved:
  *
  *   every seat decides 1 in every BA, and outputs the subset of all n;
  *   every seat holds, for every j, the value j broadcast, and held it
@@ -483,8 +483,9 @@ run:
       printf("seat %u: unknown action %u\n", p, act.act);
       goto done;
     }
-    /* INITIAL to the seats not heard from; a READY re-sent on a sweep to
-     * the seats the instance still owes it, carrying what it says */
+    /* INITIAL to the seats not recorded as holding it; a READY re-sent on
+     * a sweep to the seats the instance still owes it, carrying what it
+     * says */
     inst = act.act != BKR94ACS_SEND_INITIAL ? bkr94acsInstance(a[p], act.ba, act.q, act.k) : 0;
     recip = act.act == BKR94ACS_SEND_READY && site == 2;
     /* a value broadcast's send carries its own vLen bytes */

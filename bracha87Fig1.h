@@ -65,14 +65,19 @@
  * word alone, without the caller's validation, which is the one thing
  * the library cannot do for it.  The figure's other two ways into step
  * 1, enough (echo, v) or (ready, v) from the others, are the others'
- * word, each of them validated at its sender before it echoed, and
- * they stand as printed, as do steps 2 and 3.  So Theorem 1 holds as
- * printed: a faulty p that sends this process one value and the others
- * another is accepted here, on their readies, under the value they
- * accepted, or nowhere.  With the flag clear nothing rides beside:
- * BESIDE is refused, the instance holds the caller's nothing from Init
- * (BRACHA87_F1_BESIDE is set there), and the figure runs as printed,
- * which is how bkr94acs makes the agreements' own broadcasts.
+ * word: the first correct process to echo v did so on p's (initial,
+ * v), since both counts need an earlier correct echo or ready, so where
+ * the callers set the flag alike a correct process validated v before
+ * any correct process could accept it.  They stand as printed, as do
+ * steps 2 and 3.  So Theorem 1 holds as printed for a faulty p: one
+ * that sends this process one value and the others another is accepted
+ * here, on their readies, under the value they accepted, or nowhere.
+ * For a correct p, Lemma 4 also needs what p sends beside to reach the
+ * correct processes and pass their validation.  With the flag clear
+ * nothing rides beside: BESIDE is refused, the instance holds the
+ * caller's nothing from Init (BRACHA87_F1_BESIDE is set there), and the
+ * figure runs as printed, which is how bkr94acs makes the agreements'
+ * own broadcasts.
  * The initiator re-sends (initial, v), and whatever rides beside it, to
  * the processes not recorded as holding both, which is their own word
  * (the HOLDING annotation below) and nothing inferred, until it
@@ -84,7 +89,8 @@
  * wait at step 1 there.  The sweep that makes the count returns
  * ABANDON, as the pass that makes bkr94acs's does.  At abandon the
  * seat is done with this broadcast, for good: after that sweep,
- * bracha87Fig1Input records nothing and returns nothing.  Abandon is
+ * bracha87Fig1Input records nothing and returns nothing, and the calls
+ * that read the instance answer as it stood then.  Abandon is
  * the only exit.  A process that receives nothing that enables step 1
  * cannot tell a faulty p from a slow one; it waits there, and abandon
  * is its only exit.  So an instance that stands alone is given a

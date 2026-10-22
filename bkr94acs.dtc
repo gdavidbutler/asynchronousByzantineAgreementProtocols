@@ -22,9 +22,11 @@
 # player beside its BA.  The paper leaves Q to the application and asks
 # two things of it.  That every honest player is eventually assigned 1
 # is Bracha's Lemma 4; that an assigned Q(j) is eventually known to all
-# is his Lemma 3.  A faulty P_j is held to the same value at every
-# seat that accepts or to none (Theorem 1), so a j in SubSet has one
-# value.
+# is his Lemma 3; both hold while abandons and faults stay within t,
+# and Lemma 4, where something rides beside, once it reaches the
+# correct seats and passes their validation.  A faulty P_j is held to
+# the same value at every correct seat that accepts or to none
+# (Theorem 1), so a j in SubSet has one value.
 # "Q(j) = 1 is known" is Figure 1's accept, set by the seat's C as
 # Figure 3's "accepted" is.
 # Each BA_j is Figure 4 of Bracha87 (bracha87Fig4.dtc): "enter input v
@@ -34,13 +36,14 @@
 # Q(j), BA_j deciding, or a sweep.
 #
 # Step 2's "upon completing 2t+1" is a wait, and the wait opens
-# patience: a 0 entered for a laggard excludes it from the subset, so
-# the seat waits its patience past 2t+1 before entering 0s, and need
-# not wait at all once every BA has its input -- do not spend the
-# Byzantine budget against a laggard.  The paper writes the count as
-# 2t+1, the honest count n - t at n = 3t+1; the row reads it as the
-# honest count, n - t, so that at t = 0 the subset is all players or,
-# by abandon, none.
+# patience: a 0 entered for a laggard is a vote to exclude it from the
+# subset, so the seat waits its patience past n - t before entering 0s,
+# and need not wait at all once every BA has its input -- do not spend
+# the Byzantine budget against a laggard.  The paper writes the count
+# as 2t+1, the honest count n - t at n = 3t+1; the row reads it as the
+# honest count, n - t, so that at t = 0 the subset is all players, or
+# this seat outputs none: it abandons, or runs until its caller lets it
+# go.
 #
 # Inputs:
 #   "Q(j) = 1 is known"                { yes, no }
@@ -83,8 +86,9 @@ no,< n,
 # Step 3 is taken when the paper says output and this seat has accepted
 # the value of every j in SubSet: the output is the subset and its
 # values together.  BA_j's output of 1 means some honest player entered
-# 1, so it accepted j's value, and Lemma 3 brings that accept here;
-# until it does the step waits, and abandon is the seat's exit.
+# 1, so it accepted j's value, and Lemma 3 eventually brings that
+# accept here while this seat is correct; until it does the step
+# waits, and abandon is the seat's exit.
 @"take step 3","output SubSet","accepted the value of every j in SubSet"
 yes,yes,yes
 no,yes,no

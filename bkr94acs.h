@@ -48,14 +48,14 @@
  * rules.  Nothing here waits on a named process, reads absence as
  * information, or keeps time.
  *
- * What is agreed is values.  Every player broadcasts one value, of
- * vLen bytes, by Figure 1, and Q(j) = 1 at a seat is that seat having
- * accepted j's value.  So the paper's two assumptions on Q are Bracha's
- * Lemmas 4 and 3, and a faulty P_j is held to one value at every seat
- * that accepts it or to none (Theorem 1): the subset's j each have one
- * value, the same at every correct seat.  The value broadcast is the
- * only way a player's message enters; nothing a player sends outside
- * it is agreed.
+ * What is agreed is values.  A player's message is one value, of vLen
+ * bytes, broadcast by Figure 1, and Q(j) = 1 at a seat is that seat
+ * having accepted j's value.  So the paper's two assumptions on Q are
+ * Bracha's Lemmas 4 and 3, and a faulty P_j is held to one value at
+ * every correct seat that accepts it or to none (Theorem 1): the
+ * subset's j each have one value, the same at every correct seat.  The
+ * value broadcast is the only way a player's message enters; nothing a
+ * player sends outside it is agreed.
  *
  * The seat's instance space is n value broadcasts and n BAs, each BA
  * of up to maxRounds rounds, each round n Figure 1 instances, one per
@@ -79,27 +79,37 @@
  * Patience is a wait's: a round's, counted from the round's start and
  * read by the round's turn; and Agreement[Q]'s step 2, counted from the
  * n - t'th decision of 1.  Abandon is the seat's, counted from Init,
- * and everything the seat holds stops with it: after the sweep that
- * returns ABANDON the seat records nothing and returns nothing.  To the
- * other players an abandoned seat is one of the t.  An abandon of 0 is
- * none: the seat runs until the caller lets it go, and the round
- * ceiling is its one exit before that.
+ * and every instance the seat holds stops running with it: after the
+ * call that returns ABANDON, a sweep step or an arrival, bkr94acsInput,
+ * bkr94acsBroadcast and bkr94acsSweep record nothing and return
+ * nothing.  The calls that read the seat still answer, as it stood at
+ * abandon, whether SUBSET was returned or not: bkr94acsValue gives the
+ * value of every j accepted here, and bkr94acsInstance every Figure 1
+ * instance's state and accepted value.  An instance's own
+ * BRACHA87_F1_ABANDONED stays clear: the seat's abandon is
+ * bkr94acsAbandoned.  To the other players an abandoned seat is one of
+ * the t.  An abandon of 0 is none: the seat runs until the caller lets
+ * it go, and the round ceiling is its one exit before that.
  *
- * At t = 0 the subset is all players or, by abandon, none: step 2's
- * count is the honest count n - t, which is all n.
+ * At t = 0 the subset is all players, or this seat outputs none: it
+ * abandons, or runs until its caller lets it go.  Step 2's count is
+ * the honest count n - t, which is all n.
  *
  * The caller's message beside a value broadcast.  As in Figure 1
  * (bracha87Fig1.h), a caller may send a message of its own to each
  * player beside its value's (initial, v); with the beside flag set at
  * Init, a seat echoes a player's (initial, v) only holding the BESIDE
  * for it, the caller's validation, and runs the figure as printed
- * otherwise: on the others' echoes and readies, and at steps 2 and 3,
- * so Theorem 1 and the two assumptions on Q hold as printed.  It is
- * not agreed and the library never sees it.  The caller validates it
- * against the value the instance holds, so with the flag set a BESIDE
- * ahead of its (initial, v) is refused.  Nothing rides beside a BA's
- * broadcast: those instances are made with Figure 1's flag clear, as a
- * value's is when this seat's is, and a BESIDE for either is refused.
+ * otherwise: on the others' echoes and readies, and at steps 2 and 3.
+ * So Theorem 1 holds as printed for a faulty player; for a correct
+ * one, Lemma 4 and so Q's first assumption also need what it sends
+ * beside to reach the correct seats and pass their validation.  What
+ * rides beside is not agreed and the library never sees it.  The
+ * caller validates it against the value the instance holds, so with
+ * the flag set a BESIDE ahead of its (initial, v) is refused.  Nothing
+ * rides beside a BA's broadcast: those instances are made with Figure
+ * 1's flag clear, as a value broadcast's are when this seat's flag is
+ * clear, and a BESIDE for either is refused.
  *
  * The coin at Figure 4's step 3 (iii) is the caller's: a callback and
  * its context, given at Init, answering 0 or 1.
@@ -145,7 +155,8 @@
 #define BKR94ACS_SUBSET       4  /* the subset is output, the value of every
                                   * j in it accepted here: bkr94acsSubSet,
                                   * bkr94acsValue */
-#define BKR94ACS_ABANDON      5  /* the seat is done */
+#define BKR94ACS_ABANDON      5  /* the seat stops running; its reads
+                                  * still answer */
 
 /*
  * A send at round 0 is of ba's value broadcast, and its vLen bytes do
@@ -247,7 +258,8 @@ bkr94acsOut(
  * instance's sends in Figure 1's order, then the sends and decisions
  * the validation chain and the turns fire, then SUBSET, then ABANDON.
  * The accept of a value broadcast returns no action of its own: it is
- * Q(ba) = 1, and what Agreement[Q] does with that is returned.
+ * Q(ba) = 1, and what Agreement[Q] does with that is returned.  Only
+ * an arrival at k = 0 can make it, and bkr94acsValue of ba reads it.
  * 0 for a null seat, out or value, a kind outside the four, ba, q,
  * from outside 0..n-1, k above maxRounds, q other than ba at k = 0, or
  * a BA's value outside the four.
@@ -324,9 +336,12 @@ struct bracha87Fig1;
  * after a sweep step that returned SEND_READY, bracha87Fig1Recipient
  * for who it goes to, an answer that stands until the instance's next
  * sweep step; and at k = 0, with q = ba, ba's value broadcast,
- * for bracha87Fig1Value of what a send of it carries.  Borrowed from
- * the seat.  0 for a null seat, an instance outside the space, or one
- * no message has made yet.
+ * for bracha87Fig1Value of what a send of it carries.  After ABANDON,
+ * bracha87Fig1State and bracha87Fig1Value of BRACHA87_ACCEPT read what
+ * each instance held then; its BRACHA87_F1_ABANDONED stays clear, the
+ * seat's abandon being bkr94acsAbandoned.  Borrowed from the seat.  0
+ * for a null seat, an instance outside the space, or one no message
+ * has made yet.
  */
 const struct bracha87Fig1 *
 bkr94acsInstance(
@@ -348,10 +363,14 @@ bkr94acsSubSet(
 
 /*
  * The value of j's broadcast as accepted at this seat, vLen bytes
- * borrowed from the seat, or 0 before it is accepted.  Every correct
- * seat that has one for j has the same one.  Once SUBSET has been
- * returned it is there for every j in the subset.  0 for a null seat
- * or j outside 0..n-1.
+ * borrowed from the seat, or 0 before it is accepted: non-zero is
+ * Q(j) = 1 here, the accept of j's value broadcast.  Every correct
+ * seat that has one for j, running Agreement[Q] or Figure 1 alone, has
+ * the same one.  Once SUBSET has been returned it is there for every j
+ * in the subset; with SUBSET or without, it is there after ABANDON for
+ * every j accepted before it, though an abandoned seat is one of the t
+ * and the claim above is the correct seats'.  0 for a null seat or j
+ * outside 0..n-1.
  */
 const unsigned char *
 bkr94acsValue(

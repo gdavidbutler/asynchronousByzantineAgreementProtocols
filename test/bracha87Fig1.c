@@ -403,7 +403,7 @@ run:
         if (!bracha87Fig1Holder(f[p], j))
           break;
       if (j == n) {
-        printf("(initial, v) re-send with every process heard from at %u\n", p);
+        printf("(initial, v) re-send with every process recorded as holding it at %u\n", p);
         goto done;
       }
     }
@@ -415,8 +415,9 @@ run:
       printf("action without a value at %u\n", p);
       goto done;
     }
-    /* INITIAL to the processes not yet heard from; a READY re-sent on a
-     * sweep to the processes still owed it, which must be some */
+    /* INITIAL to the processes not recorded as holding it; a READY
+     * re-sent on a sweep to the processes still owed it, which must be
+     * some */
     resend = a == BRACHA87_READY_ALL && site == 2;
     if (resend) {
       ++readyResends;
