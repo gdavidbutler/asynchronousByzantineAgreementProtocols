@@ -55,10 +55,14 @@
  * every correct seat that accepts it or to none (Theorem 1): the
  * subset's j each have one value, the same at every correct seat.  That
  * is agreement, not truth: a faulty P_j that sends every seat the same
- * value has it agreed as a correct one's is, so a caller trusts a claim
- * only on t + 1 identical values of distinct j in the subset.  The
- * value broadcast is the only way a player's message enters; nothing a
- * player sends outside it is agreed.
+ * value has that value agreed exactly as a correct player's is.  So a
+ * caller trusts what a value says only when t + 1 distinct j have it,
+ * byte-identical, as bkr94acsValue gives them at this seat: at most t
+ * players are faulty, so one of the t + 1 is a correct player's, and t
+ * are not enough.  That holds with the subset or without it; every
+ * correct seat that outputs the subset counts over the same values.
+ * The value broadcast is the only way a player's message enters;
+ * nothing a player sends outside it is agreed.
  *
  * The seat's instance space is n value broadcasts and n BAs, each BA
  * of up to maxRounds rounds, each round n Figure 1 instances, one per
