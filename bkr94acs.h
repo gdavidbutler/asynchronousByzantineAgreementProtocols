@@ -53,7 +53,10 @@
  * having accepted j's value.  So the paper's two assumptions on Q are
  * Bracha's Lemmas 4 and 3, and a faulty P_j is held to one value at
  * every correct seat that accepts it or to none (Theorem 1): the
- * subset's j each have one value, the same at every correct seat.  The
+ * subset's j each have one value, the same at every correct seat.  That
+ * is agreement, not truth: a faulty P_j that sends every seat the same
+ * value has it agreed as a correct one's is, so a caller trusts a claim
+ * only on t + 1 identical values of distinct j in the subset.  The
  * value broadcast is the only way a player's message enters; nothing a
  * player sends outside it is agreed.
  *
@@ -366,11 +369,11 @@ bkr94acsSubSet(
  * borrowed from the seat, or 0 before it is accepted: non-zero is
  * Q(j) = 1 here, the accept of j's value broadcast.  Every correct
  * seat that has one for j, running Agreement[Q] or Figure 1 alone, has
- * the same one.  Once SUBSET has been returned it is there for every j
- * in the subset; with SUBSET or without, it is there after ABANDON for
- * every j accepted before it, though an abandoned seat is one of the t
- * and the claim above is the correct seats'.  0 for a null seat or j
- * outside 0..n-1.
+ * the same one, which is j's word and no more.  Once SUBSET has been
+ * returned it is there for every j in the subset; with SUBSET or
+ * without, it is there after ABANDON for every j accepted before it,
+ * though an abandoned seat is one of the t and the claim above is the
+ * correct seats'.  0 for a null seat or j outside 0..n-1.
  */
 const unsigned char *
 bkr94acsValue(

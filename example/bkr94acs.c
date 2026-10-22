@@ -369,7 +369,7 @@ sweepDone:
     const unsigned char *av;
 
     if (p == byz) {
-      printf("seat %u: Byzantine, sent \"%s\" and two values, holds nothing\n", p, argv[arg + 2 + byz]);
+      printf("seat %u: Byzantine, sent \"%s\" alike to every seat and two values in each BA's round 1, holds nothing\n", p, argv[arg + 2 + byz]);
       continue;
     }
     if (!(sb = bkr94acsSubSet(a[p]))) {
@@ -526,8 +526,9 @@ usage:
     "  -s seed     reorder deliveries by seed (0: in order)\n"
     "  -l loss     lose that percent of deliveries, by seed\n");
   fprintf(stderr,
-    "  -b seat     that seat is Byzantine: it sends its message and two values\n"
-    "              of its round-1 broadcast, then nothing (needs t > 0)\n"
+    "  -b seat     that seat is Byzantine: it sends its message alike to every\n"
+    "              seat, and two values of its round-1 broadcast in each BA,\n"
+    "              then nothing (needs t > 0)\n"
     "  -x split    the Byzantine sends value 1 to seats below split, 0 to the rest\n"
     "  -p sweeps   patience (default 2)\n"
     "  -a sweeps   abandon, above patience (default 32)\n"
