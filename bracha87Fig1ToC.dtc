@@ -64,12 +64,7 @@ all,1
 yes,1
 no,0
 
-# BPR's inputs: the echo armed, and no process owed (ready, v) : 0,
-# some process : 1
-@"echo armed",~echoArmed
-yes,1
-no,0
-
+# BPR's input: no process owed (ready, v) : 0, some process : 1
 @"processes owed (ready, v)",~owedBand
 none,0
 some,1

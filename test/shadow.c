@@ -40,23 +40,23 @@
  *   abandon comes once, on a sweep, at the abandon count;
  *   a re-send comes only on a sweep, only of a sent message, only while
  *     live, INITIAL only from the initiator while some process is not
- *     recorded as holding it,
- *     ECHO until this process accepts and, past that, once to the
- *     initiator for each of its INITIALs or BESIDEs that arrived while
- *     this process held both, READY only while some
- *     process is owed it -- not recorded as having accepted, or armed
- *     -- and then to exactly those, the arms served cleared; never
- *     beside its own step;
+ *     recorded as holding it, ECHO to all until this process accepts,
+ *     READY only while some process is not recorded as having accepted
+ *     and then to exactly those; never beside its own step;
+ *   a reply comes only on an arrival, and exactly when the rows say:
+ *     READY_REPLY on a READY without RECEIVED once this process has
+ *     accepted, the READY that fires the accept included, a marked one
+ *     never; ECHO_REPLY on p's INITIAL or BESIDE at a process holding
+ *     both that had echoed before it came; never beside the step of
+ *     the same message;
  *   an ECHO or READY carrying HOLDING records its sender as holding
  *     the initial, a READY carrying ACCEPTED as having accepted, on a
- *     duplicate too, and nothing else does; one arriving without
- *     RECEIVED arms its sender once this process has accepted, the
- *     READY that fires the accept included, and a marked one never;
- *     an annotation on any other kind records nothing;
+ *     duplicate too, and nothing else does; an annotation on any other
+ *     kind records nothing;
  *   the actions are returned in the documented order, at most three;
- *   State, Holder, Received, Sweeps and Value say what the shadow
- *     says, a value
- *     is written once and its pointer stays put;
+ *   State, Holder, Received, Recipient, EchoRecipient, Sweeps and Value
+ *     say what the shadow says, a value is written once and its pointer
+ *     stays put, and a reply's value is its message's;
  *   a refused argument returns 0 and changes nothing, and so does any
  *     input after the seat has abandoned.
  *
@@ -86,8 +86,6 @@ main(
   unsigned char *readyVal;
   unsigned char *acc;       /* per sender: recorded as having accepted */
   unsigned char *hld;       /* per sender: recorded as holding the initial */
-  unsigned char *armed;     /* per sender: armed, until the re-send that serves it */
-  unsigned char *served;    /* per sender: served by the last sweep's re-send, until the next sweep */
   unsigned long seeds;
   unsigned long seed;
   unsigned long s;
@@ -95,7 +93,7 @@ main(
   unsigned long refused;
   unsigned long steps[4];
   unsigned long resends[3];
-  unsigned long arms;
+  unsigned long replies[2]; /* echo, ready */
   unsigned long quiet;      /* sweeps with a ready sent and none owed */
   unsigned long sweeps;     /* shadow count */
   unsigned long abandon;
@@ -131,15 +129,12 @@ main(
   unsigned int accepted;
   unsigned int abandoned;
   unsigned int wasEchoed, wasReadied, wasAbandoned;
-  unsigned int armE;        /* one echo owed to the initiator */
-  unsigned int servedE;     /* served by the last sweep's echo re-send, until the next sweep */
-  unsigned int wasArmE;
   unsigned int tookE, tookR, tookA, tookAb;
-  unsigned int sawI, sawRE, sawRR;
+  unsigned int sawI, sawRE, sawRR, sawPE, sawPR;
   unsigned int exp;
   unsigned int live;
   unsigned int st;
-  const unsigned char *valPtr[5];   /* by act */
+  const unsigned char *valPtr[BRACHA87_READY_REPLY + 1];   /* by act */
   const unsigned char *cv;
   unsigned char out[BRACHA87_FIG1_OUT + 1];
   unsigned char value[VALUES][256];
@@ -158,11 +153,11 @@ main(
   calls = refused = 0;
   memset(steps, 0, sizeof (steps));
   memset(resends, 0, sizeof (resends));
-  arms = quiet = 0;
-  acc = armed = served = hld = 0;
+  memset(replies, 0, sizeof (replies));
+  quiet = 0;
+  acc = hld = 0;
   if (!(echoVal = calloc(256, 1)) || !(readyVal = calloc(256, 1))
-   || !(acc = calloc(256, 1)) || !(armed = calloc(256, 1)) || !(served = calloc(256, 1))
-   || !(hld = calloc(256, 1))) {
+   || !(acc = calloc(256, 1)) || !(hld = calloc(256, 1))) {
     printf("allocation failed\n");
     goto done;
   }
@@ -206,8 +201,6 @@ main(
     memset(echoVal, 0, 256);
     memset(readyVal, 0, 256);
     memset(acc, 0, 256);
-    memset(armed, 0, 256);
-    memset(served, 0, 256);
     memset(hld, 0, 256);
     memset(eKept, 0, sizeof (eKept));
     memset(rKept, 0, sizeof (rKept));
@@ -219,8 +212,6 @@ main(
     initVal = 0;
     isInit = 0;
     beside = echoed = readied = accepted = abandoned = 0;
-    armE = 0;
-    servedE = 0;
     memset(valPtr, 0, sizeof (valPtr));
     if (self == initiator && RND % 8) {
       if (bracha87Fig1Initiator(f, value[0])) {
@@ -260,10 +251,9 @@ main(
       wasEchoed = echoed;
       wasReadied = readied;
       wasAbandoned = abandoned;
-      wasArmE = armE;
       pre = sweeps;
       for (owed = 0, i = 0; i < n && !owed; ++i)
-        if (!acc[i] || armed[i])
+        if (!acc[i])
           owed = 1;
       memset(out, 0xEE, sizeof (out));
       ++calls;
@@ -301,13 +291,6 @@ main(
         }
         sweeps = pre;
         continue;
-      }
-
-      /* a sweep answers for its own re-sends: what the last one served
-       * is cleared at its start */
-      if (kind == BRACHA87_SWEEP) {
-        memset(served, 0, 256);
-        servedE = 0;
       }
 
       /* record what is fed, as the rows record it */
@@ -369,7 +352,7 @@ main(
        * re-send of the same message are told apart by the flag before
        * the call: a step needs it clear, a re-send needs it set. */
       tookE = tookR = tookA = tookAb = 0;
-      sawI = sawRE = sawRR = 0;
+      sawI = sawRE = sawRR = sawPE = sawPR = 0;
       k = 0;
       for (i = 0; i < nout; ++i) {
         unsigned int rank;
@@ -377,15 +360,17 @@ main(
         switch (out[i]) {
         case BRACHA87_ECHO_ALL:
           if (!wasEchoed) { rank = 1; tookE = 1; ++steps[0]; }
-          else { rank = 6; sawRE = 1; ++resends[1]; }
+          else { rank = 8; sawRE = 1; ++resends[1]; }
           break;
         case BRACHA87_READY_ALL:
           if (!wasReadied) { rank = 2; tookR = 1; ++steps[1]; }
-          else { rank = 7; sawRR = 1; ++resends[2]; }
+          else { rank = 9; sawRR = 1; ++resends[2]; }
           break;
         case BRACHA87_ACCEPT:  rank = 3; tookA = 1; ++steps[2]; break;
         case BRACHA87_ABANDON: rank = 4; tookAb = 1; ++steps[3]; break;
-        case BRACHA87_INITIAL_ALL: rank = 5; sawI = 1; ++resends[0]; break;
+        case BRACHA87_ECHO_REPLY: rank = 5; sawPE = 1; ++replies[0]; break;
+        case BRACHA87_READY_REPLY: rank = 6; sawPR = 1; ++replies[1]; break;
+        case BRACHA87_INITIAL_ALL: rank = 7; sawI = 1; ++resends[0]; break;
         default:
           printf("seed %lu ev %u: unknown action %u\n", s, ev, out[i]);
           goto done;
@@ -478,18 +463,23 @@ main(
         goto done;
       }
 
-      /* the arm: a READY without RECEIVED, once accepted -- read after
-       * the steps, so the READY that fires the accept arms its sender */
-      if (kind == BRACHA87_READY && !(ann & BRACHA87_ANN_RECEIVED) && accepted) {
-        armed[from] = 1;
-        ++arms;
+      /* the ready's reply: a READY without RECEIVED, once accepted --
+       * read after the steps, so the READY that fires the accept is
+       * answered -- unless its step 2 went to all on this call */
+      exp = kind == BRACHA87_READY && !(ann & BRACHA87_ANN_RECEIVED) && accepted && !tookR;
+      if (sawPR != exp) {
+        printf("seed %lu ev %u: READY_REPLY %s\n", s, ev, exp ? "missing" : "unexpected");
+        goto done;
       }
-      /* the echo's arm: p's INITIAL or BESIDE at a process holding both
-       * that had echoed before it came: the arrival that completes the
-       * holding, or fires the echo, is not p's word that it has not
+      /* the echo's reply: p's INITIAL or BESIDE at a process holding
+       * both that had echoed before it came: the arrival that completes
+       * the holding, or fires the echo, is not p's word that it has not
        * heard */
-      if ((kind == BRACHA87_INITIAL || kind == BRACHA87_BESIDE) && initVal && (beside || !besideFlag) && wasEchoed)
-        armE = 1;
+      exp = (kind == BRACHA87_INITIAL || kind == BRACHA87_BESIDE) && initVal && HOLDI && wasEchoed;
+      if (sawPE != exp) {
+        printf("seed %lu ev %u: ECHO_REPLY %s\n", s, ev, exp ? "missing" : "unexpected");
+        goto done;
+      }
 
       /* the re-sends: on a sweep, of a sent message, while live */
       live = !abandoned;
@@ -500,20 +490,9 @@ main(
         printf("seed %lu ev %u: INITIAL re-send %s\n", s, ev, exp ? "missing" : "unexpected");
         goto done;
       }
-      exp = kind == BRACHA87_SWEEP && live && wasEchoed && (!accepted || wasArmE);
+      exp = kind == BRACHA87_SWEEP && live && wasEchoed && !accepted;
       if (sawRE != exp) {
         printf("seed %lu ev %u: ECHO re-send %s\n", s, ev, exp ? "missing" : "unexpected");
-        goto done;
-      }
-      if (sawRE) {
-        /* to every process until accepted; past that to the initiator
-         * alone, and the arm is served: who, is checked below with the
-         * rest */
-        if (wasArmE)
-          servedE = 1;        /* any re-send of the echo reaches p and serves the arm */
-        armE = 0;
-      } else if (kind == BRACHA87_SWEEP && live && wasEchoed && !accepted) {
-        printf("seed %lu ev %u: echo re-send due before accept, not seen\n", s, ev);
         goto done;
       }
       exp = kind == BRACHA87_SWEEP && live && wasReadied && owed;
@@ -524,27 +503,20 @@ main(
       if (kind == BRACHA87_SWEEP && live && wasReadied && !owed)
         ++quiet;
       if (sawRR) {
-        /* to the processes owed it; the arms it serves are served, and
-         * stay answered until the next sweep */
-        for (i = 0; i < n; ++i) {
-          served[i] = armed[i];
-          armed[i] = 0;
-        }
         if (n < 256 && (bracha87Fig1Recipient(f, n) || bracha87Fig1Holder(f, n))) {
           printf("seed %lu ev %u: a Recipient or Holder past n\n", s, ev);
           goto done;
         }
       }
 
-      /* who the last sweep's re-sends went to, answered until the next
-       * sweep whatever arrives between, the hand-back to self included */
+      /* who a sweep's re-sends go to, as the instance now stands */
       for (i = 0; i < n; ++i) {
-        if ((bracha87Fig1Recipient(f, i) != 0) != (!acc[i] || served[i])) {
-          printf("seed %lu ev %u: Recipient %u disagrees (acc %u served %u)\n", s, ev, i, acc[i], served[i]);
+        if ((bracha87Fig1Recipient(f, i) != 0) != !acc[i]) {
+          printf("seed %lu ev %u: Recipient %u disagrees (acc %u)\n", s, ev, i, acc[i]);
           goto done;
         }
-        if ((bracha87Fig1EchoRecipient(f, i) != 0) != (!accepted || ((armE || servedE) && i == initiator))) {
-          printf("seed %lu ev %u: EchoRecipient %u disagrees (accepted %u armE %u servedE %u)\n", s, ev, i, accepted, armE, servedE);
+        if ((bracha87Fig1EchoRecipient(f, i) != 0) != !accepted) {
+          printf("seed %lu ev %u: EchoRecipient %u disagrees (accepted %u)\n", s, ev, i, accepted);
           goto done;
         }
       }
@@ -576,18 +548,21 @@ main(
           printf("seed %lu ev %u: Received bit %u disagrees\n", s, ev, i);
           goto done;
         }
-      for (k = 0; k <= BRACHA87_INITIAL_ALL; ++k) {
+      for (k = 0; k <= BRACHA87_READY_REPLY; ++k) {
         unsigned int want;
+        unsigned int base;    /* the act whose value a reply carries */
 
         if (k == BRACHA87_ABANDON)
           continue;
-        want = k == BRACHA87_INITIAL_ALL ? (isInit ? 1 : initVal)
-             : k == BRACHA87_ECHO_ALL ? echoed
-             : k == BRACHA87_READY_ALL ? readied : accepted;
+        base = k == BRACHA87_ECHO_REPLY ? BRACHA87_ECHO_ALL
+             : k == BRACHA87_READY_REPLY ? BRACHA87_READY_ALL : k;
+        want = base == BRACHA87_INITIAL_ALL ? (isInit ? 1 : initVal)
+             : base == BRACHA87_ECHO_ALL ? echoed
+             : base == BRACHA87_READY_ALL ? readied : accepted;
         cv = bracha87Fig1Value(f, k);
         if (k == BRACHA87_INITIAL_ALL && cv && !valPtr[k])
           valPtr[k] = cv;     /* held from the first (initial, v), and it stays put */
-        if ((cv != 0) != (want != 0) || (cv && (cv != valPtr[k]
+        if ((cv != 0) != (want != 0) || (cv && (cv != valPtr[base]
          || memcmp(cv, value[want - 1], vLen)))) {
           printf("seed %lu ev %u: Value(%u) disagrees with the record\n", s, ev, k);
           goto done;
@@ -599,17 +574,15 @@ main(
       }
     }
   }
-  printf("shadow: %lu seeds, %lu calls, %lu refused, steps %lu %lu %lu abandons %lu, re-sends %lu %lu %lu, arms %lu, quiet sweeps %lu\n",
+  printf("shadow: %lu seeds, %lu calls, %lu refused, steps %lu %lu %lu abandons %lu, re-sends %lu %lu %lu, replies %lu %lu, quiet sweeps %lu\n",
          seeds, calls, refused, steps[0], steps[1], steps[2], steps[3],
-         resends[0], resends[1], resends[2], arms, quiet);
+         resends[0], resends[1], resends[2], replies[0], replies[1], quiet);
   rc = 0;
 done:
   free(f);
   free(echoVal);
   free(readyVal);
   free(acc);
-  free(armed);
-  free(served);
   free(hld);
   return (rc);
 }

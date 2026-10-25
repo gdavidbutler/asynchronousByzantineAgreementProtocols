@@ -35,15 +35,21 @@
  *   a READY re-sent on a sweep goes to the processes the instance names
  *     and no other, carrying ACCEPTED once the sender has accepted and
  *     RECEIVED to each recipient it has recorded as having accepted;
- *   without loss the re-sends of READY stop at every process within
- *     two sweeps of the last accept -- one marked re-send each way --
- *     and the run still ends by abandon;
+ *   a reply comes only on an arrival, never on a sweep, and goes to
+ *     that arrival's sender alone, an echo's to the initiator;
+ *   without loss no READY is re-sent at all: a ready and the answer it
+ *     asks for cross before the first sweep, toward a slow process too,
+ *     since its answers come on the arrivals and not on its sweeps; and
+ *     the run still ends by abandon;
  *   every process abandons, so the run ends by abandon and nothing else;
  *   an instance fed nothing, or only the BESIDE, abandons on the sweep
  *     after its abandon count all the same.
  *
- * usage: test_bracha87Fig1 n t loss    (loss in percent; every process
- *        is honest at any t)
+ * With slow = k, process n - 1 takes one sweep in k, as a process whose
+ * caller is slow to sweep does; the asserts are the same.
+ *
+ * usage: test_bracha87Fig1 n t loss [slow]    (loss in percent; every
+ *        process is honest at any t; slow defaults to 1, every sweep)
  */
 
 #include <stdio.h>
@@ -76,14 +82,18 @@ main(
   unsigned int *lastReady;  /* per process: the sweep of its last READY re-send */
   unsigned int lastAccept;  /* the sweep the last process accepted at */
   unsigned int readyResends;
+  unsigned int replies;
+  unsigned int queued;      /* messages put on the queue */
   unsigned int lastInitial;       /* the sweep of the last INITIAL re-send */
   const unsigned char *cv;
   int resend;               /* a READY re-sent on a sweep */
+  int reply;                /* an ECHO_REPLY or READY_REPLY */
   unsigned char besideHeld[256];  /* per process: a beside message kept ahead of its initial */
   unsigned long sz;
   unsigned int n;
   unsigned int t;
   unsigned int loss;
+  unsigned int slow;        /* process n - 1 sweeps one sweep in slow */
   unsigned int seed;
   unsigned int qcap;
   unsigned int qhead;
@@ -98,21 +108,24 @@ main(
   unsigned int nout;
   unsigned int nwork;
   unsigned int a;
+  unsigned int to;          /* the sender of the arrival an action answers */
   unsigned char annot;
   unsigned char out[BRACHA87_FIG1_OUT];
   unsigned char work[64];
+  unsigned char workTo[64]; /* per action: the sender of the arrival that returned it */
   unsigned char v[VLEN];
   int rc;
 
-  if (argc != 4) {
-    fprintf(stderr, "usage: %s n t loss\n", argv[0]);
+  if (argc != 4 && argc != 5) {
+    fprintf(stderr, "usage: %s n t loss [slow]\n", argv[0]);
     return (1);
   }
   n = atoi(argv[1]);
   t = atoi(argv[2]);
   loss = atoi(argv[3]);
-  if (n < 1 || n > 256 || t > 85) {
-    fprintf(stderr, "n is 1..256, t is 0..85\n");
+  slow = argc == 5 ? atoi(argv[4]) : 1;
+  if (n < 1 || n > 256 || t > 85 || slow < 1 || slow > 64) {
+    fprintf(stderr, "n is 1..256, t is 0..85, slow is 1..64\n");
     return (1);
   }
   seed = 12345 + n * 7 + loss;
@@ -124,11 +137,13 @@ main(
   lastReady = 0;
   lastAccept = 0;
   readyResends = 0;
+  replies = 0;
+  queued = 0;
   lastInitial = 0;
 
   /* refusals */
-  /* four values, K echo and K ready values and their counts, five bitmaps */
-  if (bracha87Fig1Sz(255, 255, 86) < (4U + 2U * 86) * 256 + 2U * 86 * 2 + 5U * 32
+  /* four values, K echo and K ready values and their counts, four bitmaps */
+  if (bracha87Fig1Sz(255, 255, 86) < (4U + 2U * 86) * 256 + 2U * 86 * 2 + 4U * 32
    || bracha87Fig1Sz(255, 255, 0)) {
     printf("Sz too small at n=256, vLen=256\n");
     goto done;
@@ -238,11 +253,15 @@ main(
   for (j = 0; j < n; ++j) {
     if (j == p) {
       nout = bracha87Fig1Input(f[p], BRACHA87_INITIAL, p, v, 0, out);
-      for (k = 0; k < nout; ++k)
+      for (k = 0; k < nout; ++k) {
+        workTo[nwork] = p;
         work[nwork++] = out[k];
+      }
       nout = bracha87Fig1Input(f[p], BRACHA87_BESIDE, p, 0, 0, out);
-      for (k = 0; k < nout; ++k)
+      for (k = 0; k < nout; ++k) {
+        workTo[nwork] = p;
         work[nwork++] = out[k];
+      }
       continue;
     }
     q[qtail].kind = BRACHA87_INITIAL;
@@ -264,6 +283,7 @@ step0done:
     while (qhead < qtail) {
       struct msg *m;
 
+      ++queued;
       m = &q[qhead++];
       seed = seed * 1103515245u + 12345u;
       if (((seed >> 16) & 0x7FFF) % 100 < loss) {
@@ -290,6 +310,7 @@ step0done:
         besideHeld[p] = 0;
         nwork += bracha87Fig1Input(f[p], BRACHA87_BESIDE, m->from, 0, 0, work + nwork);
       }
+      memset(workTo, m->from, nwork);
       site = 1;
       goto run;
 arrivalDone:
@@ -301,8 +322,16 @@ arrivalDone:
     for (i = 0; i < n; ++i) {
       if (abandoned[i])
         continue;
+      if (i == n - 1 && sweeps % slow)
+        continue;
       p = i;
       nwork = bracha87Fig1Input(f[p], BRACHA87_SWEEP, 0, 0, 0, work);
+      for (k = 0; k < nwork; ++k)
+        if (work[k] == BRACHA87_ECHO_REPLY || work[k] == BRACHA87_READY_REPLY) {
+          printf("a sweep returned a reply at %u\n", p);
+          goto done;
+        }
+      memset(workTo, p, nwork);
       site = 2;
       goto run;
 sweepDone:
@@ -329,14 +358,12 @@ sweepDone:
     printf("loss given and nothing dropped\n");
     goto done;
   }
-  /* without loss the READY re-sends stop: every process is recorded by
-   * every other within a sweep of the last accept, marked by the next */
-  if (!loss)
-    for (i = 0; i < n; ++i)
-      if (lastReady[i] > lastAccept + 2) {
-        printf("process %u re-sent READY at sweep %u, the last accept was at %u\n", i, lastReady[i], lastAccept);
-        goto done;
-      }
+  /* without loss no READY is re-sent: every process is recorded by
+   * every other on the arrivals, before the first sweep */
+  if (!loss && readyResends) {
+    printf("%u READY re-sends without loss\n", readyResends);
+    goto done;
+  }
   for (k = 0, i = 0; i < n; ++i)
     if (lastReady[i] > k)
       k = lastReady[i];
@@ -352,8 +379,8 @@ sweepDone:
     printf("INITIAL re-sent at sweep %u without loss\n", lastInitial);
     goto done;
   }
-  printf("n=%u t=%u loss=%u%%: all accepted, all abandoned, %u sweeps, %u dropped, %u READY re-sends, the last at sweep %u after the last accept at %u, the last INITIAL re-send at sweep %u\n",
-         n, t, loss, sweeps, dropped, readyResends, k, lastAccept, lastInitial);
+  printf("n=%u t=%u loss=%u%% slow=%u: all accepted, all abandoned, %u sweeps, %u queued, %u dropped, %u READY re-sends, the last at sweep %u after the last accept at %u, %u replies, the last INITIAL re-send at sweep %u\n",
+         n, t, loss, slow, sweeps, queued, dropped, readyResends, k, lastAccept, replies, lastInitial);
   rc = 0;
 done:
   if (f)
@@ -371,6 +398,8 @@ done:
 run:
   while (nwork) {
     a = work[--nwork];
+    to = workTo[nwork];
+    reply = a == BRACHA87_ECHO_REPLY || a == BRACHA87_READY_REPLY;
     if (a == BRACHA87_ACCEPT) {
       if (!(cv = bracha87Fig1Value(f[p], BRACHA87_ACCEPT))) {
         printf("ACCEPT without a value at %u\n", p);
@@ -407,9 +436,16 @@ run:
         goto done;
       }
     }
-    if (a != BRACHA87_INITIAL_ALL && a != BRACHA87_ECHO_ALL && a != BRACHA87_READY_ALL) {
+    if (a != BRACHA87_INITIAL_ALL && a != BRACHA87_ECHO_ALL && a != BRACHA87_READY_ALL && !reply) {
       printf("unexpected action %u at %u\n", a, p);
       goto done;
+    }
+    if (reply) {
+      if (a == BRACHA87_ECHO_REPLY && to != 0) {
+        printf("an echo's reply to other than the initiator at %u\n", p);
+        goto done;
+      }
+      ++replies;
     }
     if (!(cv = bracha87Fig1Value(f[p], a))) {
       printf("action without a value at %u\n", p);
@@ -436,35 +472,42 @@ run:
         continue;
       if (a == BRACHA87_ECHO_ALL && site == 2 && !bracha87Fig1EchoRecipient(f[p], j))
         continue;
+      /* a reply to the sender of the arrival that returned it alone */
+      if (reply && j != to)
+        continue;
       /* every echo and ready says whether this process holds the
        * initial and the message beside it; a ready says the rest */
       annot = 0;
       if (a != BRACHA87_INITIAL_ALL && HOLDS(bracha87Fig1State(f[p])))
         annot |= BRACHA87_ANN_HOLDING;
-      if (a == BRACHA87_READY_ALL) {
+      if (a == BRACHA87_READY_ALL || a == BRACHA87_READY_REPLY) {
         if (bracha87Fig1State(f[p]) & BRACHA87_F1_ACCEPTED)
           annot |= BRACHA87_ANN_ACCEPTED;
         if (BRACHA87_BIT_TST(bracha87Fig1Received(f[p]), j))
           annot |= BRACHA87_ANN_RECEIVED;
       }
       if (j == p) {
-        /* the hand-back is an input like any other; who this sweep's
-         * re-sends go to stands until the next sweep, so its place in
-         * this loop does not matter */
+        /* the hand-back is an input like any other; it moves only what
+         * the instance records of self, so its place in this loop does
+         * not matter.  What it returns goes back to self. */
         if (nwork + 2 * BRACHA87_FIG1_OUT > sizeof (work) / sizeof (work[0])) {
           printf("hand-back cascade too deep at %u\n", p);
           goto done;
         }
         nout = bracha87Fig1Input(f[p],
                                  a == BRACHA87_INITIAL_ALL ? BRACHA87_INITIAL
-                               : a == BRACHA87_ECHO_ALL ? BRACHA87_ECHO : BRACHA87_READY,
+                               : a == BRACHA87_ECHO_ALL || a == BRACHA87_ECHO_REPLY ? BRACHA87_ECHO : BRACHA87_READY,
                                  p, cv, annot, out);
-        for (k = 0; k < nout; ++k)
+        for (k = 0; k < nout; ++k) {
+          workTo[nwork] = p;
           work[nwork++] = out[k];
+        }
         if (a == BRACHA87_INITIAL_ALL) {
           nout = bracha87Fig1Input(f[p], BRACHA87_BESIDE, p, 0, 0, out);
-          for (k = 0; k < nout; ++k)
+          for (k = 0; k < nout; ++k) {
+            workTo[nwork] = p;
             work[nwork++] = out[k];
+          }
         }
         continue;
       }
@@ -473,7 +516,7 @@ run:
         goto done;
       }
       q[qtail].kind = a == BRACHA87_INITIAL_ALL ? BRACHA87_INITIAL
-                    : a == BRACHA87_ECHO_ALL ? BRACHA87_ECHO : BRACHA87_READY;
+                    : a == BRACHA87_ECHO_ALL || a == BRACHA87_ECHO_REPLY ? BRACHA87_ECHO : BRACHA87_READY;
       q[qtail].from = p;
       q[qtail].to = j;
       q[qtail].annot = annot;

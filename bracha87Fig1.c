@@ -27,22 +27,15 @@
  * kept, one per distinct ready value kept (values of each, the caller's
  * K); then bytes: the initiator's v, the value echoed, the value
  * readied, the value accepted (vLen each); the K echo values and the K
- * ready values kept (vLen each); then six bitmaps of (n + 7) / 8
+ * ready values kept (vLen each); then four bitmaps of (n + 7) / 8
  * bytes: the senders of (echo, v), the senders of (ready, v), the
- * senders recorded as holding the initial, the senders recorded as
- * having accepted, the senders armed, and the senders the last sweep's
- * re-send of (ready, v) served.
+ * senders recorded as holding the initial, and the senders recorded as
+ * having accepted.
  *
  * A value is kept the first time a sender sends it, until K are kept;
  * a sender of any other value is recorded as a sender and counts
  * toward no value.  What K = t + 1 keeps and what it can lose is in
  * the header.
- *
- * The arms a sweep's re-send of (ready, v) serves move to the served
- * set, which answers bracha87Fig1Recipient until the next sweep clears
- * it; the echo's arm is served the same way (echoArm 2).  So the
- * inputs between two sweeps, the hand-back to self among them, leave
- * the answer standing.
  */
 struct bracha87Fig1 {
   unsigned int sweeps;    /* this process's, since it started, up to abandon */
@@ -56,7 +49,6 @@ struct bracha87Fig1 {
   unsigned char values;   /* K: distinct values kept per kind */
   unsigned char echoes;   /* echo values kept so far */
   unsigned char readies;  /* ready values kept so far */
-  unsigned char echoArm;  /* 0 none, 1 one echo owed to p, 2 served: cleared at the next sweep */
   unsigned char beside;   /* the caller's flag: something rides beside (initial, v) */
   unsigned short cnt[1];
 };
@@ -78,12 +70,10 @@ struct bracha87Fig1 {
 #define READYSET(f)  (ECHOSET(f) + BITS(N(f)))
 #define HOLDSET(f)   (READYSET(f) + BITS(N(f)))
 #define ACCSET(f)    (HOLDSET(f) + BITS(N(f)))
-#define ARMED(f)     (ACCSET(f) + BITS(N(f)))
-#define SERVED(f)    (ARMED(f) + BITS(N(f)))
 #define BIT_SET(m, p) ((m)[(p) >> 3] |= 1 << ((p) & 7))
 /* the bytes from cnt on, for an instance of n, vLen, K */
 #define REST(n1, vLen1, K) \
-  (2U * (K) * sizeof (unsigned short) + (4U + 2U * (K)) * ((vLen1) + 1) + 6U * BITS((n1) + 1))
+  (2U * (K) * sizeof (unsigned short) + (4U + 2U * (K)) * ((vLen1) + 1) + 4U * BITS((n1) + 1))
 
 unsigned int
 bracha87Fig1Sz(
@@ -121,7 +111,6 @@ bracha87Fig1Init(
   f->flags = beside ? 0 : BRACHA87_F1_BESIDE;
   f->values = values;
   f->echoes = f->readies = 0;
-  f->echoArm = 0;
   f->beside = beside;
   memset(f->cnt, 0, REST(n1, vLen1, values));
   return (0);
@@ -168,12 +157,12 @@ bracha87Fig1Input(
   /* the dispatch's boundary locals, named as bracha87Fig1ToC.dtc names them */
   int sweep, receivedInitial, ecGtHalfNT, rdGeTPlus1, rdGe2TPlus1;
   int haveEchoed, haveSentReady, haveAccepted, amInitiator, holdSomething;
-  int holdingBand, abandonBand, abandoned, owedBand, echoArmed;
+  int holdingBand, abandonBand, abandoned, owedBand;
   int sendEcho, sendReady, acceptV, takeStep1, takeStep2, takeStep3;
   int abandon, retryInitial, retryEcho, retryReady;
   /* bracha87Fig1ReadyToC.dtc's, run once after the main dispatch */
-  int readyArrival, carriesReceived, accepted, armSender;
-  int initialArrival, holdsBoth, echoedBefore, armEcho;
+  int readyArrival, carriesReceived, accepted, replyReady;
+  int initialArrival, holdsBoth, echoedBefore, replyEcho;
 
   if (!f || !out || kind > BRACHA87_SWEEP)
     return (0);
@@ -257,19 +246,11 @@ bracha87Fig1Input(
   default:
     break;
   }
-  /* a sweep answers for its own re-sends: what the last one served is
-   * cleared at its start and not before, so the inputs between, the
-   * hand-back to self among them, leave the answer standing */
-  if (kind == BRACHA87_SWEEP) {
-    memset(SERVED(f), 0, BITS(n));
-    if (f->echoArm == 2)
-      f->echoArm = 0;
-    /* this sweep counts, up to the abandon count */
-    if (f->sweeps < f->abandon)
-      ++f->sweeps;
-  }
-  echoArmed = f->echoArm == 1;
-  /* the arm reads whether this process had echoed before this event */
+  /* this sweep counts, up to the abandon count */
+  if (kind == BRACHA87_SWEEP && f->sweeps < f->abandon)
+    ++f->sweeps;
+  /* the echo's reply reads whether this process had echoed before this
+   * event */
   echoedBefore = (f->flags & BRACHA87_F1_ECHOED) != 0;
 
   /* what does not vary by candidate value */
@@ -280,9 +261,9 @@ bracha87Fig1Input(
     if (!BRACHA87_BIT_TST(HOLDSET(f), i))
       holdingBand = 0;
   /* (ready, v) is owed to a process until it is recorded as having
-   * accepted, and once more while armed */
+   * accepted */
   for (owedBand = 0, i = 0; i < n && !owedBand; ++i)
-    if (!BRACHA87_BIT_TST(ACCSET(f), i) || BRACHA87_BIT_TST(ARMED(f), i))
+    if (!BRACHA87_BIT_TST(ACCSET(f), i))
       owedBand = 1;
   abandonBand = f->abandon && f->sweeps >= f->abandon;
   sweep = kind == BRACHA87_SWEEP;
@@ -380,8 +361,9 @@ skip:
   ++cand;
   goto next;
 done:
-  /* the arm: a (ready, v) arriving without RECEIVED, once this process
-   * has an accept to carry; "accepted" is read after the steps */
+  /* the ready's reply: a (ready, v) arriving without RECEIVED, once
+   * this process has an accept to carry; "accepted" is read after the
+   * steps */
   readyArrival = kind == BRACHA87_READY;
   carriesReceived = readyArrival && (annot & BRACHA87_ANN_RECEIVED) != 0;
   accepted = (f->flags & BRACHA87_F1_ACCEPTED) != 0;
@@ -391,10 +373,6 @@ done:
   holdsBoth = (f->flags & (BRACHA87_F1_INITIAL | BRACHA87_F1_BESIDE))
            == (BRACHA87_F1_INITIAL | BRACHA87_F1_BESIDE);
 #include "bracha87Fig1ReadyRules.c"
-  if (armSender)
-    BIT_SET(ARMED(f), from);
-  if (armEcho && f->echoArm != 1)
-    f->echoArm = 1;
   if (steps & (1 << BRACHA87_ECHO_ALL))
     out[nout++] = BRACHA87_ECHO_ALL;
   if (steps & (1 << BRACHA87_READY_ALL))
@@ -403,22 +381,20 @@ done:
     out[nout++] = BRACHA87_ACCEPT;
   if (steps & (1 << BRACHA87_ABANDON))
     out[nout++] = BRACHA87_ABANDON;
+  /* the replies, to the sender of this arrival; the echo's row reads an
+   * echo taken before the event, and the ready's step, sent to all,
+   * reaches the sender already */
+  if (replyEcho)
+    out[nout++] = BRACHA87_ECHO_REPLY;
+  if (replyReady && !(steps & (1 << BRACHA87_READY_ALL)))
+    out[nout++] = BRACHA87_READY_REPLY;
   if (evaluated) {
     if (retryI)
       out[nout++] = BRACHA87_INITIAL_ALL;
-    if (retryE && !(steps & (1 << BRACHA87_ECHO_ALL))) {
+    if (retryE && !(steps & (1 << BRACHA87_ECHO_ALL)))
       out[nout++] = BRACHA87_ECHO_ALL;
-      /* the arm it serves is served, answered until the next sweep */
-      if (f->echoArm == 1)
-        f->echoArm = 2;
-    }
-    if (retryR && !(steps & (1 << BRACHA87_READY_ALL))) {
+    if (retryR && !(steps & (1 << BRACHA87_READY_ALL)))
       out[nout++] = BRACHA87_READY_ALL;
-      /* to the processes owed it; the arms it serves move to the
-       * served set, answered until the next sweep */
-      memcpy(SERVED(f), ARMED(f), BITS(n));
-      memset(ARMED(f), 0, BITS(n));
-    }
   }
   return (nout);
 }
@@ -434,8 +410,10 @@ bracha87Fig1Value(
   case BRACHA87_INITIAL_ALL:
     return (f->flags & (BRACHA87_F1_INITIATOR | BRACHA87_F1_INITIAL) ? INIT(f) : 0);
   case BRACHA87_ECHO_ALL:
+  case BRACHA87_ECHO_REPLY:
     return (f->flags & BRACHA87_F1_ECHOED ? ECHOED(f) : 0);
   case BRACHA87_READY_ALL:
+  case BRACHA87_READY_REPLY:
     return (f->flags & BRACHA87_F1_RDSENT ? READIED(f) : 0);
   case BRACHA87_ACCEPT:
     return (f->flags & BRACHA87_F1_ACCEPTED ? ACCEPTED(f) : 0);
@@ -461,7 +439,7 @@ bracha87Fig1EchoRecipient(
 ){
   if (!f || p > f->n1)
     return (0);
-  return (!(f->flags & BRACHA87_F1_ACCEPTED) || (f->echoArm && p == f->initiator));
+  return (!(f->flags & BRACHA87_F1_ACCEPTED));
 }
 
 int
@@ -471,7 +449,7 @@ bracha87Fig1Recipient(
 ){
   if (!f || p > f->n1)
     return (0);
-  return (!BRACHA87_BIT_TST(ACCSET(f), p) || BRACHA87_BIT_TST(SERVED(f), p));
+  return (!BRACHA87_BIT_TST(ACCSET(f), p));
 }
 
 const unsigned char *

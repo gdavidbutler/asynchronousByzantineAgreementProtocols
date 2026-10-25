@@ -41,7 +41,8 @@
  * In the random seeds every READY is fed with the two annotations the
  * adversary chooses, to the seat and to its mirror alike; the scenes
  * feed none.  The seat's instance must say what the mirror says: its
- * Received, and after a sweep step that re-sent READY, its Recipients.
+ * Received, and after a sweep step that re-sent READY, its Recipients;
+ * and the seat's replies, on an arrival, must be the mirror's.
  *
  * Every return is checked against the rows read as statements about
  * that record: the Figure 1 sends equal the mirror's; a broadcast at
@@ -182,6 +183,7 @@ main(
   unsigned long subsets;
   unsigned long abandons;
   unsigned long coins;
+  unsigned long replies;
   unsigned long coinsBefore;
   unsigned long witQ;        /* validations by the "?" path */
   unsigned long witCoin;     /* by the coin path */
@@ -231,18 +233,22 @@ main(
   unsigned int sawEcho;
   unsigned int sawReady;
   unsigned int sawInitRe;
+  unsigned int sawRepE;      /* a reply to the arrival's sender, echo or ready */
+  unsigned int sawRepR;
   unsigned int rank;         /* the header's order of actions in one return */
   unsigned int changed;      /* the entries-and-chain pass placed something */
   unsigned int ceiling;      /* an undecided BA's turn is due past the last round */
   unsigned int ceilingBa;    /* the first such BA */
   unsigned char consumed[MAXN];  /* an entry seen this call has been placed */
   unsigned int beside;       /* the seat's beside flag this seed */
-  unsigned char sendVal[3];  /* the value each of this call's sends carried */
-  unsigned char mirVal[3];
+  unsigned char sendVal[5];  /* the value each of this call's sends carried: */
+  unsigned char mirVal[5];   /* initial, echo, ready, echo reply, ready reply */
   unsigned char mirGot[3];
   unsigned int mirEcho;
   unsigned int mirReady;
   unsigned int mirInitRe;
+  unsigned int mirRepE;
+  unsigned int mirRepR;
   unsigned char o1[BRACHA87_FIG1_OUT];
   unsigned char rcvBefore[(MAXN + 7) / 8];  /* Received before a refused input */
   unsigned char v8;
@@ -275,6 +281,7 @@ main(
   rc = 1;
   calls = refused = turns = decisions = subsets = abandons = 0;
   coins = witQ = witCoin = witTie = 0;
+  replies = 0;
   sz1 = (bracha87Fig1Sz(MAXN - 1, 0, 3) + 7) & ~7UL;
   szV = (bracha87Fig1Sz(MAXN - 1, VLEN - 1, (MAXN - 1) / 3 + 1) + 7) & ~7UL;
   mirV = calloc(MAXN, szV);
@@ -792,7 +799,7 @@ main(
         sw = bkr94acsSweeps(a);
         d0 = bkr94acsDecision(a, 0);
         made = i < n && q < n && k >= 1 && k <= maxRounds && EX(i, k, q);
-        if (kind <= BKR94ACS_READY && i < n && q < n && k >= 1 && k <= maxRounds && EX(i, k, q))
+        if (made && kind <= BKR94ACS_READY)
           memcpy(rcvBefore, bracha87Fig1Received(MIR(i, k, q)), (n + 7) / 8);
         if (kind == EVSWEEP) {
           more = bkr94acsSweep(a, out, &nout);
@@ -802,7 +809,7 @@ main(
           FAIL("a refused input returned actions");
         if (bkr94acsSweeps(a) != sw || bkr94acsDecision(a, 0) != d0)
           FAIL("a refused input changed state");
-        if (kind <= BKR94ACS_READY && i < n && q < n && k >= 1 && k <= maxRounds && EX(i, k, q)
+        if (made && kind <= BKR94ACS_READY
          && memcmp(rcvBefore, bracha87Fig1Received(bkr94acsInstance(a, i, q, k)), (n + 7) / 8))
           FAIL("a refused input changed Received");
         if (!made && i < n && q < n && k >= 1 && k <= maxRounds && bkr94acsInstance(a, i, q, k))
@@ -813,7 +820,7 @@ main(
       /* the call */
       memset(sawInitial, 0, sizeof (sawInitial));
       memset(sawDecided, 0, sizeof (sawDecided));
-      sawEcho = sawReady = sawInitRe = 0;
+      sawEcho = sawReady = sawInitRe = sawRepE = sawRepR = 0;
       visited = 0;
       rank = 0;
       memset(sendVal, 0, sizeof (sendVal));
@@ -821,7 +828,7 @@ main(
       memset(mirGot, 0, sizeof (mirGot));
       sawAbandon = sawSubset = 0;
       passDone = 0;
-      mirEcho = mirReady = mirInitRe = 0;
+      mirEcho = mirReady = mirInitRe = mirRepE = mirRepR = 0;
       if (kind == EVQ) {
         /* Q(i) = 1 becomes known by i's value broadcast being accepted
          * here.  Feed it, to the seat and to its mirror: this seat's own
@@ -908,13 +915,17 @@ main(
             vex[i] = 1;
           }
           acc = 0;
-          mirEcho = mirReady = 0;
+          mirEcho = mirReady = mirRepE = mirRepR = 0;
           w = bracha87Fig1Input(MIRV(i), fk, fr, fv, 0, o1);
           for (x = 0; x < w; ++x) {
             if (o1[x] == BRACHA87_ECHO_ALL)
               mirEcho = 1;
             if (o1[x] == BRACHA87_READY_ALL)
               mirReady = 1;
+            if (o1[x] == BRACHA87_ECHO_REPLY)
+              mirRepE = 1;
+            if (o1[x] == BRACHA87_READY_REPLY)
+              mirRepR = 1;
             if (o1[x] == BRACHA87_ACCEPT)
               acc = 1;
           }
@@ -925,7 +936,9 @@ main(
             ba[i].qKnown = 1;
           if (acc || dup)
             break;
-          if (nout != mirEcho + mirReady)
+          /* before the accept nothing here is answered: it has no
+           * accept to carry, and has echoed only on what this loop fed */
+          if (mirRepE || mirRepR || nout != mirEcho + mirReady)
             FAIL("a value broadcast's arrival returned other than its own sends");
           for (x = 0; x < nout; ++x)
             if (out[x].k || out[x].ba != i || out[x].q != i
@@ -961,6 +974,14 @@ main(
           if (o1[x] == BRACHA87_READY_ALL) {
             mirReady = 1;
             mirVal[2] = *bracha87Fig1Value(MIR(i, k, q), BRACHA87_READY_ALL);
+          }
+          if (o1[x] == BRACHA87_ECHO_REPLY) {
+            mirRepE = 1;
+            mirVal[3] = *bracha87Fig1Value(MIR(i, k, q), BRACHA87_ECHO_REPLY);
+          }
+          if (o1[x] == BRACHA87_READY_REPLY) {
+            mirRepR = 1;
+            mirVal[4] = *bracha87Fig1Value(MIR(i, k, q), BRACHA87_READY_REPLY);
           }
         }
         nout = bkr94acsInput(a, kind, i, q, k, from, (v8 = val, &v8), ann, out);
@@ -1049,7 +1070,8 @@ main(
          * INITIAL among them, Figure 1's first), then the sends and
          * decisions the chain and the turns fire, then SUBSET, then
          * ABANDON */
-        w = act->act == BKR94ACS_SEND_ECHO || act->act == BKR94ACS_SEND_READY ? 1
+        w = act->act == BKR94ACS_SEND_ECHO || act->act == BKR94ACS_SEND_READY
+         || act->act == BKR94ACS_REPLY_ECHO || act->act == BKR94ACS_REPLY_READY ? 1
           : act->act == BKR94ACS_SEND_INITIAL
             && kind == EVSWEEP && visited && act->ba == vb && act->k == vk && vq == self
             && act->k <= ba[act->ba].round ? 1
@@ -1080,6 +1102,29 @@ main(
               FAIL("two readies in one return");
             sawReady = 1;
             sendVal[2] = act->value;
+          }
+          break;
+        case BKR94ACS_REPLY_ECHO:
+        case BKR94ACS_REPLY_READY:
+          /* to the sender of the arrival fed, of the instance fed; a
+           * sweep answers no arrival */
+          if (kind == EVSWEEP)
+            FAIL("a reply on a sweep step");
+          if (kind == EVQ ? act->k || act->ba != i || act->q != i
+           : act->ba != i || act->q != q || act->k != k)
+            FAIL("a reply for another instance");
+          if (act->act == BKR94ACS_REPLY_ECHO) {
+            if (sawRepE)
+              FAIL("two echo replies in one return");
+            sawRepE = 1;
+            ++replies;
+            sendVal[3] = act->value;
+          } else {
+            if (sawRepR)
+              FAIL("two ready replies in one return");
+            sawRepR = 1;
+            ++replies;
+            sendVal[4] = act->value;
           }
           break;
         case BKR94ACS_SEND_INITIAL:
@@ -1122,7 +1167,8 @@ main(
       /* Figure 1: the instance's sends are the mirror's, on an arrival and
        * on the cursor's visit alike */
       if ((kind <= EVQ || visited)
-       && (sawEcho != mirEcho || sawReady != mirReady || sawInitRe != mirInitRe))
+       && (sawEcho != mirEcho || sawReady != mirReady || sawInitRe != mirInitRe
+        || sawRepE != mirRepE || sawRepR != mirRepR))
         FAIL("the instance's sends differ from the mirror's");
       /* a value broadcast's send carries what the mirror's does */
       if (kind == EVQ || (visited && !vk)) {
@@ -1132,10 +1178,11 @@ main(
 
         j = kind == EVQ ? i : vb;
         si = bkr94acsInstance(a, j, j, 0);
-        for (x = 0; x < 3; ++x) {
-          if (!(x == 0 ? sawInitRe : x == 1 ? sawEcho : sawReady))
+        for (x = 0; x < 5; ++x) {
+          if (!(x == 0 ? sawInitRe : x == 1 ? sawEcho : x == 2 ? sawReady : x == 3 ? sawRepE : sawRepR))
             continue;
-          w = x == 0 ? BRACHA87_INITIAL_ALL : x == 1 ? BRACHA87_ECHO_ALL : BRACHA87_READY_ALL;
+          w = x == 0 ? BRACHA87_INITIAL_ALL : x == 1 ? BRACHA87_ECHO_ALL : x == 2 ? BRACHA87_READY_ALL
+            : x == 3 ? BRACHA87_ECHO_REPLY : BRACHA87_READY_REPLY;
           p1 = bracha87Fig1Value(si, w);
           p2 = bracha87Fig1Value(MIRV(j), w);
           if (!p1 || !p2 || memcmp(p1, p2, VLEN))
@@ -1143,7 +1190,8 @@ main(
         }
       }
       if ((sawEcho && sendVal[1] != mirVal[1]) || (sawReady && sendVal[2] != mirVal[2])
-       || (sawInitRe && sendVal[0] != mirVal[0]))
+       || (sawInitRe && sendVal[0] != mirVal[0])
+       || (sawRepE && sendVal[3] != mirVal[3]) || (sawRepR && sendVal[4] != mirVal[4]))
         FAIL("a send carries a value the mirror did not");
 
       /* Figure 3: close the validated sets under the validate row */
@@ -1442,8 +1490,8 @@ main(
             FAIL("Instance disagrees with the record of which instances exist");
     }
   }
-  printf("acs shadow: %lu seeds, %lu calls, %lu refused, %lu turns, %lu decisions, %lu subsets, %lu abandons, %lu coins; witness by ?, coin, tie: %lu %lu %lu\n",
-         seeds, calls, refused, turns, decisions, subsets, abandons, coins, witQ, witCoin, witTie);
+  printf("acs shadow: %lu seeds, %lu calls, %lu refused, %lu turns, %lu decisions, %lu subsets, %lu abandons, %lu coins, %lu replies; witness by ?, coin, tie: %lu %lu %lu\n",
+         seeds, calls, refused, turns, decisions, subsets, abandons, coins, replies, witQ, witCoin, witTie);
   rc = 0;
 done:
   free(a);

@@ -9,9 +9,10 @@
 # applied -- "have echoed", "have sent ready", "have accepted",
 # "abandoned" -- plus the counts, recorded on every arrival, as the
 # figure's "(including messages received in step ...)" says, and two
-# records per sender that BPR reads: recorded as having accepted, which
-# the C records beside a (ready, v) that carries ACCEPTED as it records
-# the ready itself, and armed, which bracha87Fig1Ready.dtc outputs.
+# records per sender that BPR reads: recorded as holding the initial
+# and recorded as having accepted, which the C records beside an
+# (echo, v) or (ready, v) that carries HOLDING or ACCEPTED as it
+# records the message itself.
 #
 # Three authors, three groups, composed by dtc:
 #   the paper's rows   -- the figure's steps, verbatim; an output says
@@ -21,8 +22,8 @@
 #   BPR's rows         -- what is re-sent on a sweep, and to whom:
 #                         Bracha Phase Retry, the end-to-end argument
 #                         (SRC84.txt) applied to the figure's sends.
-#                         The arm a (ready, v) arriving without RECEIVED
-#                         sets is BPR's too, in bracha87Fig1Ready.dtc,
+#                         The replies an arrival returns to its sender
+#                         are BPR's too, in bracha87Fig1Ready.dtc,
 #                         compiled alone and run after this dispatch
 #
 # The chain is one-directional: paper -> caller -> BPR.  A caller row
@@ -71,19 +72,9 @@
 #                                    figure inside a larger one counts
 #                                    there and gives no count here
 #   "abandoned"                      { yes, no }
-#   "echo armed"                     { yes, no }
-#                                    p's (initial, v) or BESIDE arrived
-#                                    while this process held both and
-#                                    had echoed: p lacks this process's
-#                                    HOLDING, and one echo is owed it
-#                                    (bracha87Fig1Ready.dtc)
 #   "processes owed (ready, v)"      { none, some }
 #                                    a process is owed it until recorded
-#                                    as having accepted, and once more
-#                                    while armed; the re-send to it
-#                                    serves the arm and clears it, so an
-#                                    arm is one re-send, not a standing
-#                                    bit
+#                                    as having accepted
 #
 # Outputs:
 #   paper:   "send (echo, v)"  "send (ready, v)"  "accept v"
@@ -220,31 +211,27 @@ no,arrival,,,
 # (past accept, readies carry the rest: an accepted process holds 2t+1
 # readies, t+1 of them correct and re-sent, and t+1 readies take any
 # correct process holding the caller's something through steps 1 and 2
-# without an echo) -- and once
-# more, to p alone, while the echo is armed: p's re-send of its
-# (initial, v) is p's word that it has not heard this process's
-# HOLDING, and the echo is what carries it.
-@"retry (echo, v)","event","have echoed","accepted","live","echo armed"
-yes,sweep,yes,no,yes,
-yes,sweep,yes,yes,yes,yes
-no,sweep,yes,yes,yes,no
-no,sweep,yes,,no,
-no,sweep,no,,,
-no,arrival,,,,
+# without an echo).  Past that, p's re-send of its (initial, v) is p's
+# word that it has not heard this process's HOLDING, and the echo that
+# carries it is answered on that arrival (bracha87Fig1Ready.dtc).
+@"retry (echo, v)","event","have echoed","accepted","live"
+yes,sweep,yes,no,yes
+no,sweep,yes,yes,
+no,sweep,yes,no,no
+no,sweep,no,,
+no,arrival,,,
 
 # A sent ready is re-sent on every sweep while the instance is live, to
 # the processes still owed it.  No message of the figure says a process
 # has accepted, so nothing of the figure retires it, and nothing local
 # does: an accepted process still owes its ready to the processes below
-# 2t+1.  Two annotations riding the (ready, v) already re-sent do,
-# per recipient: a process recorded as having accepted consumes no
-# ready, and one that holds this process's accept is owed none.  The
-# first is recorded; the second is never recorded, it is the arm not
-# standing, since a process that lacks the accept shows so
-# (bracha87Fig1Ready.dtc).
-# Once every process is recorded and none is armed, none is owed and
-# the re-send retires -- quiescence, where abandon otherwise carries
-# the tail.
+# 2t+1.  An annotation riding the (ready, v) already re-sent does, per
+# recipient: a process recorded as having accepted consumes no ready.
+# A process that has accepted and lacks this process's accept says so
+# on its own (ready, v), by the RECEIVED it does not carry, and is
+# answered on that arrival (bracha87Fig1Ready.dtc), not on a sweep.
+# Once every process is recorded, none is owed and the re-send retires
+# -- quiescence, where abandon otherwise carries the tail.
 # Under loss that is reachable, not guaranteed: a process that never
 # carries ACCEPTED keeps the re-send to it until abandon.  That is what
 # an abandoned or silent process looks like from here; the re-send is

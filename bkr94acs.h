@@ -37,8 +37,9 @@
  *                      and the witness VALID reads
  *   bracha87Fig3.dtc   each round of a BA: validate, and the turn
  *   bracha87Fig1.dtc   each broadcast of a round: the six rows, the
- *                      caller's wait at step 1, the re-sends; with bracha87Fig1Ready.dtc, the
- *                      arm a (ready, v) sets
+ *                      caller's wait at step 1, the re-sends; with
+ *                      bracha87Fig1Ready.dtc, the replies to an
+ *                      arrival's sender
  *
  * Five dispatches, one per file, each compiled alone by dtc with its
  * own bridge and run in that order on every event; Figure 1's two run
@@ -164,14 +165,24 @@
                                   * bkr94acsValue */
 #define BKR94ACS_ABANDON      5  /* the seat stops running; its reads
                                   * still answer */
+#define BKR94ACS_REPLY_ECHO   6  /* (echo, value) of (ba, q, k) to the
+                                  * sender of the arrival just fed, q,
+                                  * alone, carrying the annotation the
+                                  * instance says; from bkr94acsInput
+                                  * only: Figure 1's ECHO_REPLY */
+#define BKR94ACS_REPLY_READY  7  /* (ready, value) of (ba, q, k) to the
+                                  * sender of the arrival just fed,
+                                  * alone, carrying the annotations the
+                                  * instance says; from bkr94acsInput
+                                  * only: Figure 1's READY_REPLY */
 
 /*
  * A send at round 0 is of ba's value broadcast, and its vLen bytes do
  * not fit here: they are bracha87Fig1Value of bkr94acsInstance(a, ba,
  * ba, 0), for BRACHA87_INITIAL_ALL, BRACHA87_ECHO_ALL or
  * BRACHA87_READY_ALL as the send is SEND_INITIAL, SEND_ECHO or
- * SEND_READY.  The value echoed or readied can differ from the one
- * accepted, so a send carries its own.
+ * REPLY_ECHO, or SEND_READY or REPLY_READY.  The value echoed or
+ * readied can differ from the one accepted, so a send carries its own.
  */
 struct bkr94acsAct {
   unsigned char act;
@@ -262,8 +273,9 @@ bkr94acsOut(
  * none of these makes the instance.
  *
  * Writes up to bkr94acsOut actions and returns how many: the
- * instance's sends in Figure 1's order, then the sends and decisions
- * the validation chain and the turns fire, then SUBSET, then ABANDON.
+ * instance's sends in Figure 1's order, a reply to the sender last
+ * among them, then the sends and decisions the validation chain and
+ * the turns fire, then SUBSET, then ABANDON.
  * The accept of a value broadcast returns no action of its own: it is
  * Q(ba) = 1, and what Agreement[Q] does with that is returned.  Only
  * an arrival at k = 0 can make it, and bkr94acsValue of ba reads it.
@@ -340,10 +352,10 @@ struct bracha87Fig1;
  * The Figure 1 instance (ba, q, k), for what the caller frames on a
  * (ready, v) of it: bracha87Fig1State for BRACHA87_ANN_ACCEPTED,
  * bracha87Fig1Received for BRACHA87_ANN_RECEIVED per recipient, and
- * after a sweep step that returned SEND_READY, bracha87Fig1Recipient
- * for who it goes to, an answer that stands until the instance's next
- * sweep step; and at k = 0, with q = ba, ba's value broadcast,
- * for bracha87Fig1Value of what a send of it carries.  After ABANDON,
+ * after a sweep step that returned SEND_ECHO or SEND_READY,
+ * bracha87Fig1EchoRecipient or bracha87Fig1Recipient for who it goes
+ * to; and at k = 0, with q = ba, ba's value broadcast, for
+ * bracha87Fig1Value of what a send of it carries.  After ABANDON,
  * bracha87Fig1State and bracha87Fig1Value of BRACHA87_ACCEPT read what
  * each instance held then; its BRACHA87_F1_ABANDONED stays clear, the
  * seat's abandon being bkr94acsAbandoned.  Borrowed from the seat.  0

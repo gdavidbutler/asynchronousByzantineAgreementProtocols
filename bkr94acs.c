@@ -279,7 +279,6 @@ bkr94acsRun(
   t = a->t;
   inst = 0;
   nout = 0;
-  site = 0;
   *passDone = 0;
   validatedHere = 0;
   acsNeeded = 0;
@@ -308,9 +307,12 @@ bkr94acsRun(
   }
   n1out = bracha87Fig1Input(inst, kind, from, vp, annot, o1);
   for (j = 0; j < n1out; ++j) {
-    if (o1[j] == BRACHA87_ECHO_ALL || o1[j] == BRACHA87_READY_ALL) {
+    if (o1[j] == BRACHA87_ECHO_ALL || o1[j] == BRACHA87_READY_ALL
+     || o1[j] == BRACHA87_ECHO_REPLY || o1[j] == BRACHA87_READY_REPLY) {
       cv = bracha87Fig1Value(inst, o1[j]);
-      out[nout].act = o1[j] == BRACHA87_ECHO_ALL ? BKR94ACS_SEND_ECHO : BKR94ACS_SEND_READY;
+      out[nout].act = o1[j] == BRACHA87_ECHO_ALL ? BKR94ACS_SEND_ECHO
+                    : o1[j] == BRACHA87_READY_ALL ? BKR94ACS_SEND_READY
+                    : o1[j] == BRACHA87_ECHO_REPLY ? BKR94ACS_REPLY_ECHO : BKR94ACS_REPLY_READY;
       out[nout].ba = i;
       out[nout].q = qq;
       out[nout].k = kk;
@@ -345,7 +347,8 @@ valueArrival:
   }
   n1out = bracha87Fig1Input(inst, kind, from, vp, annot, o1);
   site = 0;
-  /* the value broadcast's sends, and its accept: Q(i) = 1 is known */
+  /* the value broadcast's sends and replies, and its accept: Q(i) = 1
+   * is known */
 valueOut:
   for (j = 0; j < n1out; ++j) {
     if (o1[j] == BRACHA87_ACCEPT) {
@@ -354,7 +357,9 @@ valueOut:
       continue;
     }
     out[nout].act = o1[j] == BRACHA87_INITIAL_ALL ? BKR94ACS_SEND_INITIAL
-                  : o1[j] == BRACHA87_ECHO_ALL ? BKR94ACS_SEND_ECHO : BKR94ACS_SEND_READY;
+                  : o1[j] == BRACHA87_ECHO_ALL ? BKR94ACS_SEND_ECHO
+                  : o1[j] == BRACHA87_READY_ALL ? BKR94ACS_SEND_READY
+                  : o1[j] == BRACHA87_ECHO_REPLY ? BKR94ACS_REPLY_ECHO : BKR94ACS_REPLY_READY;
     out[nout].ba = out[nout].q = i;
     out[nout].k = out[nout].value = 0;
     ++nout;
@@ -421,7 +426,8 @@ sweepStep:
   }
   inst = INST(a, i, kk, qq);
   n1out = bracha87Fig1Input(inst, BRACHA87_SWEEP, 0, 0, 0, o1);
-  /* a sweep fires no step: what comes back is the re-sends owed */
+  /* a sweep fires no step and answers no arrival: what comes back is
+   * the re-sends owed */
   for (j = 0; j < n1out; ++j) {
     cv = bracha87Fig1Value(inst, o1[j]);
     out[nout].act = o1[j] == BRACHA87_INITIAL_ALL ? BKR94ACS_SEND_INITIAL

@@ -30,7 +30,11 @@
  *     for every j in the subset when the subset was output; and at the
  *     end holds every j's (initial, v) and what rode beside it;
  *   without loss the INITIAL re-sends stop: every seat says it holds a
- *     broadcast within two sweeps of it;
+ *     broadcast within two sweeps of it; and with no seat starved no
+ *     sweep re-sends anything at all, every exchange crossing on the
+ *     arrivals;
+ *   a reply comes only on an arrival, never on a sweep, and goes to
+ *     that arrival's sender alone;
  *   no seat ever enters 0 -- n - t is n, so step 2 never fires;
  *   the coin is never called -- every input is 1;
  *   every seat abandons, and nothing comes after.
@@ -118,6 +122,7 @@ main(
   struct bkr94acs **a;
   struct bkr94acsAct *out;
   struct bkr94acsAct *work;
+  unsigned char *workTo;      /* per action: the sender of the arrival that returned it */
   struct msg *q;
   unsigned char *abandoned;
   unsigned char *subsetSeen;
@@ -137,6 +142,10 @@ main(
   unsigned int zeros;
   unsigned int initials;      /* this seat's broadcasts: first sends of INITIAL */
   unsigned int initialRe;     /* and their re-sends on sweeps */
+  unsigned long replies;
+  unsigned long queued;       /* messages put on the queue */
+  unsigned int lastSweepSend; /* the last sweep that queued a re-send */
+  unsigned int replyTo;
   unsigned int outMax;
   unsigned int workCap;
   unsigned int nwork;
@@ -179,6 +188,7 @@ main(
   rc = 1;
   a = 0;
   out = work = 0;
+  workTo = 0;
   q = 0;
   abandoned = subsetSeen = entered = 0;
   decided = 0;
@@ -217,17 +227,21 @@ main(
   }
   outMax = bkr94acsOut(a[0]);
   workCap = 16 * outMax;
-  if (!(out = calloc(outMax, sizeof (*out))) || !(work = calloc(workCap, sizeof (*work)))) {
+  if (!(out = calloc(outMax, sizeof (*out))) || !(work = calloc(workCap, sizeof (*work)))
+   || !(workTo = calloc(workCap, 1))) {
     printf("allocation failed\n");
     goto done;
   }
-  qcap = 64 * n * n * n + 64;
+  /* one drain's traffic, the replies to its arrivals among it */
+  qcap = 128 * n * n * n + 64;
   if (!(q = calloc(qcap, sizeof (*q)))) {
     printf("allocation failed\n");
     goto done;
   }
   qhead = qtail = 0;
   sweeps = dropped = zeros = initials = initialRe = 0;
+  replies = queued = 0;
+  lastSweepSend = 0;
 
   /* every seat broadcasts its value, once: seat p's is p, 'v', p ^ 0x5A */
   for (p = 0; p < n; ++p) {
@@ -239,6 +253,7 @@ main(
       goto done;
     }
     nwork = bkr94acsBroadcast(a[p], v, work);
+    workTo[0] = p;
     if (nwork != 1 || bkr94acsBroadcast(a[p], v, out)) {
       printf("seat %u: Broadcast returned %u, or a second one was taken\n", p, nwork);
       goto done;
@@ -253,6 +268,7 @@ qDone:
     while (qhead < qtail) {
       struct msg *m;
 
+      ++queued;
       m = &q[qhead++];
       seed = seed * 1103515245u + 12345u;
       if (((seed >> 16) & 0x7FFF) % 100 < loss) {
@@ -272,6 +288,7 @@ qDone:
       if (abandoned[p])
         continue;
       nwork = bkr94acsInput(a[p], m->kind, m->ba, m->q, m->k, m->from, m->k ? &m->value : m->v, m->annot, work);
+      memset(workTo, m->from, nwork);
       site = 1;
       goto run;
 arrivalDone:
@@ -291,6 +308,12 @@ arrivalDone:
         }
         memcpy(work, out, nout * sizeof (*out));
         nwork = nout;
+        for (w = 0; w < nwork; ++w)
+          if (work[w].act == BKR94ACS_REPLY_ECHO || work[w].act == BKR94ACS_REPLY_READY) {
+            printf("seat %u: a sweep returned a reply\n", p);
+            goto done;
+          }
+        memset(workTo, p, nwork);
         site = 2;
         goto run;
 sweepDone:
@@ -407,20 +430,24 @@ held:
   }
   /* without loss every seat says it holds a broadcast within two
    * sweeps of it, so the INITIAL re-sends stop: at most two a broadcast */
+  if (!loss && !starve && lastSweepSend) {
+    printf("a re-send at sweep %u without loss\n", lastSweepSend);
+    goto done;
+  }
   if (!loss && initialRe > 2 * initials) {
     printf("%u INITIAL re-sends for %u broadcasts without loss\n", initialRe, initials);
     goto done;
   }
   if (starve && loss)
-    printf("n=%u t=%u loss=%u%% starve=%u coin=%u: the seats that decided agree, the seats that output agree, all abandoned, %u sweeps, %u dropped, %lu coin calls, the last BA %s\n",
-           n, t, loss, starve, coinValue, sweeps, dropped, CoinCalls,
+    printf("n=%u t=%u loss=%u%% starve=%u coin=%u: the seats that decided agree, the seats that output agree, all abandoned, %u sweeps, %lu queued, %u dropped, %lu replies, the last re-send at sweep %u, %lu coin calls, the last BA %s\n",
+           n, t, loss, starve, coinValue, sweeps, queued, dropped, replies, lastSweepSend, CoinCalls,
            dl == -1 ? "undecided everywhere" : dl ? "decided 1" : "decided 0");
   else if (starve)
-    printf("n=%u t=%u loss=%u%% starve=%u coin=%u: every seat decided 1 in every BA but the last and the coin in the last, subset with its values, all abandoned, %u sweeps, %lu coin calls\n",
-           n, t, loss, starve, coinValue, sweeps, CoinCalls);
+    printf("n=%u t=%u loss=%u%% starve=%u coin=%u: every seat decided 1 in every BA but the last and the coin in the last, subset with its values, all abandoned, %u sweeps, %lu queued, %lu replies, the last re-send at sweep %u, %lu coin calls\n",
+           n, t, loss, starve, coinValue, sweeps, queued, replies, lastSweepSend, CoinCalls);
   else
-    printf("n=%u t=%u loss=%u%%: every seat decided 1 in every BA, subset all with its values, all abandoned, %u sweeps, %u dropped\n",
-           n, t, loss, sweeps, dropped);
+    printf("n=%u t=%u loss=%u%%: every seat decided 1 in every BA, subset all with its values, all abandoned, %u sweeps, %lu queued, %u dropped, %lu replies, the last re-send at sweep %u\n",
+           n, t, loss, sweeps, queued, dropped, replies, lastSweepSend);
   rc = 0;
 done:
   if (a)
@@ -429,6 +456,7 @@ done:
   free(a);
   free(out);
   free(work);
+  free(workTo);
   free(q);
   free(abandoned);
   free(subsetSeen);
@@ -442,6 +470,7 @@ run:
     struct bkr94acsAct act;
 
     act = work[--nwork];
+    replyTo = workTo[nwork];
     switch (act.act) {
     case BKR94ACS_DECIDED:
       ++decided[p];
@@ -479,6 +508,10 @@ run:
     case BKR94ACS_SEND_ECHO:
     case BKR94ACS_SEND_READY:
       break;
+    case BKR94ACS_REPLY_ECHO:
+    case BKR94ACS_REPLY_READY:
+      ++replies;
+      break;
     default:
       printf("seat %u: unknown action %u\n", p, act.act);
       goto done;
@@ -492,7 +525,8 @@ run:
     cv = act.k ? &act.value
        : bracha87Fig1Value(bkr94acsInstance(a[p], act.ba, act.q, 0),
                            act.act == BKR94ACS_SEND_INITIAL ? BRACHA87_INITIAL_ALL
-                         : act.act == BKR94ACS_SEND_ECHO ? BRACHA87_ECHO_ALL : BRACHA87_READY_ALL);
+                         : act.act == BKR94ACS_SEND_ECHO || act.act == BKR94ACS_REPLY_ECHO ? BRACHA87_ECHO_ALL
+                         : BRACHA87_READY_ALL);
     if (!cv) {
       printf("seat %u: a send of (%u, %u, %u) with no value\n", p, act.ba, act.q, act.k);
       goto done;
@@ -502,7 +536,7 @@ run:
       unsigned char annot;
 
       kind = act.act == BKR94ACS_SEND_INITIAL ? BKR94ACS_INITIAL
-           : act.act == BKR94ACS_SEND_ECHO ? BKR94ACS_ECHO : BKR94ACS_READY;
+           : act.act == BKR94ACS_SEND_ECHO || act.act == BKR94ACS_REPLY_ECHO ? BKR94ACS_ECHO : BKR94ACS_READY;
       if (act.act == BKR94ACS_SEND_INITIAL) {
         if (bkr94acsHolder(a[p], act.ba, act.q, act.k, to))
           continue;
@@ -511,30 +545,37 @@ run:
         continue;
       if (act.act == BKR94ACS_SEND_ECHO && site == 2 && !bracha87Fig1EchoRecipient(inst, to))
         continue;
+      /* a reply to the sender of the arrival that returned it alone */
+      if ((act.act == BKR94ACS_REPLY_ECHO || act.act == BKR94ACS_REPLY_READY) && to != replyTo)
+        continue;
       /* every echo and ready says whether this seat holds the initial
        * and what rode beside it; a ready says the rest */
       annot = 0;
       if (inst && HOLDS(bracha87Fig1State(inst)))
         annot |= BRACHA87_ANN_HOLDING;
-      if (act.act == BKR94ACS_SEND_READY) {
+      if (act.act == BKR94ACS_SEND_READY || act.act == BKR94ACS_REPLY_READY) {
         if (bracha87Fig1State(inst) & BRACHA87_F1_ACCEPTED)
           annot |= BRACHA87_ANN_ACCEPTED;
         if (BRACHA87_BIT_TST(bracha87Fig1Received(inst), to))
           annot |= BRACHA87_ANN_RECEIVED;
       }
       if (to == p) {
-        /* the hand-back is an input like any other; who this sweep's
-         * re-sends go to stands until the next sweep, so its place in
-         * this loop does not matter */
+        /* the hand-back is an input like any other; it moves only what
+         * the instance records of self, so its place in this loop does
+         * not matter.  What it returns goes back to self. */
         if (nwork + outMax > workCap) {
           printf("seat %u: hand-back cascade too deep\n", p);
           goto done;
         }
         nout = bkr94acsInput(a[p], kind, act.ba, act.q, act.k, p, cv, annot, out);
-        for (w = 0; w < nout; ++w)
+        for (w = 0; w < nout; ++w) {
+          workTo[nwork] = p;
           work[nwork++] = out[w];
+        }
         continue;
       }
+      if (site == 2)
+        lastSweepSend = sweeps;
       if (qtail >= qcap) {
         printf("queue overflow\n");
         goto done;

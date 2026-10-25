@@ -5,9 +5,9 @@
   /* "the arrival is (ready, v)" = yes */
   if (carriesReceived == 0)
     goto rdL5;
-  /* "arm the sender" = no */
   /* "carries RECEIVED" = yes */
-  armSender = 0;
+  /* "re-send (ready, v) to the sender" = no */
+  replyReady = 0;
   if (accepted == 0)
     goto rdL8;
   /* "accepted" = yes */
@@ -20,19 +20,19 @@ rdL10:;
   /* "holds both" = yes */
   if (echoedBefore == 0)
     goto rdL17;
-  /* "arm the echo to p" = yes */
   /* "have echoed" = yes */
-  armEcho = 1;
+  /* "re-send (echo, v) to p" = yes */
+  replyEcho = 1;
   goto rdLdone;
 rdL17:;
-  /* "arm the echo to p" = no */
   /* "have echoed" = no */
-  armEcho = 0;
+  /* "re-send (echo, v) to p" = no */
+  replyEcho = 0;
   goto rdLdone;
 rdL14:;
-  /* "arm the echo to p" = no */
   /* "holds both" = no */
-  armEcho = 0;
+  /* "re-send (echo, v) to p" = no */
+  replyEcho = 0;
   if (echoedBefore == 0)
     goto rdL20;
   /* "have echoed" = yes */
@@ -41,9 +41,9 @@ rdL20:;
   /* "have echoed" = no */
   goto rdLdone;
 rdL11:;
-  /* "arm the echo to p" = no */
+  /* "re-send (echo, v) to p" = no */
   /* "the arrival is (initial, v) or BESIDE" = no */
-  armEcho = 0;
+  replyEcho = 0;
   if (echoedBefore == 0)
     goto rdL23;
   /* "have echoed" = yes */
@@ -66,18 +66,18 @@ rdL5:;
   if (accepted == 0)
     goto rdL29;
   /* "accepted" = yes */
-  /* "arm the sender" = yes */
-  armSender = 1;
+  /* "re-send (ready, v) to the sender" = yes */
+  replyReady = 1;
   goto rdL10;
 rdL29:;
   /* "accepted" = no */
-  /* "arm the sender" = no */
-  armSender = 0;
+  /* "re-send (ready, v) to the sender" = no */
+  replyReady = 0;
   goto rdL10;
 rdL2:;
-  /* "arm the sender" = no */
+  /* "re-send (ready, v) to the sender" = no */
   /* "the arrival is (ready, v)" = no */
-  armSender = 0;
+  replyReady = 0;
   if (accepted == 0)
     goto rdL32;
   /* "accepted" = yes */

@@ -92,6 +92,7 @@ main(
   struct bkr94acs **a;
   struct bkr94acsAct *out;
   struct bkr94acsAct *work;
+  unsigned char *workTo;      /* per action: the sender of the arrival that returned it */
   struct msg *q;
   unsigned int *subsetAt;
   unsigned int *abandonedAt;
@@ -117,6 +118,7 @@ main(
   unsigned int toByz;
   unsigned int outMax;
   unsigned int workCap;
+  unsigned int replyTo;
   unsigned int nwork;
   unsigned int nout;
   unsigned int p;
@@ -144,6 +146,7 @@ main(
   rc = 1;
   a = 0;
   out = work = 0;
+  workTo = 0;
   q = 0;
   subsetAt = abandonedAt = 0;
   sent = 0;
@@ -231,7 +234,8 @@ main(
   }
   outMax = bkr94acsOut(a[byz == 0 ? 1 : 0]);
   workCap = 16 * outMax;
-  if (!(out = calloc(outMax, sizeof (*out))) || !(work = calloc(workCap, sizeof (*work)))) {
+  if (!(out = calloc(outMax, sizeof (*out))) || !(work = calloc(workCap, sizeof (*work)))
+   || !(workTo = calloc(workCap, 1))) {
     fprintf(stderr, "allocation failed\n");
     goto done;
   }
@@ -253,6 +257,7 @@ main(
     memset(v, 0, sizeof (v));
     strcpy((char *)v, argv[arg + 2 + p]);
     nwork = bkr94acsBroadcast(a[p], v, work);
+    workTo[0] = p;
     site = 0;
     goto run;
 qDone:
@@ -326,6 +331,7 @@ qDone:
                m->kind == BKR94ACS_INITIAL ? "initial" : m->kind == BKR94ACS_ECHO ? "echo" : "ready",
                m->ba, m->q, m->k, m->from, m->k ? "" : " carrying ", m->k ? "" : (char *)m->v);
       nwork = bkr94acsInput(a[p], m->kind, m->ba, m->q, m->k, m->from, m->k ? &m->value : m->v, m->annot, work);
+      memset(workTo, m->from, nwork);
       site = 1;
       goto run;
 arrivalDone:
@@ -341,6 +347,7 @@ arrivalDone:
         more = bkr94acsSweep(a[p], out, &nout);
         memcpy(work, out, nout * sizeof (*out));
         nwork = nout;
+        memset(workTo, p, nwork);
         site = 2;
         goto run;
 sweepDone:
@@ -402,6 +409,7 @@ done:
   free(a);
   free(out);
   free(work);
+  free(workTo);
   free(q);
   free(subsetAt);
   free(abandonedAt);
@@ -415,6 +423,7 @@ run:
     struct bkr94acsAct act;
 
     act = work[--nwork];
+    replyTo = workTo[nwork];
     switch (act.act) {
     case BKR94ACS_DECIDED:
       if (verbose)
@@ -433,6 +442,8 @@ run:
     case BKR94ACS_SEND_INITIAL:
     case BKR94ACS_SEND_ECHO:
     case BKR94ACS_SEND_READY:
+    case BKR94ACS_REPLY_ECHO:
+    case BKR94ACS_REPLY_READY:
       break;
     default:
       fprintf(stderr, "seat %u: unknown action %u\n", p, act.act);
@@ -442,10 +453,11 @@ run:
     cv = act.k ? &act.value
        : bracha87Fig1Value(bkr94acsInstance(a[p], act.ba, act.q, 0),
                            act.act == BKR94ACS_SEND_INITIAL ? BRACHA87_INITIAL_ALL
-                         : act.act == BKR94ACS_SEND_ECHO ? BRACHA87_ECHO_ALL : BRACHA87_READY_ALL);
+                         : act.act == BKR94ACS_SEND_ECHO || act.act == BKR94ACS_REPLY_ECHO ? BRACHA87_ECHO_ALL
+                         : BRACHA87_READY_ALL);
     /* INITIAL to the seats not recorded as holding it; a READY re-sent on
      * a sweep to the seats the instance still owes it, carrying what it
-     * says */
+     * says; a reply to the sender of the arrival that returned it */
     inst = act.act != BKR94ACS_SEND_INITIAL ? bkr94acsInstance(a[p], act.ba, act.q, act.k) : 0;
     recip = act.act == BKR94ACS_SEND_READY && site == 2;
     for (to = 0; to < n; ++to) {
@@ -453,7 +465,7 @@ run:
       unsigned char annot;
 
       kind = act.act == BKR94ACS_SEND_INITIAL ? BKR94ACS_INITIAL
-           : act.act == BKR94ACS_SEND_ECHO ? BKR94ACS_ECHO : BKR94ACS_READY;
+           : act.act == BKR94ACS_SEND_ECHO || act.act == BKR94ACS_REPLY_ECHO ? BKR94ACS_ECHO : BKR94ACS_READY;
       if (act.act == BKR94ACS_SEND_INITIAL) {
         if (bkr94acsHolder(a[p], act.ba, act.q, act.k, to))
           continue;
@@ -462,28 +474,32 @@ run:
         continue;
       if (act.act == BKR94ACS_SEND_ECHO && site == 2 && !bracha87Fig1EchoRecipient(inst, to))
         continue;
+      if ((act.act == BKR94ACS_REPLY_ECHO || act.act == BKR94ACS_REPLY_READY) && to != replyTo)
+        continue;
       /* every echo and ready says whether this seat holds the initial
        * and what rode beside it; a ready says the rest */
       annot = 0;
       if (inst && HOLDS(bracha87Fig1State(inst)))
         annot |= BRACHA87_ANN_HOLDING;
-      if (act.act == BKR94ACS_SEND_READY) {
+      if (act.act == BKR94ACS_SEND_READY || act.act == BKR94ACS_REPLY_READY) {
         if (bracha87Fig1State(inst) & BRACHA87_F1_ACCEPTED)
           annot |= BRACHA87_ANN_ACCEPTED;
         if (BRACHA87_BIT_TST(bracha87Fig1Received(inst), to))
           annot |= BRACHA87_ANN_RECEIVED;
       }
       if (to == p) {
-        /* the hand-back is an input like any other; who this sweep's
-         * re-sends go to stands until the next sweep, so its place in
-         * this loop does not matter */
+        /* the hand-back is an input like any other; it moves only what
+         * the instance records of self, so its place in this loop does
+         * not matter.  What it returns answers self. */
         if (nwork + outMax > workCap) {
           fprintf(stderr, "harness guard: hand-back cascade too deep\n");
           goto done;
         }
         nout = bkr94acsInput(a[p], kind, act.ba, act.q, act.k, p, cv, annot, out);
-        for (w = 0; w < nout; ++w)
+        for (w = 0; w < nout; ++w) {
+          workTo[nwork] = p;
           work[nwork++] = out[w];
+        }
         continue;
       }
       if (qtail + 1 > qcap) {

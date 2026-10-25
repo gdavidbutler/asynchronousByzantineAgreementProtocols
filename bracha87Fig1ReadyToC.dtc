@@ -26,10 +26,10 @@ no,0
 yes,1
 no,0
 
-@~armSender,"arm the sender"
+@~replyReady,"re-send (ready, v) to the sender"
 1,yes
 0,no
 
-@~armEcho,"arm the echo to p"
+@~replyEcho,"re-send (echo, v) to p"
 1,yes
 0,no

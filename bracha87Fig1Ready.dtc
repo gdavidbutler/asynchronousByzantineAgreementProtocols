@@ -1,13 +1,14 @@
 # Bracha 1987, "Asynchronous Byzantine Agreement Protocols"
 # Information and Computation 75, 130-143 (1987)
 #
-# Figure 1, BPR's arms: what a (ready, v) arriving without the RECEIVED
-# annotation does, and what p's (initial, v) or BESIDE arriving at a
-# process that holds both does.  Two rows, in their own file because
-# their inputs touch nothing in bracha87Fig1.dtc: compiled with them, dtc carries them
-# down every path of the figure's dispatch for two leaves that read
-# them.  Compiled alone it is a few lines, run once per event after the
-# main dispatch, as bracha87Fig3.dtc runs after Figure 1's.
+# Figure 1, BPR's replies: what a (ready, v) arriving without the
+# RECEIVED annotation does, and what p's (initial, v) or BESIDE
+# arriving at a process that holds both does.  Two rows, in their own
+# file because their inputs touch nothing in bracha87Fig1.dtc: compiled
+# with them, dtc carries them down every path of the figure's dispatch
+# for two leaves that read them.  Compiled alone it is a few lines, run
+# once per event after the main dispatch, as bracha87Fig3.dtc runs
+# after Figure 1's.
 #
 # The annotations are the caller's, riding the (ready, v) BPR already
 # re-sends (bracha87Fig1.dtc, BPR's rows): ACCEPTED, the sender has
@@ -17,27 +18,31 @@
 # accepted by the C, beside the ready itself, before the main dispatch;
 # that record retires the re-send toward the sender.  A (ready, v)
 # arriving without RECEIVED is its sender's word that it does not hold
-# this process's accept.  Once this process has an accept to carry, the
-# sender is armed: the next re-send goes to it, carrying ACCEPTED, and
-# RECEIVED where the sender's own accept is recorded here.  A (ready, v)
-# carrying RECEIVED arms nothing, so the exchange converges in one sweep
-# per direction;
-# a lost marked re-send is re-armed by its target's next unmarked one,
-# which is the loss recovery.  Before this process accepts it has no
-# accept to carry and nothing is armed: the sender's unmarked re-sends
-# keep arriving, and the first after the accept arms it -- the one that
-# fires the accept included, which is why "accepted" here is read after
-# the main dispatch's step 3 is applied, as bracha87Fig3.dtc reads it,
-# and not "have accepted" at the event's start.  An unmarked re-send is
-# a duplicate (ready, v); this row runs on a duplicate, so it sees it.
+# this process's accept.  Once this process has an accept to carry, it
+# answers that arrival: its (ready, v), re-sent to the sender, carrying
+# ACCEPTED, and RECEIVED where the sender's own accept is recorded
+# here.  A (ready, v) carrying RECEIVED is answered by nothing, so an
+# exchange ends in two: the answer to an unmarked arrival carries
+# ACCEPTED, so the sender's answer to that, given only where it lacked
+# RECEIVED and the sender has accepted, carries RECEIVED.  A lost
+# answer is answered again on its target's next unmarked re-send,
+# which is the loss recovery.
+# Before this process accepts it has no accept to carry and answers
+# nothing: the sender's unmarked re-sends keep arriving, and the first
+# after the accept is answered -- the one that fires the accept
+# included, which is why "accepted" here is read after the main
+# dispatch's step 3 is applied, as bracha87Fig3.dtc reads it, and not
+# "have accepted" at the event's start.  An unmarked re-send is a
+# duplicate (ready, v); this row runs on a duplicate, so it sees it.
 #
-# The arm is one re-send, not a standing bit: the C holds it per sender
-# until the re-send that goes to the sender, which serves and clears
-# it.  A standing bit would strand the re-send: once the sender holds
-# the accept it sends nothing more here, and nothing would ever clear
-# the bit.  A forged unmarked (ready, v) buys its forger one marked
-# re-send per sweep, aimed at itself, displacing nothing owed to a
-# correct process.
+# The answer is one message, to the sender of the arrival that asked
+# for it, on that arrival: no record outlives the event, and nothing
+# waits for this process's next sweep.  A forged unmarked (ready, v)
+# costs this process one marked (ready, v) per forged arrival, sent
+# back to the forger: one message out for one in, at the forger's
+# rate, and no record of what is owed a correct process changes.  A
+# caller that bounds its egress chooses the order in which it serves
+# answers and re-sends.
 #
 # Inputs:
 #   "the arrival is (ready, v)"      { yes, no }
@@ -52,25 +57,25 @@
 #                                    accepted, or step 3 taken on it
 #
 # Output:
-#   "arm the sender"                 { yes, no }
+#   "re-send (ready, v) to the sender"  { yes, no }
 
-@"arm the sender","the arrival is (ready, v)","carries RECEIVED","accepted"
+@"re-send (ready, v) to the sender","the arrival is (ready, v)","carries RECEIVED","accepted"
 yes,yes,no,yes
 no,yes,no,no
 no,yes,yes,
 no,no,,
 
-# The echo's arm.  HOLDING rides the echo and the ready, and both
+# The echo's answer.  HOLDING rides the echo and the ready, and both
 # retire: the echo at this process's accept, the ready once the
 # ACCEPTED exchange is done.  A process that comes to hold p's
 # (initial, v) and BESIDE only after that has nothing left to carry
 # its word, and p re-sends to it until abandon.  So p's (initial, v)
 # or BESIDE arriving at a process that holds both and had echoed
-# before it came is p's word that it has not heard, and arms one echo
-# to p, carrying HOLDING (bracha87Fig1.dtc, BPR's retry (echo, v)).
-# The arrival that completes the holding, or fires the echo, is not
-# that word: the echo it fires carries HOLDING itself.  The same shape
-# as the ready's arm: the message that asks is the one that was sent.
+# before it came is p's word that it has not heard, and is answered:
+# this process's (echo, v), re-sent to p, carrying HOLDING.  The
+# arrival that completes the holding, or fires the echo, is not that
+# word: the echo it fires carries HOLDING itself.  The same shape as
+# the ready's answer: the message that asks is the one that was sent.
 #
 # Inputs:
 #   "the arrival is (initial, v) or BESIDE"  { yes, no }  from p, as the
@@ -81,9 +86,9 @@ no,no,,
 #                                    event
 #
 # Output:
-#   "arm the echo to p"              { yes, no }
+#   "re-send (echo, v) to p"         { yes, no }
 
-@"arm the echo to p","the arrival is (initial, v) or BESIDE","holds both","have echoed"
+@"re-send (echo, v) to p","the arrival is (initial, v) or BESIDE","holds both","have echoed"
 yes,yes,yes,yes
 no,yes,yes,no
 no,yes,no,

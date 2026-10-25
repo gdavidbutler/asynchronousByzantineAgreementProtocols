@@ -28,7 +28,7 @@
  * Figure 1, the broadcast primitive, by process p, as a state machine.
  * The figure's steps are rows of bracha87Fig1.dtc, verbatim; the rows
  * that decide when a satisfied step is taken, and what is re-sent, are
- * the caller's and BPR's, in the same file, and BPR's arm row is in
+ * the caller's and BPR's, in the same file, and BPR's reply rows are in
  * bracha87Fig1Ready.dtc; dtc compiles each file into a dispatch this
  * library runs, the second after the first.  Read the .dtc files for
  * the rules.
@@ -45,7 +45,9 @@
  * of a message of this broadcast, and a sweep of the caller's retry.
  * The paper assumes a reliable message system; over a fair-loss network
  * the caller sweeps, at a cadence of its own, and each sweep returns the
- * messages still owed (BPR).  The sweep is the only unit anything here
+ * messages still owed (BPR); an arrival that is its sender's word that
+ * it lacks something of this process's returns this process's answer
+ * to that sender alone.  The sweep is the only unit anything here
  * counts in.
  *
  * The caller's message beside (initial, v).  A caller may send a
@@ -120,16 +122,28 @@
  * through bracha87Fig1Input (bracha87Fig1.dtc and bracha87Fig1Ready.dtc,
  * BPR's rows).  The initiator's re-send of (initial, v) goes to each
  * process not recorded as holding it.  The step-1 send goes to all,
- * and the echo is re-sent to all until this process accepts; past
- * that, p's (initial, v) or BESIDE arriving at a process that holds
- * both is p's word that it has not heard, and the echo is re-sent once
- * more, to p alone (bracha87Fig1EchoRecipient), carrying HOLDING.  The
- * step-2 send goes to all; a
- * re-send on a sweep goes to each bracha87Fig1Recipient: the processes
- * not recorded as having accepted, and the processes whose (ready, v)
- * arrived without RECEIVED since this process accepted, once each.
- * When none is owed the re-send retires: quiescence, reachable under
- * loss and not guaranteed, and abandon carries what is left.
+ * and the echo is re-sent on a sweep to each
+ * bracha87Fig1EchoRecipient: all, until this process accepts.  The
+ * step-2 send goes to all, and the ready is re-sent on a sweep to each
+ * bracha87Fig1Recipient: the processes not recorded as having
+ * accepted.  When none is, the re-send retires: quiescence, reachable
+ * under loss and not guaranteed, and abandon carries what is left.
+ *
+ * Two replies, each returned on the arrival that asks for it and sent
+ * to that arrival's sender alone, framed as any other echo or ready:
+ * READY_REPLY, on a (ready, v) arriving without RECEIVED once this
+ * process has accepted, the arrival that fires the accept included,
+ * its (ready, v), which carries ACCEPTED; and ECHO_REPLY, on p's
+ * (initial, v) or BESIDE arriving at a process that holds both and had
+ * echoed before it came, p's word that it has not heard, its (echo,
+ * v) to p, which carries HOLDING.  Neither is returned beside the step
+ * of the same message, whose send to all reaches the sender already.
+ * A (ready, v) carrying RECEIVED is answered by nothing, so an exchange
+ * ends in two: the reply carries ACCEPTED, so the sender's answer to
+ * it, given only where the reply lacked RECEIVED and the sender has
+ * accepted, carries RECEIVED.  A lost reply is answered again on the
+ * sender's next re-send.  Nothing of a reply
+ * outlives the call that returns it.
  *
  * Self is a recipient like any other.  The paper sends every message to
  * all the processes and counts its own, and the instance records its
@@ -137,11 +151,11 @@
  * from == self.  The hand-back to self is the caller's, and it is
  * local: loopback on an egress interface is not reliable, so a caller
  * feeds its own message straight back, and runs the actions that
- * hand-back returns as it runs any other.  The hand-back is an input
- * like any other, and the answers of bracha87Fig1Recipient and
- * bracha87Fig1EchoRecipient for a sweep's re-sends stand until the next
- * sweep, so the order of a caller's sends and hand-backs within a sweep
- * does not matter.
+ * hand-back returns as it runs any other, a reply to self among them.
+ * The hand-back of a re-send is a duplicate: it records only what its
+ * annotations say of self, so it moves bracha87Fig1Recipient for self
+ * alone and bracha87Fig1EchoRecipient not at all, and the order of a
+ * caller's sends and hand-backs within a sweep does not matter.
  *
  * Nothing here aborts.  A refused argument is a 0 or -1 return and no
  * state change.
@@ -175,9 +189,14 @@
                                  * beside it, to every process that is
                                  * not a bracha87Fig1Holder; never
                                  * returned once every process is one */
+#define BRACHA87_ECHO_REPLY  5  /* re-send (echo, v) to the sender of
+                                 * the arrival just fed, p */
+#define BRACHA87_READY_REPLY 6  /* re-send (ready, v) to the sender of
+                                 * the arrival just fed */
 
 /* Room the caller gives bracha87Fig1Input for actions: the three steps
- * on an arrival; on a sweep abandon alone, or the three re-sends. */
+ * on an arrival, or an accept and a reply; on a sweep abandon alone, or
+ * the three re-sends. */
 #define BRACHA87_FIG1_OUT 3
 
 /* State bits returned by bracha87Fig1State. */
@@ -306,8 +325,9 @@ bracha87Fig1Initiator(
  * another are both the figure's; each step is taken once.
  *
  * Writes up to BRACHA87_FIG1_OUT actions to out, in the order ECHO_ALL,
- * READY_ALL, ACCEPT, ABANDON, then on a sweep INITIAL_ALL, ECHO_ALL,
- * READY_ALL for the re-sends, and returns how many.  A re-send is never
+ * READY_ALL, ACCEPT, ABANDON, then on an arrival ECHO_REPLY or
+ * READY_REPLY, on a sweep INITIAL_ALL, ECHO_ALL, READY_ALL for the
+ * re-sends, and returns how many.  A re-send or a reply is never
  * returned beside a step of the same message in one call.  0 for a null
  * instance or out, a kind outside the five, a sender outside 0..n-1, a
  * null value where one is read, or a BESIDE with the flag clear or
@@ -327,7 +347,8 @@ bracha87Fig1Input(
  * The value an action carries: for INITIAL_ALL the initiator's v -- at
  * the initiator its own, at any other process the v of the (initial, v)
  * it holds from p, which is the one a caller validates what rode beside
- * it against before feeding BESIDE -- for ECHO_ALL the value echoed, for READY_ALL the value readied, for
+ * it against before feeding BESIDE -- for ECHO_ALL and ECHO_REPLY the
+ * value echoed, for READY_ALL and READY_REPLY the value readied, for
  * ACCEPT the value accepted.  vLen bytes, borrowed from the instance
  * and written once, when the act is taken, so the pointer stays valid
  * for the life of the instance.  0 for any other act, one not yet
@@ -354,11 +375,8 @@ bracha87Fig1Holder(
 
 /*
  * Non-zero iff an ECHO_ALL returned on a sweep goes to process p: every
- * p until this process accepts; past that, the initiator alone, while
- * its (initial, v) or BESIDE arriving here has armed one echo to it.
- * It answers for the last sweep's ECHO_ALL until the next sweep: the
- * arm that re-send served stays answered through the inputs between.
- * 0 for a null instance or p outside 0..n-1.
+ * p until this process accepts.  0 for a null instance or p outside
+ * 0..n-1.
  */
 int
 bracha87Fig1EchoRecipient(
@@ -368,12 +386,9 @@ bracha87Fig1EchoRecipient(
 
 /*
  * Non-zero iff a READY_ALL returned on a sweep goes to process p: p is
- * not recorded as having accepted, or was armed by a (ready, v)
- * arriving without BRACHA87_ANN_RECEIVED since this process accepted.
- * It answers for the last sweep's READY_ALL until the next sweep: the
- * arms that re-send served stay answered through the inputs between,
- * and the next sweep clears them.  0 for a null instance or p outside
- * 0..n-1.
+ * not recorded as having accepted, by a (ready, v) from it carrying
+ * BRACHA87_ANN_ACCEPTED.  Once 0, always.  0 for a null instance or p
+ * outside 0..n-1.
  */
 int
 bracha87Fig1Recipient(
