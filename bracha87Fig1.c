@@ -161,7 +161,8 @@ bracha87Fig1Input(
   int sendEcho, sendReady, acceptV, takeStep1, takeStep2, takeStep3;
   int abandon, retryInitial, retryEcho, retryReady;
   /* bracha87Fig1ReadyToC.dtc's, run once after the main dispatch */
-  int readyArrival, carriesReceived, accepted, replyReady;
+  int readyArrival, carriesReceived, acceptedBefore, replyReady;
+  int acceptedNow, readiedBefore, answerReady;
   int initialArrival, holdsBoth, echoedBefore, replyEcho;
 
   if (!f || !out || kind > BRACHA87_SWEEP)
@@ -249,9 +250,11 @@ bracha87Fig1Input(
   /* this sweep counts, up to the abandon count */
   if (kind == BRACHA87_SWEEP && f->sweeps < f->abandon)
     ++f->sweeps;
-  /* the echo's reply reads whether this process had echoed before this
-   * event */
+  /* the replies and the answer read what this process had done before
+   * this event */
   echoedBefore = (f->flags & BRACHA87_F1_ECHOED) != 0;
+  readiedBefore = (f->flags & BRACHA87_F1_RDSENT) != 0;
+  acceptedBefore = (f->flags & BRACHA87_F1_ACCEPTED) != 0;
 
   /* what does not vary by candidate value */
   for (u = 0, i = 0; i < n; ++i)
@@ -362,11 +365,11 @@ skip:
   goto next;
 done:
   /* the ready's reply: a (ready, v) arriving without RECEIVED, once
-   * this process has an accept to carry; "accepted" is read after the
-   * steps */
+   * this process has an accept to carry; and at the accept, the answer
+   * to the readies held */
   readyArrival = kind == BRACHA87_READY;
   carriesReceived = readyArrival && (annot & BRACHA87_ANN_RECEIVED) != 0;
-  accepted = (f->flags & BRACHA87_F1_ACCEPTED) != 0;
+  acceptedNow = (steps & (1 << BRACHA87_ACCEPT)) != 0;
   /* and the echo's: p's (initial, v) or BESIDE, at a process holding
    * both that had echoed before it came */
   initialArrival = kind == BRACHA87_INITIAL || kind == BRACHA87_BESIDE;
@@ -381,13 +384,15 @@ done:
     out[nout++] = BRACHA87_ACCEPT;
   if (steps & (1 << BRACHA87_ABANDON))
     out[nout++] = BRACHA87_ABANDON;
-  /* the replies, to the sender of this arrival; the echo's row reads an
-   * echo taken before the event, and the ready's step, sent to all,
-   * reaches the sender already */
+  /* the replies, to the sender of this arrival, and the answer to the
+   * readies held; each reply row reads a step taken before the event,
+   * the answer's row one taken before it and one taken on it */
   if (replyEcho)
     out[nout++] = BRACHA87_ECHO_REPLY;
-  if (replyReady && !(steps & (1 << BRACHA87_READY_ALL)))
+  if (replyReady)
     out[nout++] = BRACHA87_READY_REPLY;
+  if (answerReady)
+    out[nout++] = BRACHA87_READY_ANSWER;
   if (evaluated) {
     if (retryI)
       out[nout++] = BRACHA87_INITIAL_ALL;
@@ -414,6 +419,7 @@ bracha87Fig1Value(
     return (f->flags & BRACHA87_F1_ECHOED ? ECHOED(f) : 0);
   case BRACHA87_READY_ALL:
   case BRACHA87_READY_REPLY:
+  case BRACHA87_READY_ANSWER:
     return (f->flags & BRACHA87_F1_RDSENT ? READIED(f) : 0);
   case BRACHA87_ACCEPT:
     return (f->flags & BRACHA87_F1_ACCEPTED ? ACCEPTED(f) : 0);
@@ -450,6 +456,16 @@ bracha87Fig1Recipient(
   if (!f || p > f->n1)
     return (0);
   return (!BRACHA87_BIT_TST(ACCSET(f), p));
+}
+
+int
+bracha87Fig1ReadySender(
+  const struct bracha87Fig1 *f
+ ,unsigned char p
+){
+  if (!f || p > f->n1)
+    return (0);
+  return (BRACHA87_BIT_TST(READYSET(f), p) != 0);
 }
 
 const unsigned char *

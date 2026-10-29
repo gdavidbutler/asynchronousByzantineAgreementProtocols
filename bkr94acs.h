@@ -175,14 +175,21 @@
                                   * alone, carrying the annotations the
                                   * instance says; from bkr94acsInput
                                   * only: Figure 1's READY_REPLY */
+#define BKR94ACS_ANSWER_READY 8  /* (ready, value) of (ba, q, k) to each
+                                  * bracha87Fig1ReadySender of the
+                                  * instance, carrying the annotations
+                                  * the instance says; from
+                                  * bkr94acsInput only: Figure 1's
+                                  * READY_ANSWER */
 
 /*
  * A send at round 0 is of ba's value broadcast, and its vLen bytes do
  * not fit here: they are bracha87Fig1Value of bkr94acsInstance(a, ba,
  * ba, 0), for BRACHA87_INITIAL_ALL, BRACHA87_ECHO_ALL or
  * BRACHA87_READY_ALL as the send is SEND_INITIAL, SEND_ECHO or
- * REPLY_ECHO, or SEND_READY or REPLY_READY.  The value echoed or
- * readied can differ from the one accepted, so a send carries its own.
+ * REPLY_ECHO, or SEND_READY, REPLY_READY or ANSWER_READY.  The value
+ * echoed or readied can differ from the one accepted, so a send
+ * carries its own.
  */
 struct bkr94acsAct {
   unsigned char act;
@@ -273,9 +280,9 @@ bkr94acsOut(
  * none of these makes the instance.
  *
  * Writes up to bkr94acsOut actions and returns how many: the
- * instance's sends in Figure 1's order, a reply to the sender last
- * among them, then the sends and decisions the validation chain and
- * the turns fire, then SUBSET, then ABANDON.
+ * instance's sends in Figure 1's order, a reply to the sender or the
+ * answer at the accept last among them, then the sends and decisions
+ * the validation chain and the turns fire, then SUBSET, then ABANDON.
  * The accept of a value broadcast returns no action of its own: it is
  * Q(ba) = 1, and what Agreement[Q] does with that is returned.  Only
  * an arrival at k = 0 can make it, and bkr94acsValue of ba reads it.
@@ -354,13 +361,13 @@ struct bracha87Fig1;
  * bracha87Fig1Received for BRACHA87_ANN_RECEIVED per recipient, and
  * after a sweep step that returned SEND_ECHO or SEND_READY,
  * bracha87Fig1EchoRecipient or bracha87Fig1Recipient for who it goes
- * to; and at k = 0, with q = ba, ba's value broadcast, for
- * bracha87Fig1Value of what a send of it carries.  After ABANDON,
- * bracha87Fig1State and bracha87Fig1Value of BRACHA87_ACCEPT read what
- * each instance held then; its BRACHA87_F1_ABANDONED stays clear, the
- * seat's abandon being bkr94acsAbandoned.  Borrowed from the seat.  0
- * for a null seat, an instance outside the space, or one no message
- * has made yet.
+ * to, and after ANSWER_READY, bracha87Fig1ReadySender; and at k = 0,
+ * with q = ba, ba's value broadcast, for bracha87Fig1Value of what a
+ * send of it carries.  After ABANDON, bracha87Fig1State and
+ * bracha87Fig1Value of BRACHA87_ACCEPT read what each instance held
+ * then; its BRACHA87_F1_ABANDONED stays clear, the seat's abandon being
+ * bkr94acsAbandoned.  Borrowed from the seat.  0 for a null seat, an
+ * instance outside the space, or one no message has made yet.
  */
 const struct bracha87Fig1 *
 bkr94acsInstance(

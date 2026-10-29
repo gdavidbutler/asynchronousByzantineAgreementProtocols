@@ -28,10 +28,10 @@
  * Figure 1, the broadcast primitive, by process p, as a state machine.
  * The figure's steps are rows of bracha87Fig1.dtc, verbatim; the rows
  * that decide when a satisfied step is taken, and what is re-sent, are
- * the caller's and BPR's, in the same file, and BPR's reply rows are in
- * bracha87Fig1Ready.dtc; dtc compiles each file into a dispatch this
- * library runs, the second after the first.  Read the .dtc files for
- * the rules.
+ * the caller's and BPR's, in the same file, and BPR's reply and answer
+ * rows are in bracha87Fig1Ready.dtc; dtc compiles each file into a
+ * dispatch this library runs, the second after the first.  Read the
+ * .dtc files for the rules.
  *
  * One instance per process per broadcast.  The instance holds what the
  * figure's "wait until the receipt of ... (including messages received
@@ -46,9 +46,10 @@
  * The paper assumes a reliable message system; over a fair-loss network
  * the caller sweeps, at a cadence of its own, and each sweep returns the
  * messages still owed (BPR); an arrival that is its sender's word that
- * it lacks something of this process's returns this process's answer
- * to that sender alone.  The sweep is the only unit anything here
- * counts in.
+ * it lacks something of this process's returns this process's reply
+ * to that sender alone, and the event that takes this process's accept
+ * returns its answer to each process whose ready it holds.  The sweep
+ * is the only unit anything here counts in.
  *
  * The caller's message beside (initial, v).  A caller may send a
  * message of its own to each process beside the initiator's (initial,
@@ -132,18 +133,23 @@
  * Two replies, each returned on the arrival that asks for it and sent
  * to that arrival's sender alone, framed as any other echo or ready:
  * READY_REPLY, on a (ready, v) arriving without RECEIVED once this
- * process has accepted, the arrival that fires the accept included,
- * its (ready, v), which carries ACCEPTED; and ECHO_REPLY, on p's
- * (initial, v) or BESIDE arriving at a process that holds both and had
- * echoed before it came, p's word that it has not heard, its (echo,
- * v) to p, which carries HOLDING.  Neither is returned beside the step
- * of the same message, whose send to all reaches the sender already.
- * A (ready, v) carrying RECEIVED is answered by nothing, so an exchange
- * ends in two: the reply carries ACCEPTED, so the sender's answer to
- * it, given only where the reply lacked RECEIVED and the sender has
- * accepted, carries RECEIVED.  A lost reply is answered again on the
- * sender's next re-send.  Nothing of a reply
- * outlives the call that returns it.
+ * process had accepted before it came, its (ready, v), which carries
+ * ACCEPTED; and ECHO_REPLY, on p's (initial, v) or BESIDE arriving at
+ * a process that holds both and had echoed before it came, p's word
+ * that it has not heard, its (echo, v) to p, which carries HOLDING.
+ * Neither is returned beside the step that sends the same message,
+ * whose send to all reaches the sender already.  And one answer,
+ * READY_ANSWER, returned on the event that takes step 3, step 2 taken
+ * on an earlier one: each (ready, v) held here arrived before this
+ * process had an accept to carry, its sender's word all the same, so
+ * its (ready, v), carrying ACCEPTED, goes then to each
+ * bracha87Fig1ReadySender, self among them, and not on a sweep.
+ * A (ready, v) carrying RECEIVED draws no reply, so an exchange ends
+ * in two: the reply or the answer carries ACCEPTED, so the sender's
+ * reply to it, made only where it lacked RECEIVED and the sender has
+ * accepted, carries RECEIVED.  A lost reply or answer is replied to
+ * again on the sender's next re-send.  Nothing of a reply outlives the
+ * call that returns it.
  *
  * Self is a recipient like any other.  The paper sends every message to
  * all the processes and counts its own, and the instance records its
@@ -193,10 +199,14 @@
                                  * the arrival just fed, p */
 #define BRACHA87_READY_REPLY 6  /* re-send (ready, v) to the sender of
                                  * the arrival just fed */
+#define BRACHA87_READY_ANSWER 7 /* re-send (ready, v) to each
+                                 * bracha87Fig1ReadySender: on the
+                                 * event that takes step 3, step 2
+                                 * taken on an earlier one */
 
 /* Room the caller gives bracha87Fig1Input for actions: the three steps
- * on an arrival, or an accept and a reply; on a sweep abandon alone, or
- * the three re-sends. */
+ * on an arrival, or an accept and its answer, or a reply; on a sweep
+ * abandon alone, or the three re-sends. */
 #define BRACHA87_FIG1_OUT 3
 
 /* State bits returned by bracha87Fig1State. */
@@ -325,13 +335,13 @@ bracha87Fig1Initiator(
  * another are both the figure's; each step is taken once.
  *
  * Writes up to BRACHA87_FIG1_OUT actions to out, in the order ECHO_ALL,
- * READY_ALL, ACCEPT, ABANDON, then on an arrival ECHO_REPLY or
- * READY_REPLY, on a sweep INITIAL_ALL, ECHO_ALL, READY_ALL for the
- * re-sends, and returns how many.  A re-send or a reply is never
- * returned beside a step of the same message in one call.  0 for a null
- * instance or out, a kind outside the five, a sender outside 0..n-1, a
- * null value where one is read, or a BESIDE with the flag clear or
- * ahead of the (initial, v).
+ * READY_ALL, ACCEPT, ABANDON, then on an arrival ECHO_REPLY,
+ * READY_REPLY or READY_ANSWER, on a sweep INITIAL_ALL, ECHO_ALL,
+ * READY_ALL for the re-sends, and returns how many.  A re-send, a
+ * reply or an answer is never returned beside the step that sends the
+ * same message in one call.  0 for a null instance or out, a kind
+ * outside the five, a sender outside 0..n-1, a null value where one is
+ * read, or a BESIDE with the flag clear or ahead of the (initial, v).
  */
 unsigned int
 bracha87Fig1Input(
@@ -348,11 +358,11 @@ bracha87Fig1Input(
  * the initiator its own, at any other process the v of the (initial, v)
  * it holds from p, which is the one a caller validates what rode beside
  * it against before feeding BESIDE -- for ECHO_ALL and ECHO_REPLY the
- * value echoed, for READY_ALL and READY_REPLY the value readied, for
- * ACCEPT the value accepted.  vLen bytes, borrowed from the instance
- * and written once, when the act is taken, so the pointer stays valid
- * for the life of the instance.  0 for any other act, one not yet
- * taken, or a null instance.
+ * value echoed, for READY_ALL, READY_REPLY and READY_ANSWER the value
+ * readied, for ACCEPT the value accepted.  vLen bytes, borrowed from
+ * the instance and written once, when the act is taken, so the pointer
+ * stays valid for the life of the instance.  0 for any other act, one
+ * not yet taken, or a null instance.
  */
 const unsigned char *
 bracha87Fig1Value(
@@ -392,6 +402,17 @@ bracha87Fig1EchoRecipient(
  */
 int
 bracha87Fig1Recipient(
+  const struct bracha87Fig1 *
+ ,unsigned char  /* p */
+);
+
+/*
+ * Non-zero iff a READY_ANSWER goes to process p: a (ready, v) from p is
+ * held here.  Once non-zero, always.  0 for a null instance or p
+ * outside 0..n-1.
+ */
+int
+bracha87Fig1ReadySender(
   const struct bracha87Fig1 *
  ,unsigned char  /* p */
 );

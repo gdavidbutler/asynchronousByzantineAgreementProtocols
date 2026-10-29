@@ -22,9 +22,11 @@
 #   BPR's rows         -- what is re-sent on a sweep, and to whom:
 #                         Bracha Phase Retry, the end-to-end argument
 #                         (SRC84.txt) applied to the figure's sends.
-#                         The replies an arrival returns to its sender
-#                         are BPR's too, in bracha87Fig1Ready.dtc,
-#                         compiled alone and run after this dispatch
+#                         The replies an arrival returns to its sender,
+#                         and the answer at the accept to the senders
+#                         of the readies held, are BPR's too, in
+#                         bracha87Fig1Ready.dtc, compiled alone and run
+#                         after this dispatch
 #
 # The chain is one-directional: paper -> caller -> BPR.  A caller row
 # reads a paper output; a paper row of a later step reads the caller's
@@ -213,7 +215,7 @@ no,arrival,,,
 # correct process holding the caller's something through steps 1 and 2
 # without an echo).  Past that, p's re-send of its (initial, v) is p's
 # word that it has not heard this process's HOLDING, and the echo that
-# carries it is answered on that arrival (bracha87Fig1Ready.dtc).
+# carries it is replied to p on that arrival (bracha87Fig1Ready.dtc).
 @"retry (echo, v)","event","have echoed","accepted","live"
 yes,sweep,yes,no,yes
 no,sweep,yes,yes,
@@ -229,7 +231,9 @@ no,arrival,,,
 # recipient: a process recorded as having accepted consumes no ready.
 # A process that has accepted and lacks this process's accept says so
 # on its own (ready, v), by the RECEIVED it does not carry, and is
-# answered on that arrival (bracha87Fig1Ready.dtc), not on a sweep.
+# replied to on that arrival, or answered at this process's accept
+# where the ready came before it (bracha87Fig1Ready.dtc), not on a
+# sweep.
 # Once every process is recorded, none is owed and the re-send retires
 # -- quiescence, where abandon otherwise carries the tail.
 # Under loss that is reachable, not guaranteed: a process that never

@@ -444,6 +444,7 @@ run:
     case BKR94ACS_SEND_READY:
     case BKR94ACS_REPLY_ECHO:
     case BKR94ACS_REPLY_READY:
+    case BKR94ACS_ANSWER_READY:
       break;
     default:
       fprintf(stderr, "seat %u: unknown action %u\n", p, act.act);
@@ -457,7 +458,8 @@ run:
                          : BRACHA87_READY_ALL);
     /* INITIAL to the seats not recorded as holding it; a READY re-sent on
      * a sweep to the seats the instance still owes it, carrying what it
-     * says; a reply to the sender of the arrival that returned it */
+     * says; a reply to the sender of the arrival that returned it; an
+     * answer to each seat whose ready the instance holds */
     inst = act.act != BKR94ACS_SEND_INITIAL ? bkr94acsInstance(a[p], act.ba, act.q, act.k) : 0;
     recip = act.act == BKR94ACS_SEND_READY && site == 2;
     for (to = 0; to < n; ++to) {
@@ -476,12 +478,15 @@ run:
         continue;
       if ((act.act == BKR94ACS_REPLY_ECHO || act.act == BKR94ACS_REPLY_READY) && to != replyTo)
         continue;
+      if (act.act == BKR94ACS_ANSWER_READY && !bracha87Fig1ReadySender(inst, to))
+        continue;
       /* every echo and ready says whether this seat holds the initial
        * and what rode beside it; a ready says the rest */
       annot = 0;
       if (inst && HOLDS(bracha87Fig1State(inst)))
         annot |= BRACHA87_ANN_HOLDING;
-      if (act.act == BKR94ACS_SEND_READY || act.act == BKR94ACS_REPLY_READY) {
+      if (act.act == BKR94ACS_SEND_READY || act.act == BKR94ACS_REPLY_READY
+       || act.act == BKR94ACS_ANSWER_READY) {
         if (bracha87Fig1State(inst) & BRACHA87_F1_ACCEPTED)
           annot |= BRACHA87_ANN_ACCEPTED;
         if (BRACHA87_BIT_TST(bracha87Fig1Received(inst), to))
@@ -490,7 +495,7 @@ run:
       if (to == p) {
         /* the hand-back is an input like any other; it moves only what
          * the instance records of self, so its place in this loop does
-         * not matter.  What it returns answers self. */
+         * not matter.  What it returns goes back to self. */
         if (nwork + outMax > workCap) {
           fprintf(stderr, "harness guard: hand-back cascade too deep\n");
           goto done;

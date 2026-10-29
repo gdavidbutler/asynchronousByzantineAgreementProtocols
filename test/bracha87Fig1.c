@@ -20,30 +20,33 @@
 
 /*
  * n instances over an in-memory queue that loses each delivery with the
- * given probability, at t = 0, driven drain-then-sweep until every
- * instance has abandoned.  Each process hands its own messages straight
- * back to itself, off the queue.  Asserts:
+ * given probability, at the given t, driven drain-then-sweep until
+ * every instance has abandoned.  Each process hands its own messages
+ * straight back to itself, off the queue.  Asserts:
  *
  *   the refusals of Init, Initiator and Input;
- *   the initiator's INITIAL re-send goes on after its accept while a
- *     process is not recorded as holding the initial and the message
- *     beside it, and never once every one is;
+ *   the initiator's INITIAL re-send comes only on a sweep, and after
+ *     its accept never once every process is recorded as holding the
+ *     initial and the message beside it;
  *   every process accepts the initiator's value, and at the end holds
  *     the (initial, v) and the message beside it, both from p;
- *   without loss the initiator's INITIAL re-sends stop: every process
- *     said it holds both within two sweeps of the start;
- *   a READY re-sent on a sweep goes to the processes the instance names
- *     and no other, carrying ACCEPTED once the sender has accepted and
- *     RECEIVED to each recipient it has recorded as having accepted;
- *   a reply comes only on an arrival, never on a sweep, and goes to
- *     that arrival's sender alone, an echo's to the initiator;
- *   without loss no READY is re-sent at all: a ready and the answer it
- *     asks for cross before the first sweep, toward a slow process too,
- *     since its answers come on the arrivals and not on its sweeps; and
- *     the run still ends by abandon;
+ *   a READY is re-sent on a sweep only while the instance names some
+ *     process as still owed it;
+ *   a reply comes only on an arrival, never on a sweep, an echo's only
+ *     on an arrival from the initiator; the answer at the accept comes
+ *     only on an arrival too, never before the accept;
+ *   without loss no READY is re-sent at all, at any t: a ready and the
+ *     reply it asks for cross before the first sweep, a ready that came
+ *     before the accept answered at the accept, toward a slow process
+ *     too, since its replies and answer come on the arrivals and not on
+ *     its sweeps; nor is anything else, an INITIAL or an ECHO: every
+ *     process said it holds both on the arrivals, and a sweep returns
+ *     nothing but the abandon; and the run still ends by abandon;
  *   every process abandons, so the run ends by abandon and nothing else;
- *   an instance fed nothing, or only the BESIDE, abandons on the sweep
- *     after its abandon count all the same.
+ *   an instance fed nothing, or only a BESIDE ahead of the initial,
+ *     which is refused, returns nothing until the sweep that makes its
+ *     abandon count, abandons on it all the same, and returns nothing
+ *     after.
  *
  * With slow = k, process n - 1 takes one sweep in k, as a process whose
  * caller is slow to sweep does; the asserts are the same.
@@ -82,12 +85,15 @@ main(
   unsigned int *lastReady;  /* per process: the sweep of its last READY re-send */
   unsigned int lastAccept;  /* the sweep the last process accepted at */
   unsigned int readyResends;
+  unsigned int sweepSends;  /* what sweeps returned to send, of any kind */
   unsigned int replies;
+  unsigned int answers;     /* READY_ANSWERs */
   unsigned int queued;      /* messages put on the queue */
   unsigned int lastInitial;       /* the sweep of the last INITIAL re-send */
   const unsigned char *cv;
   int resend;               /* a READY re-sent on a sweep */
   int reply;                /* an ECHO_REPLY or READY_REPLY */
+  int answer;               /* a READY_ANSWER */
   unsigned char besideHeld[256];  /* per process: a beside message kept ahead of its initial */
   unsigned long sz;
   unsigned int n;
@@ -108,7 +114,7 @@ main(
   unsigned int nout;
   unsigned int nwork;
   unsigned int a;
-  unsigned int to;          /* the sender of the arrival an action answers */
+  unsigned int to;          /* who a reply goes to: the arrival's sender */
   unsigned char annot;
   unsigned char out[BRACHA87_FIG1_OUT];
   unsigned char work[64];
@@ -137,7 +143,9 @@ main(
   lastReady = 0;
   lastAccept = 0;
   readyResends = 0;
+  sweepSends = 0;
   replies = 0;
+  answers = 0;
   queued = 0;
   lastInitial = 0;
 
@@ -202,7 +210,9 @@ main(
    || bracha87Fig1Value(f[0], BRACHA87_ACCEPT)
    || !bracha87Fig1Value(f[0], BRACHA87_INITIAL_ALL)
    || bracha87Fig1Holder(0, 0) || bracha87Fig1Recipient(0, 0) || bracha87Fig1Received(0)
-   || (n < 256 && (bracha87Fig1Holder(f[0], n) || bracha87Fig1Recipient(f[0], n)))
+   || bracha87Fig1ReadySender(0, 0)
+   || (n < 256 && (bracha87Fig1Holder(f[0], n) || bracha87Fig1Recipient(f[0], n)
+    || bracha87Fig1ReadySender(f[0], n)))
    || bracha87Fig1State(0) || bracha87Fig1Sweeps(0)) {
     printf("accessor refusals wrong\n");
     goto done;
@@ -327,7 +337,8 @@ arrivalDone:
       p = i;
       nwork = bracha87Fig1Input(f[p], BRACHA87_SWEEP, 0, 0, 0, work);
       for (k = 0; k < nwork; ++k)
-        if (work[k] == BRACHA87_ECHO_REPLY || work[k] == BRACHA87_READY_REPLY) {
+        if (work[k] == BRACHA87_ECHO_REPLY || work[k] == BRACHA87_READY_REPLY
+         || work[k] == BRACHA87_READY_ANSWER) {
           printf("a sweep returned a reply at %u\n", p);
           goto done;
         }
@@ -364,6 +375,11 @@ sweepDone:
     printf("%u READY re-sends without loss\n", readyResends);
     goto done;
   }
+  /* nor anything else: without loss a sweep returns the abandon alone */
+  if (!loss && sweepSends) {
+    printf("%u re-sends without loss\n", sweepSends);
+    goto done;
+  }
   for (k = 0, i = 0; i < n; ++i)
     if (lastReady[i] > k)
       k = lastReady[i];
@@ -373,14 +389,8 @@ sweepDone:
       printf("process %u accepted and never held the initial and the message beside it\n", i);
       goto done;
     }
-  /* without loss the INITIAL re-sends stop: every process said it
-   * holds both within two sweeps of the start */
-  if (!loss && lastInitial > 2) {
-    printf("INITIAL re-sent at sweep %u without loss\n", lastInitial);
-    goto done;
-  }
-  printf("n=%u t=%u loss=%u%% slow=%u: all accepted, all abandoned, %u sweeps, %u queued, %u dropped, %u READY re-sends, the last at sweep %u after the last accept at %u, %u replies, the last INITIAL re-send at sweep %u\n",
-         n, t, loss, slow, sweeps, queued, dropped, readyResends, k, lastAccept, replies, lastInitial);
+  printf("n=%u t=%u loss=%u%% slow=%u: all accepted, all abandoned, %u sweeps, %u queued, %u dropped, %u READY re-sends, the last at sweep %u after the last accept at %u, %u replies, %u answers, the last INITIAL re-send at sweep %u\n",
+         n, t, loss, slow, sweeps, queued, dropped, readyResends, k, lastAccept, replies, answers, lastInitial);
   rc = 0;
 done:
   if (f)
@@ -400,6 +410,7 @@ run:
     a = work[--nwork];
     to = workTo[nwork];
     reply = a == BRACHA87_ECHO_REPLY || a == BRACHA87_READY_REPLY;
+    answer = a == BRACHA87_READY_ANSWER;
     if (a == BRACHA87_ACCEPT) {
       if (!(cv = bracha87Fig1Value(f[p], BRACHA87_ACCEPT))) {
         printf("ACCEPT without a value at %u\n", p);
@@ -421,6 +432,8 @@ run:
       abandoned[p] = 1;
       continue;
     }
+    if (site == 2)
+      ++sweepSends;
     if (a == BRACHA87_INITIAL_ALL && site != 2) {
       printf("(initial, v) re-send on an arrival at %u\n", p);
       goto done;
@@ -436,7 +449,7 @@ run:
         goto done;
       }
     }
-    if (a != BRACHA87_INITIAL_ALL && a != BRACHA87_ECHO_ALL && a != BRACHA87_READY_ALL && !reply) {
+    if (a != BRACHA87_INITIAL_ALL && a != BRACHA87_ECHO_ALL && a != BRACHA87_READY_ALL && !reply && !answer) {
       printf("unexpected action %u at %u\n", a, p);
       goto done;
     }
@@ -446,6 +459,13 @@ run:
         goto done;
       }
       ++replies;
+    }
+    if (answer) {
+      if (!(bracha87Fig1State(f[p]) & BRACHA87_F1_ACCEPTED)) {
+        printf("an answer before the accept at %u\n", p);
+        goto done;
+      }
+      ++answers;
     }
     if (!(cv = bracha87Fig1Value(f[p], a))) {
       printf("action without a value at %u\n", p);
@@ -475,12 +495,15 @@ run:
       /* a reply to the sender of the arrival that returned it alone */
       if (reply && j != to)
         continue;
+      /* the answer to each process whose ready is held */
+      if (answer && !bracha87Fig1ReadySender(f[p], j))
+        continue;
       /* every echo and ready says whether this process holds the
        * initial and the message beside it; a ready says the rest */
       annot = 0;
       if (a != BRACHA87_INITIAL_ALL && HOLDS(bracha87Fig1State(f[p])))
         annot |= BRACHA87_ANN_HOLDING;
-      if (a == BRACHA87_READY_ALL || a == BRACHA87_READY_REPLY) {
+      if (a == BRACHA87_READY_ALL || a == BRACHA87_READY_REPLY || answer) {
         if (bracha87Fig1State(f[p]) & BRACHA87_F1_ACCEPTED)
           annot |= BRACHA87_ANN_ACCEPTED;
         if (BRACHA87_BIT_TST(bracha87Fig1Received(f[p]), j))

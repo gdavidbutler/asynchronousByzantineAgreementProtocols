@@ -34,13 +34,18 @@
  *     sweep re-sends anything at all, every exchange crossing on the
  *     arrivals;
  *   a reply comes only on an arrival, never on a sweep, and goes to
- *     that arrival's sender alone;
+ *     that arrival's sender alone; the answer at an accept comes only
+ *     on an arrival too, and goes to the seats whose ready the instance
+ *     holds;
  *   no seat ever enters 0 -- n - t is n, so step 2 never fires;
  *   the coin is never called -- every input is 1;
  *   every seat abandons, and nothing comes after.
  *
  * Above t = 0 with every seat honest the same holds, since the
- * thresholds are met by honest counts alone.
+ * thresholds are met by honest counts alone; a ready that reaches a
+ * seat before the seat's accept is answered at that accept, and one
+ * after it is replied to on its arrival, so there too no sweep re-sends
+ * anything without loss.
  *
  * With starve = s, seats 1..s see no READY of seat n - 1's value until
  * each has entered its input to that seat's BA; the INITIAL and the
@@ -143,6 +148,7 @@ main(
   unsigned int initials;      /* this seat's broadcasts: first sends of INITIAL */
   unsigned int initialRe;     /* and their re-sends on sweeps */
   unsigned long replies;
+  unsigned long answers;      /* ANSWER_READYs */
   unsigned long queued;       /* messages put on the queue */
   unsigned int lastSweepSend; /* the last sweep that queued a re-send */
   unsigned int replyTo;
@@ -232,7 +238,9 @@ main(
     printf("allocation failed\n");
     goto done;
   }
-  /* one drain's traffic, the replies to its arrivals among it */
+  /* the traffic in flight at once, the replies to its arrivals among
+   * it: a drain can outrun it, and slides what it has yet to deliver
+   * to the front */
   qcap = 128 * n * n * n + 64;
   if (!(q = calloc(qcap, sizeof (*q)))) {
     printf("allocation failed\n");
@@ -240,7 +248,7 @@ main(
   }
   qhead = qtail = 0;
   sweeps = dropped = zeros = initials = initialRe = 0;
-  replies = queued = 0;
+  replies = answers = queued = 0;
   lastSweepSend = 0;
 
   /* every seat broadcasts its value, once: seat p's is p, 'v', p ^ 0x5A */
@@ -309,7 +317,8 @@ arrivalDone:
         memcpy(work, out, nout * sizeof (*out));
         nwork = nout;
         for (w = 0; w < nwork; ++w)
-          if (work[w].act == BKR94ACS_REPLY_ECHO || work[w].act == BKR94ACS_REPLY_READY) {
+          if (work[w].act == BKR94ACS_REPLY_ECHO || work[w].act == BKR94ACS_REPLY_READY
+           || work[w].act == BKR94ACS_ANSWER_READY) {
             printf("seat %u: a sweep returned a reply\n", p);
             goto done;
           }
@@ -439,15 +448,15 @@ held:
     goto done;
   }
   if (starve && loss)
-    printf("n=%u t=%u loss=%u%% starve=%u coin=%u: the seats that decided agree, the seats that output agree, all abandoned, %u sweeps, %lu queued, %u dropped, %lu replies, the last re-send at sweep %u, %lu coin calls, the last BA %s\n",
-           n, t, loss, starve, coinValue, sweeps, queued, dropped, replies, lastSweepSend, CoinCalls,
+    printf("n=%u t=%u loss=%u%% starve=%u coin=%u: the seats that decided agree, the seats that output agree, all abandoned, %u sweeps, %lu queued, %u dropped, %lu replies, %lu answers, the last re-send at sweep %u, %lu coin calls, the last BA %s\n",
+           n, t, loss, starve, coinValue, sweeps, queued, dropped, replies, answers, lastSweepSend, CoinCalls,
            dl == -1 ? "undecided everywhere" : dl ? "decided 1" : "decided 0");
   else if (starve)
-    printf("n=%u t=%u loss=%u%% starve=%u coin=%u: every seat decided 1 in every BA but the last and the coin in the last, subset with its values, all abandoned, %u sweeps, %lu queued, %lu replies, the last re-send at sweep %u, %lu coin calls\n",
-           n, t, loss, starve, coinValue, sweeps, queued, replies, lastSweepSend, CoinCalls);
+    printf("n=%u t=%u loss=%u%% starve=%u coin=%u: every seat decided 1 in every BA but the last and the coin in the last, subset with its values, all abandoned, %u sweeps, %lu queued, %lu replies, %lu answers, the last re-send at sweep %u, %lu coin calls\n",
+           n, t, loss, starve, coinValue, sweeps, queued, replies, answers, lastSweepSend, CoinCalls);
   else
-    printf("n=%u t=%u loss=%u%%: every seat decided 1 in every BA, subset all with its values, all abandoned, %u sweeps, %lu queued, %u dropped, %lu replies, the last re-send at sweep %u\n",
-           n, t, loss, sweeps, queued, dropped, replies, lastSweepSend);
+    printf("n=%u t=%u loss=%u%%: every seat decided 1 in every BA, subset all with its values, all abandoned, %u sweeps, %lu queued, %u dropped, %lu replies, %lu answers, the last re-send at sweep %u\n",
+           n, t, loss, sweeps, queued, dropped, replies, answers, lastSweepSend);
   rc = 0;
 done:
   if (a)
@@ -512,6 +521,9 @@ run:
     case BKR94ACS_REPLY_READY:
       ++replies;
       break;
+    case BKR94ACS_ANSWER_READY:
+      ++answers;
+      break;
     default:
       printf("seat %u: unknown action %u\n", p, act.act);
       goto done;
@@ -548,12 +560,16 @@ run:
       /* a reply to the sender of the arrival that returned it alone */
       if ((act.act == BKR94ACS_REPLY_ECHO || act.act == BKR94ACS_REPLY_READY) && to != replyTo)
         continue;
+      /* the answer at the accept to each seat whose ready is held */
+      if (act.act == BKR94ACS_ANSWER_READY && !bracha87Fig1ReadySender(inst, to))
+        continue;
       /* every echo and ready says whether this seat holds the initial
        * and what rode beside it; a ready says the rest */
       annot = 0;
       if (inst && HOLDS(bracha87Fig1State(inst)))
         annot |= BRACHA87_ANN_HOLDING;
-      if (act.act == BKR94ACS_SEND_READY || act.act == BKR94ACS_REPLY_READY) {
+      if (act.act == BKR94ACS_SEND_READY || act.act == BKR94ACS_REPLY_READY
+       || act.act == BKR94ACS_ANSWER_READY) {
         if (bracha87Fig1State(inst) & BRACHA87_F1_ACCEPTED)
           annot |= BRACHA87_ANN_ACCEPTED;
         if (BRACHA87_BIT_TST(bracha87Fig1Received(inst), to))
@@ -576,6 +592,11 @@ run:
       }
       if (site == 2)
         lastSweepSend = sweeps;
+      if (qtail >= qcap && qhead) {
+        memmove(q, q + qhead, (qtail - qhead) * sizeof (*q));
+        qtail -= qhead;
+        qhead = 0;
+      }
       if (qtail >= qcap) {
         printf("queue overflow\n");
         goto done;

@@ -45,13 +45,15 @@
  * which loss can keep from happening: a (ready, v) carries two bits of
  * this caller's beside HOLDING, that its sender has accepted and that
  * it holds the recipient's accept, and a seat re-sends its ready only
- * to the seats not yet recorded as having accepted, and answers a
- * ready that arrives without the second bit, once it has accepted, by
- * its own ready to that ready's sender alone; likewise it answers the
- * initiator's re-sent (initial, v) or byte, once it holds both and has
- * echoed, by its echo to the initiator alone.  The report shows the
- * sweep of each seat's last re-send of any kind, an answer counted as
- * one, against its abandon.
+ * to the seats not yet recorded as having accepted, replies to a ready
+ * that arrives without the second bit, once it had accepted before it
+ * came, with its own ready to that ready's sender alone, and at its
+ * accept answers each seat whose ready it holds with its ready;
+ * likewise it replies to the initiator's re-sent (initial, v) or byte,
+ * once it holds both and had echoed before it came, with its echo to
+ * the initiator alone.  The report shows the sweep of each seat's last
+ * re-send of any kind, a reply or an answer counted as one, against
+ * its abandon.
  *
  * usage: example_bracha87Fig1 [-v] [-s seed] [-l loss] [-o initiator]
  *                             [-a abandon] n t value
@@ -88,6 +90,7 @@ main(
   const unsigned char *cv;
   int resend;               /* a READY re-sent on a sweep */
   int reply;                /* an ECHO_REPLY or READY_REPLY */
+  int answer;               /* a READY_ANSWER */
   unsigned char besideHeld[256];  /* per process: a beside message kept ahead of its initial */
   unsigned long sz;
   unsigned long msz;
@@ -114,7 +117,7 @@ main(
   unsigned int nout;
   unsigned int nwork;
   unsigned int a;
-  unsigned int to;          /* the sender of the arrival an action answers */
+  unsigned int to;          /* who a reply goes to: the arrival's sender */
   unsigned char annot;
   unsigned char out[BRACHA87_FIG1_OUT];
   unsigned char work[64];   /* actions still to run at p; a hand-back adds */
@@ -383,6 +386,7 @@ run:
     a = work[--nwork];
     to = workTo[nwork];
     reply = a == BRACHA87_ECHO_REPLY || a == BRACHA87_READY_REPLY;
+    answer = a == BRACHA87_READY_ANSWER;
     if (a == BRACHA87_ACCEPT) {
       accepted[p] = now;
       if (verbose)
@@ -397,13 +401,13 @@ run:
     }
     cv = bracha87Fig1Value(f[p], a);
     /* INITIAL to the processes not recorded as holding it; a READY
-     * re-sent on a sweep to the processes still owed it; a reply is a
-     * re-send too */
+     * re-sent on a sweep to the processes still owed it; a reply or an
+     * answer is a re-send too */
     resend = a == BRACHA87_READY_ALL && site == 2;
-    if (site == 2 || reply)
+    if (site == 2 || reply || answer)
       lastResend[p] = now;
     if (verbose)
-      printf("process %u: %s %s\n", p, reply ? "reply" : site == 2 ? "re-send" : "send",
+      printf("process %u: %s %s\n", p, reply ? "reply" : answer ? "answer" : site == 2 ? "re-send" : "send",
              a == BRACHA87_INITIAL_ALL ? "(initial, v) and the byte beside it"
            : a == BRACHA87_ECHO_ALL || a == BRACHA87_ECHO_REPLY ? "(echo, v)" : "(ready, v)");
     for (j = 0; j < n; ++j) {
@@ -416,12 +420,15 @@ run:
       /* a reply goes to the sender of the arrival that returned it */
       if (reply && j != to)
         continue;
+      /* an answer goes to each process whose ready is held */
+      if (answer && !bracha87Fig1ReadySender(f[p], j))
+        continue;
       /* every echo and ready says whether this process holds the
        * initial and the message beside it; a ready says the rest */
       annot = 0;
       if (a != BRACHA87_INITIAL_ALL && HOLDS(bracha87Fig1State(f[p])))
         annot |= BRACHA87_ANN_HOLDING;
-      if (a == BRACHA87_READY_ALL || a == BRACHA87_READY_REPLY) {
+      if (a == BRACHA87_READY_ALL || a == BRACHA87_READY_REPLY || answer) {
         if (bracha87Fig1State(f[p]) & BRACHA87_F1_ACCEPTED)
           annot |= BRACHA87_ANN_ACCEPTED;
         if (BRACHA87_BIT_TST(bracha87Fig1Received(f[p]), j))
@@ -430,7 +437,7 @@ run:
       if (j == p) {
         /* the hand-back is an input like any other; it moves only what
          * the instance records of self, so its place in this loop does
-         * not matter.  What it returns answers self. */
+         * not matter.  What it returns goes back to self. */
         if (nwork + 2 * BRACHA87_FIG1_OUT > sizeof (work) / sizeof (work[0])) {
           fprintf(stderr, "harness guard: hand-back cascade too deep\n");
           goto done;

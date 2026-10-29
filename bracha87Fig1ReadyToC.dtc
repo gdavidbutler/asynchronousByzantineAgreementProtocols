@@ -1,6 +1,7 @@
 # Bridge from bracha87Fig1Ready.dtc to C symbols, as bracha87Fig1ToC.dtc
-# is for the main dispatch.  "accepted" is Figure 1's, a C local set
-# from the instance after the main dispatch's steps are applied.
+# is for the main dispatch.  "had accepted", "had sent ready" and "had
+# echoed" are Figure 1's, C locals set from the instance at the event's
+# start; "accepted on this event" is step 3 taken by the main dispatch.
 
 @"the arrival is (ready, v)",~readyArrival
 yes,1
@@ -10,7 +11,15 @@ no,0
 yes,1
 no,0
 
-@"accepted",~accepted
+@"had accepted",~acceptedBefore
+yes,1
+no,0
+
+@"accepted on this event",~acceptedNow
+yes,1
+no,0
+
+@"had sent ready",~readiedBefore
 yes,1
 no,0
 
@@ -22,11 +31,15 @@ no,0
 yes,1
 no,0
 
-@"have echoed",~echoedBefore
+@"had echoed",~echoedBefore
 yes,1
 no,0
 
 @~replyReady,"re-send (ready, v) to the sender"
+1,yes
+0,no
+
+@~answerReady,"re-send (ready, v) to the processes whose (ready, v) is held"
 1,yes
 0,no
 

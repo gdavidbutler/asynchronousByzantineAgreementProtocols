@@ -57,8 +57,11 @@ check: test_bracha87Fig1 test_shadow test_bkr94acs test_acsShadow
 	./test_bracha87Fig1 1 0 0
 	./test_bracha87Fig1 4 1 40
 	./test_bracha87Fig1 7 2 50
+	./test_bracha87Fig1 4 1 0
+	./test_bracha87Fig1 7 2 0
 	./test_bracha87Fig1 4 0 0 8
 	./test_bracha87Fig1 7 2 50 8
+	./test_bracha87Fig1 7 2 0 8
 	./test_shadow 20000
 	./test_bkr94acs 4 0 0
 	./test_bkr94acs 4 0 30
@@ -66,6 +69,8 @@ check: test_bracha87Fig1 test_shadow test_bkr94acs test_acsShadow
 	./test_bkr94acs 1 0 0
 	./test_bkr94acs 4 1 40
 	./test_bkr94acs 7 2 50
+	./test_bkr94acs 4 1 0
+	./test_bkr94acs 7 2 0
 	./test_bkr94acs 1 0 0 3
 	./test_bkr94acs 4 0 20 3
 	./test_bkr94acs 4 1 0 6 2 0
