@@ -1,6 +1,7 @@
 # Bridge from bkr94acs.dtc to C symbols.  Each .dtc compiles alone with
-# its own bridge: across files the tables share one or two names, so a
-# joint compile has nothing to optimize over and does not finish; the
+# its own bridge: the C runs each dispatch at its own site, with its own
+# writes between them, and one joint compile would give one dispatch for
+# all of them.  Across files the tables share one or two names; the
 # chained names -- "accepted" and "take step 3" (Fig 1 to Fig 3),
 # "turn" (Fig 3 to Fig 4), "n-t messages in VALID^(k-1) yield v" (Fig 4
 # to Fig 3), "decide" (Fig 4 to this file) -- are C locals set by one

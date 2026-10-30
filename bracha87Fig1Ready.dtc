@@ -5,12 +5,12 @@
 # without the RECEIVED annotation does, what this process's accept does
 # for each (ready, v) held from before it, and what p's (initial, v) or
 # BESIDE arriving at a process that holds both does.  Three tables, in
-# their own file because their inputs read nothing of the run of
-# bracha87Fig1.dtc but whether it took step 3: compiled with them, dtc
-# carries them down every path of the figure's dispatch for three
-# leaves that read them.  Compiled alone it is a small dispatch, run
-# once per event after the main dispatch, as bracha87Fig3.dtc runs
-# after Figure 1's.
+# their own file because they run at their own site: the figure's
+# dispatch runs once per value in hand, its steps applied between, and
+# these run once per event after it, reading what this process had done
+# before the event and whether step 3 was taken on it.  Compiled alone
+# it is a small dispatch, run after the main dispatch as
+# bracha87Fig3.dtc runs after Figure 1's.
 #
 # The annotations are the caller's, riding the (ready, v) BPR already
 # re-sends (bracha87Fig1.dtc, BPR's rows): ACCEPTED, the sender has
