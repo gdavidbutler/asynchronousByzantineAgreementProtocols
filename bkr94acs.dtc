@@ -36,7 +36,7 @@
 # Q(j), BA_j deciding, or a sweep.
 #
 # Step 2's "upon completing 2t+1" is a wait, and the wait opens
-# patience: a 0 entered for a laggard is a vote to exclude it from the
+# patience: a 0 entered for a laggard is an input against its place in the
 # subset, so the seat waits its patience past n - t before entering 0s,
 # and need not wait at all once every BA has its input -- do not spend
 # the Byzantine budget against a laggard.  The paper writes the count
