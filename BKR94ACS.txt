@@ -240,13 +240,6 @@ about Q.  Nothing else.
 Reading notes
 -------------
 
-- The protocol is expressed in terms of what a single honest player
-  does as events happen. Nothing is scheduled; all actions are
-  triggered by completions (learning Q(j)=1; BA terminations). The
-  three steps describe "input to BA_j when you learn Q(j)=1", "input
-  0 to still-open BAs after 2t+1 1-outputs", and "read outputs once
-  all n BAs finish."
-
 - Step 1 and step 2 can fire concurrently for different j values.
   Once a BA has received an input from Pi (1 from step 1 or 0 from
   step 2), step 1 and step 2 stop touching it -- BA semantics demand
@@ -263,8 +256,3 @@ Reading notes
   SubSet need not contain every honest player: an honest P_h whose
   "Q(h)=1" reaches the other honest players only after step 2 has
   fired for them may be excluded.
-
-- Per the paper, "To save a log n factor of running the n BAs, the
-  techniques of [BOEY91] are employed." That is an optimization for
-  the MPC use case where many Agreement[Q] calls happen; it does not
-  change Lemma 2.

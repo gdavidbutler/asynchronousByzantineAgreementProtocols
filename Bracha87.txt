@@ -1,8 +1,6 @@
 Bracha 1987 "Asynchronous Byzantine Agreement Protocols"
 Information and Computation 75, 130-143
 
-Four figures, three layers of abstraction.
-
 The model (Section 1, Introduction, p. 131):
 
   We consider the following model of a distributed system. The system
@@ -60,16 +58,6 @@ FLP and the termination requirements (Section 1, p. 132):
   bounded, the probability that the protocol does not terminate is
   zero.
 
-This is the paper's whole relationship to FLP: it does not evade the
-impossibility, it changes the termination requirement.  The ONLY
-FLP-safe claim in the paper is the central result -- the
-probability-1 decision (Theorem 2; the coin at Fig 4 step 3 case
-(iii) is what buys it).  Much happens before and after that result,
-and none of it carries the same cover: before it, a broadcast may
-never accept (Theorem 5's weak termination, Section 8 below --
-Theorem 4 is why nothing stronger is attainable); after it, halting
-is one unproved clause (quoted at the end of this file).
-
 The methodology, which the paper calls its main contribution
 (Section 1, p. 133; the scan reads "FaillStop" for Fail-Stop):
 
@@ -111,14 +99,9 @@ architect's copy of the scan, OCR hand-corrected by him; the notation
 is set as this file sets the rest -- VALID^k_p, "in", m_{n-t} -- and
 line-end hyphenation is closed.)
 
-The perspective: every figure is written from ONE process's seat --
-"(By process p)" (Fig 1), "round(k) by process p" (Figs 2 and 3),
-"Phase(i): (by process p)" (Fig 4).  A process acts unilaterally: it
-sends to all, then waits only for local counts to cross thresholds
-(n - t, (n+t)/2, t+1, 2t+1 -- each satisfiable by the correct
-processes alone) over whatever the scheduler delivers, "for some v."
-No step waits on a named process, reads absence as information, or
-coordinates its firing with another process's step.
+Every figure is headed from one process: "(By process p)" (Fig 1),
+"round(k) by process p" (Figs 2 and 3), "Phase(i): (by process p)"
+(Fig 4).
 
 What "reliable broadcast protocol" MEANS here (Section 2, p. 133) --
 the two properties Theorem 1 establishes for Fig 1:
@@ -142,8 +125,36 @@ print reads "succesful"):
   processes Accept v. Thus, Broadcast and Accept provide us a pair of
   communication primitives.
 
-Figure 1 -- The broadcast primitive. Pure mechanics.  The ">" on the
-echo rows is the proofs' relation, not the figure's (NOTE below).
+Figure 1 -- The broadcast primitive (p. 134), under the heading
+"Protocol 1".  The page sets the notation "(initial ,v )"; it is set
+here as this file sets the rest, and the italics are dropped:
+
+  Broadcast(v)
+  step 0. (By process p)
+      Send (initial, v) to all the processes.
+
+  step 1. Wait until the receipt of,
+          one (initial, v) message
+          or (n+t)/2 (echo, v) messages
+          or (t+1) (ready, v) messages
+          for some v.
+      Send (echo, v) to all the processes.
+
+  step 2. Wait until the receipt of,
+          (n+t)/2 (echo, v) messages
+          or t+1 (ready, v) messages
+          (including messages received in step 1)
+          for some v.
+      Send (ready, v) to all the processes.
+
+  step 3. Wait until the receipt of,
+          2t+1 (ready, v) messages
+          (including messages received in step 1 and step 2) for some v.
+      Accept v.
+
+The same steps as a table, this file's rendering, not the paper's.  The
+">" on the echo rows is the proofs' relation, not the figure's (NOTE
+below).
 
   in                        condition                                     out
   ---------------------------------------------------------------------------------
@@ -169,15 +180,13 @@ argument needs it strict; Lemma 4's "n - t > (n + t)/2" is strict too.
 The figure is incomplete, not wrong -- it carries no relation to
 contradict.
 
-Figure 2 -- Not a protocol. The abstract form of ANY asynchronous
-protocol round:
+Figure 2 -- the paper's "general outline of an asynchronous protocol"
+(Section 3, below):
 
   round(k) by process p
     Send (p, k, v) to all the processes
     Wait until a set S of n - t messages from round k have been received
     v := N(k, S)
-
-This is what Bracha is abstracting OVER.
 
 Figure 3 -- Correctness enforcement. Replaces Send/Receive with
 Broadcast/Validate. Defines VALID sets recursively:
@@ -199,11 +208,9 @@ is acceptance AND the n-t witness, never acceptance alone.  That second
 conjunct is what makes Lemma 6 a claim about two processes' sets
 agreeing rather than a restatement of Theorem 1.
 
-Parameterized by N -- the protocol function. The application supplies N.
-A message is validated only if it could have been sent by a correct
-process -- the paper's own sentence, in the Section 3 prose below. This
-is a separate module from Figure 1 -- it wraps Accept with a recursive
-conformance check.
+Parameterized by N -- the protocol function.  A message is validated
+only if it could have been sent by a correct process -- the paper's own
+sentence, in the Section 3 prose below.
 
 Section 3, Correctness Enforcement -- the prose around Fig. 3 and the
 VALID definition (pp. 135-136, the architect's hand-corrected copy;
@@ -254,12 +261,11 @@ which it introduces, are quoted with their proofs below):
 
 Figure 4 -- The consensus protocol. A specific instantiation of Figure 3's
 pattern. Three rounds per phase, with specific N functions.  Read off the
-page in full, so the round tags below are the paper's own BARE form: an
-earlier rendering here added parentheses ("(3i+1)-messages") for
-legibility and that hedge is retired.  Case (ii) of step 3 is likewise
-read, not inferred -- the threshold letter is t, which neither machine
-rendering could recover ("more than r" in the text layer, "more than /"
-in the OCR):
+page in full: the round tags below are the paper's own bare form
+("3i+1-messages", no parentheses), and case (ii) of step 3 is read, not
+inferred -- the threshold letter is t, which neither machine rendering
+could recover ("more than r" in the text layer, "more than /" in the
+OCR):
 
   Phase(i): (by process p)
 
@@ -584,8 +590,7 @@ Rabin's model and the global coin (Section 7, p. 141):
   tolerates up to t < n/3 Byzantine processes and whose expected
   number of phases to termination is two.
 
-The second impossibility (Section 8, p. 141) -- why waiting on a
-named process is forbidden, in the paper's own words:
+The second impossibility (Section 8, p. 141):
 
   In asynchronous systems, such reduction is impossible. The
   processes do not know if the transmitter sent them any message at
@@ -606,19 +611,5 @@ named process is forbidden, in the paper's own words:
   Theorem 5. In asynchronous systems, Byzantine Generals protocols
   with weak termination are possible if and only if t < n/3.
 
-Fig 1 IS the Theorem 5 protocol ("the broadcast primitive of Fig. 1
-is a weak termination Byzantine Generals protocol").  A faulty
-initiator's broadcast may never accept, and no correct process can
-ever tell -- "may never" is the model speaking, not a defect.
-Before the central result, nothing is owed to anyone.
-
-Protocol halting -- the paper's entire treatment (Section 4, page
-138, verbatim): "For notational convenience, the protocol in Fig. 4
-does not terminate once a decision is made. However, this can be
-easily accomplished."  One clause, no construction, no proof, never
-revisited.  Every other "termination" in the paper is DECISION
-termination (the probabilistic property above); Figure 1's broadcast
-has no halting discussion at all.  When a process may stop SENDING
-is therefore outside the paper's theorems entirely: the model's
-reliable channels make single sends suffice, so the paper never
-faces message retirement.
+Of Figure 1, Section 8 says: "the broadcast primitive of Fig. 1 is a
+weak termination Byzantine Generals protocol".

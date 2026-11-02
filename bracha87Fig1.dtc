@@ -108,9 +108,11 @@
 
 # ===== the paper's rows =====
 
-# Step 1.  Wait until the receipt of one (initial, v) message, or more
-# than (n+t)/2 (echo, v) messages, or t+1 (ready, v) messages, for some
-# v.  Send (echo, v) to all the processes.
+# Step 1.  Wait until the receipt of, one (initial, v) message or
+# (n+t)/2 (echo, v) messages or (t+1) (ready, v) messages for some v.
+# Send (echo, v) to all the processes.
+# The figure prints the echo count bare; the ">" in the rows is the
+# proofs' relation (Lemma 1, "more than (n + t)/2"; Bracha87.txt).
 # A step is taken once: "have echoed" is the step having been taken.
 @"send (echo, v)","have echoed","received (initial, v) from p","echo-count(v) > (n+t)/2","ready-count(v) >= t+1"
 yes,no,yes,,
@@ -119,9 +121,9 @@ yes,no,no,no,yes
 no,no,no,no,no
 no,yes,,,
 
-# Step 2.  Wait until the receipt of more than (n+t)/2 (echo, v)
-# messages or t+1 (ready, v) messages (including messages received in
-# step 1), for some v.  Send (ready, v) to all the processes.
+# Step 2.  Wait until the receipt of, (n+t)/2 (echo, v) messages or t+1
+# (ready, v) messages (including messages received in step 1) for some
+# v.  Send (ready, v) to all the processes.  The ">" is step 1's.
 # "have echoed" is read after step 1 has been taken on this run.
 @"echoed","have echoed","take step 1"
 yes,yes,
@@ -135,8 +137,8 @@ no,yes,no,no,no
 no,yes,yes,,
 no,no,,,
 
-# Step 3.  Wait until the receipt of 2t+1 (ready, v) messages
-# (including messages received in steps 1 and 2), for some v.
+# Step 3.  Wait until the receipt of, 2t+1 (ready, v) messages
+# (including messages received in step 1 and step 2) for some v.
 # Accept v.
 # "have sent ready" is read after step 2 has been taken on this run.
 @"sent ready","have sent ready","take step 2"

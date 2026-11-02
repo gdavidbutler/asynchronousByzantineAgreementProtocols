@@ -38,8 +38,7 @@ What "completely asynchronous" means (same page):
   is impossible for one process to tell whether another has died
   (stopped entirely) or is just running very slowly.
 
-The model is made deliberately strong so the impossibility reaches as
-far as possible (pp. 375-376): processes are deterministic automata
+The model (pp. 375-376): processes are deterministic automata
 ("p acts deterministically according to a transition function");
 in one atomic step a process can attempt to receive a message,
 compute, and send a finite set of messages; an "atomic broadcast"
