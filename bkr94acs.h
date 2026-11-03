@@ -97,7 +97,15 @@
  * BRACHA87_F1_ABANDONED stays clear: the seat's abandon is
  * bkr94acsAbandoned.  To the other players an abandoned seat is one of
  * the t.  An abandon of 0 is none: the seat runs until the caller lets
- * it go, and the round ceiling is its one exit before that.
+ * it go, and the round ceiling is its one exit before that.  A ceiling
+ * abandon is charged to t like any other, and t cannot cover it:
+ * correct seats whose callers give the same ceiling run the same figure
+ * to it, so where one reaches it undecided the others can, and their
+ * abandons together can pass t.  The ceiling is the caller's bet on the
+ * phases a BA takes.  Nor does a caller letting a seat go cost less:
+ * Bracha says halting after a decision "can be easily accomplished"
+ * and gives no construction for when a correct process may go silent,
+ * and a seat let go is silence, one of the t.
  *
  * At t = 0 the subset is all players, or this seat outputs none: it
  * abandons, or runs until its caller lets it go.  Step 2's count is
@@ -120,7 +128,11 @@
  * clear, and a BESIDE for either is refused.
  *
  * The coin at Figure 4's step 3 (iii) is the caller's: a callback and
- * its context, given at Init, answering 0 or 1.
+ * its context, given at Init, answering 0 or 1.  Bracha's Theorem 2's
+ * termination counts on each toss being 0 or 1 with probability 1/2,
+ * the seat's own, and unknown to the adversary until it is made; a
+ * coin the adversary can predict or steer forfeits it (README.md, "The
+ * coin").
  *
  * Nothing here aborts.  A refused argument is a 0 or -1 return and no
  * state change.
@@ -214,13 +226,16 @@ struct bkr94acs;
  * bracha87Fig1Sz(n - 1, 0, K) bytes each rounded up to 8, K the lesser
  * of 4 and (n - 1) / 3 + 1, the most t + 1 can be; n more of vLen bytes
  * with K = (n - 1) / 3 + 1; and the seat's own state.  In bytes, with
- * one-byte values: 15176 at n = 7 with 6 rounds, 94677160 at n = 256
- * with 6, 4015825576 at n = 256 with 255.  The caller sizes the
+ * one-byte values: 15176 at n = 7 with 6 rounds, 69494952 at n = 256
+ * with 6, 2946261672 at n = 256 with 255.  The caller sizes the
  * rounds.  n - 1, vLen - 1 and maxRounds are bytes, 0..255 for
  * 1..256 players and bytes of value, and 0 refused for rounds.  The
- * total is the one quantity here that can pass 32 bits, so it alone is
- * an unsigned long.  0 if maxRounds is 0, or where an unsigned long
- * cannot hold the total, and bkr94acsInit refuses both.
+ * figures are an LP64 machine's.  The total is the one quantity here
+ * that can need all 32 bits, 2957750952 at the limits, so it alone is
+ * an unsigned long.  bkr94acsOut, an unsigned int, can need more than
+ * the 16 bits C89 promises one, 65544 at the limits: the library takes
+ * an unsigned int of 32 bits.  0 if maxRounds is 0, or where an
+ * unsigned long cannot hold the total, and bkr94acsInit refuses both.
  */
 unsigned long
 bkr94acsSz(

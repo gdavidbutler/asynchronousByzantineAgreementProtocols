@@ -48,7 +48,7 @@ struct bkr94acsBa {
 struct bkr94acs {
   unsigned char (*coin)(void *);
   void *ctx;
-  unsigned long offVInst;     /* past the BAs' instances: the one offset beyond 32 bits */
+  unsigned long offVInst;     /* past the BAs' instances: the one offset that can need all 32 bits */
   unsigned int offCnt;        /* region offsets into d, in bytes */
   unsigned int offExists;
   unsigned int offValid;
@@ -123,7 +123,7 @@ bkr94acsSz(
         + n * ALIGN8(bracha87Fig1Sz(n1, vLen1, n1 / 3 + 1));
   count = (unsigned long)rk * n;
   sz1 = ALIGN8(bracha87Fig1Sz(n1, 0, MIN(4, n1 / 3 + 1)));
-  /* the one product that can pass 32 bits: none where it does not fit */
+  /* the one product that can need all 32 bits: none where it does not fit */
   if (count > (ULONG_MAX - fixed) / sz1)
     return (0);
   return (fixed + count * sz1);
