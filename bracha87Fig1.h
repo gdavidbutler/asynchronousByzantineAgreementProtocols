@@ -354,6 +354,26 @@ bracha87Fig1Input(
 );
 
 /*
+ * Non-zero iff feeding this arrival would record nothing, a question a
+ * caller asks before paying for what the arrival cost it: the instance
+ * holds its (initial, v) or what rode beside it, or the sender's echo or
+ * ready and every annotation it carries that the instance records.  Which
+ * value it carries is not read: the first (initial, v) stands, and a
+ * sender of echo or ready is counted once, so whatever it says now moves
+ * no count.  RECEIVED is not recorded, so it is not read either.  An
+ * abandoned instance and an arrival Input refuses record nothing.  What
+ * such an arrival can still return is its reply, for the caller to want
+ * or not.  0 for a null instance, or a kind Input records nothing of.
+ */
+int
+bracha87Fig1Duplicate(
+  const struct bracha87Fig1 *
+ ,unsigned char  /* kind */
+ ,unsigned char  /* from */
+ ,unsigned char  /* annot */
+);
+
+/*
  * The value an action carries: for INITIAL_ALL the initiator's v -- at
  * the initiator its own, at any other process the v of the (initial, v)
  * it holds from p, which is the one a caller validates what rode beside

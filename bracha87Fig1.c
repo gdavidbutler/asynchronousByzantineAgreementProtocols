@@ -404,6 +404,36 @@ done:
   return (nout);
 }
 
+int
+bracha87Fig1Duplicate(
+  const struct bracha87Fig1 *f
+ ,unsigned char kind
+ ,unsigned char from
+ ,unsigned char annot
+){
+  if (!f)
+    return (0);
+  if ((f->flags & BRACHA87_F1_ABANDONED) || from > f->n1)
+    return (1);
+  switch (kind) {
+  case BRACHA87_INITIAL:
+    return (from != f->initiator || (f->flags & BRACHA87_F1_INITIAL) != 0);
+  case BRACHA87_BESIDE:
+    return (from != f->initiator || !f->beside
+         || !(f->flags & (BRACHA87_F1_INITIATOR | BRACHA87_F1_INITIAL))
+         || (f->flags & BRACHA87_F1_BESIDE) != 0);
+  case BRACHA87_ECHO:
+    return (BRACHA87_BIT_TST(ECHOSET(f), from)
+         && (!(annot & BRACHA87_ANN_HOLDING) || BRACHA87_BIT_TST(HOLDSET(f), from)));
+  case BRACHA87_READY:
+    return (BRACHA87_BIT_TST(READYSET(f), from)
+         && (!(annot & BRACHA87_ANN_HOLDING) || BRACHA87_BIT_TST(HOLDSET(f), from))
+         && (!(annot & BRACHA87_ANN_ACCEPTED) || BRACHA87_BIT_TST(ACCSET(f), from)));
+  default:
+    return (0);
+  }
+}
+
 const unsigned char *
 bracha87Fig1Value(
   const struct bracha87Fig1 *f

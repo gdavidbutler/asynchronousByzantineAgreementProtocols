@@ -262,6 +262,23 @@ main(
       memset(out, 0xEE, sizeof (out));
       ++calls;
 
+      /* a duplicate is this record's say of what the rows would record:
+       * nothing, or something.  A refused sender or value is the refusal's
+       * below, whose no change stands whatever is said of it */
+      if (!abandoned && kind < BRACHA87_SWEEP && from < n) {
+        i = abandoned
+         || (kind == BRACHA87_INITIAL && (from != initiator || initVal))
+         || (kind == BRACHA87_BESIDE && (from != initiator || !besideFlag || (!initVal && !isInit) || beside))
+         || (kind == BRACHA87_ECHO && echoVal[from] && (!(ann & BRACHA87_ANN_HOLDING) || hld[from]))
+         || (kind == BRACHA87_READY && readyVal[from] && (!(ann & BRACHA87_ANN_HOLDING) || hld[from])
+             && (!(ann & BRACHA87_ANN_ACCEPTED) || acc[from]));
+        if (!i != !bracha87Fig1Duplicate(f, kind, from, ann)) {
+          printf("seed %lu ev %u: kind %u from %u annotations %u: the record says %s duplicate\n",
+                 s, ev, kind, from, ann, i ? "a" : "no");
+          goto done;
+        }
+      }
+
       /* refusals: no change, 0 returned; an abandoned seat refuses all */
       i = abandoned || kind > BRACHA87_SWEEP
        || (kind != BRACHA87_SWEEP && n < 256 && RND % 25 == 0 && (from = n, 1))
