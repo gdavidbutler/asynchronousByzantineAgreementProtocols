@@ -129,6 +129,9 @@
  * bracha87Fig1Recipient: the processes not recorded as having
  * accepted.  When none is, the re-send retires: quiescence, reachable
  * under loss and not guaranteed, and abandon carries what is left.
+ * Quiescence is not an exit: an instance that re-sends nothing more
+ * still replies, since no process can know that no other still
+ * re-sends to it (README.md, "Abandon").
  *
  * Two replies, each returned on the arrival that asks for it and sent
  * to that arrival's sender alone, framed as any other echo or ready:

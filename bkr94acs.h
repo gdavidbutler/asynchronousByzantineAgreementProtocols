@@ -103,9 +103,12 @@
  * to it, so where one reaches it undecided the others can, and their
  * abandons together can pass t.  The ceiling is the caller's bet on the
  * phases a BA takes.  Nor does a caller letting a seat go cost less:
- * Bracha says halting after a decision "can be easily accomplished"
- * and gives no construction for when a correct process may go silent,
- * and a seat let go is silence, one of the t.
+ * Bracha says halting after a decision "can be easily accomplished",
+ * and it is, over his reliable message system, where one send arrives
+ * even after its sender halts.  Over fair loss a message is sure to
+ * arrive only while its sender re-sends it, and no seat can know that
+ * no other still re-sends to it (README.md, "Abandon"), so a seat let
+ * go is silence, one of the t.
  *
  * At t = 0 the subset is all players, or this seat outputs none: it
  * abandons, or runs until its caller lets it go.  Step 2's count is
