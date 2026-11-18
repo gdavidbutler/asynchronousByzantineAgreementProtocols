@@ -81,8 +81,9 @@
  * broadcaster q and the round k of the Figure 1 instance it belongs
  * to, and the sweep.  The sweep is a pass of a
  * cursor over every live instance, one instance per call, because a
- * pass may owe more re-sends than any one return holds; the pass
- * completing is what advances the seat's counters.
+ * pass may owe more re-sends than any one return holds; the call past
+ * the last one, holding none, completes the pass, and that is what
+ * advances the seat's counters.
  *
  * Patience is a wait's: a round's, counted from the round's start and
  * read by the round's turn; and Agreement[Q]'s step 2, counted from the
@@ -338,14 +339,16 @@ bkr94acsBroadcast(
 
 /*
  * One step of the sweep: the re-sends the next live instance in the
- * seat's rotation owes, written to out, their count returned in nout.
- * Returns 1 while the pass continues and 0 when it has completed,
- * which is when the seat's counters advance and the abandon count can
- * return ABANDON.  The completing step also returns what the turns the
- * patience now allows fire, their chains among them, and so can return
- * a ceiling ABANDON.  A caller sweeps by calling until 0.  nout may
- * be 0 on a step that owes nothing.  Returns 0 with nout 0 for a null
- * seat, out or nout, or an abandoned seat.
+ * seat's rotation owes, written to out, their count returned in nout,
+ * and 1 returned.  The step that finds no next instance completes the
+ * pass and returns 0.  It feeds no instance, so it carries no re-send,
+ * the last instance's having come on the step before; it is the step
+ * on which the seat's counters advance and the abandon count can return
+ * ABANDON, and what it returns is what the turns the patience now
+ * allows fire, their chains among them, so it too can return a ceiling
+ * ABANDON.  A caller sweeps by calling until 0.  nout may be 0 on a
+ * step that owes nothing.  Returns 0 with nout 0 for a null seat, out
+ * or nout, or an abandoned seat.
  */
 int
 bkr94acsSweep(
